@@ -51,6 +51,7 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     void store.getState().refreshTopics();
@@ -59,7 +60,18 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
   useEffect(() => {
     bottomRef.current?.scrollIntoView?.({ block: 'end' });
   }, [messages.length, streamingText]);
-
+  // Selection toolbar "ask" action (ticket 05) requests input focus via event.
+  useEffect(() => {
+    const focusInput = () => {
+      const el = inputRef.current;
+      if (!el || el.disabled) return;
+      el.focus();
+      const end = el.value.length;
+      el.setSelectionRange(end, end);
+    };
+    window.addEventListener('readest-plus:focus-chat-input', focusInput);
+    return () => window.removeEventListener('readest-plus:focus-chat-input', focusInput);
+  }, []);
   const streaming = phase === 'streaming';
   const isClosed = conversation?.isClosed ?? false;
 
@@ -255,6 +267,7 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
         }}
       >
         <textarea
+          ref={inputRef}
           data-testid="chat-input"
           className="textarea textarea-bordered min-h-16 flex-1 resize-none text-sm"
           placeholder="围绕当前章节提问…（Enter 发送，Shift+Enter 换行）"

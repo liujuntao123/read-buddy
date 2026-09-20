@@ -159,4 +159,19 @@ describe('ChatTab', () => {
     fireEvent.click(screen.getByRole('button', { name: '清除引用' }));
     await waitFor(() => expect(screen.queryByTestId('quote-draft')).toBeNull());
   });
+
+  it('focuses the chat input with the caret at the end on the selection "ask" event', async () => {
+    const { store } = makeStore();
+    await store.getState().openBook('demo-fog-city-0001', 0);
+    render(<ChatTab store={store} />);
+
+    const input = inputElement();
+    fireEvent.change(input, { target: { value: '为什么雾永远不散？' } });
+    expect(document.activeElement).not.toBe(input);
+
+    window.dispatchEvent(new Event('readest-plus:focus-chat-input'));
+    expect(document.activeElement).toBe(input);
+    expect(input.selectionStart).toBe('为什么雾永远不散？'.length);
+    expect(input.selectionEnd).toBe('为什么雾永远不散？'.length);
+  });
 });

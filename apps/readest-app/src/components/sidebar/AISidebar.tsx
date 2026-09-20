@@ -3,6 +3,7 @@
 import { useRef, useState } from 'react';
 import { GripVertical, Settings, X } from 'lucide-react';
 import { useAISidebarStore } from '@/store/aiSidebarStore';
+import { useViewportWidth } from '@/hooks/useViewportWidth';
 import AISettingsPanel from '@/components/settings/AISettingsPanel';
 import SummaryTab from './SummaryTab';
 import ChatTab from './ChatTab';
@@ -17,6 +18,10 @@ interface DragState {
  * Split-screen AI companion sidebar (ADR 0003): collapsible container whose
  * width (320~600px) is driven through the shared aiSidebarStore, so it is
  * clamped there and remembered across restarts via the persist middleware.
+ *
+ * Responsive (design doc 6): below 768px the pane detaches into a fixed
+ * overlay drawer (86vw, max 400px) with a click-to-close backdrop so the
+ * reader keeps the full width; the drag handle is desktop-only.
  */
 export default function AISidebar() {
   const expanded = useAISidebarStore((s) => s.expanded);
@@ -25,6 +30,7 @@ export default function AISidebar() {
   const setActiveTab = useAISidebarStore((s) => s.setActiveTab);
   const setWidth = useAISidebarStore((s) => s.setWidth);
   const setExpanded = useAISidebarStore((s) => s.setExpanded);
+  const { isCompact } = useViewportWidth();
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const dragState = useRef<DragState | null>(null);
@@ -62,74 +68,90 @@ export default function AISidebar() {
   };
 
   return (
-    <aside
-      data-testid="ai-sidebar"
-      aria-label="AI 伴读侧边栏"
-      className="relative flex shrink-0 flex-col border-l border-base-300 bg-base-100"
-      style={{ width: `${width}px` }}
-    >
-      <div
-        data-testid="sidebar-resize-handle"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="拖拽调整侧栏宽度"
-        className="absolute inset-y-0 left-0 z-10 flex w-3 cursor-col-resize touch-none select-none items-center justify-center"
-        onPointerDown={beginDrag}
-        onPointerMove={moveDrag}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
+    <>
+      {isCompact && (
+        <div
+          data-testid="sidebar-overlay"
+          aria-hidden="true"
+          className="fixed inset-0 z-30 bg-black/40"
+          onClick={() => setExpanded(false)}
+        />
+      )}
+      <aside
+        data-testid="ai-sidebar"
+        aria-label="AI 伴读侧边栏"
+        className={
+          isCompact
+            ? 'fixed inset-y-0 right-0 z-40 flex w-[86vw] max-w-[400px] flex-col border-l border-base-300 bg-base-100 shadow-2xl transition-transform duration-200'
+            : 'relative flex shrink-0 flex-col border-l border-base-300 bg-base-100'
+        }
+        style={isCompact ? undefined : { width: `${width}px` }}
       >
-        <GripVertical className="size-3.5 text-base-content/40" aria-hidden="true" />
-      </div>
+        {!isCompact && (
+          <div
+            data-testid="sidebar-resize-handle"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="拖拽调整侧栏宽度"
+            className="absolute inset-y-0 left-0 z-10 flex w-3 cursor-col-resize touch-none select-none items-center justify-center"
+            onPointerDown={beginDrag}
+            onPointerMove={moveDrag}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+          >
+            <GripVertical className="size-3.5 text-base-content/40" aria-hidden="true" />
+          </div>
+        )}
 
-      <div className="flex items-center justify-between gap-2 border-b border-base-300 px-2 py-2 pl-5">
-        <div role="tablist" aria-label="AI 侧边栏视图" className="tabs tabs-box tabs-sm">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'summary'}
-            className={`tab ${activeTab === 'summary' ? 'tab-active' : ''}`}
-            onClick={() => setActiveTab('summary')}
-          >
-            总结
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'chat'}
-            className={`tab ${activeTab === 'chat' ? 'tab-active' : ''}`}
-            onClick={() => setActiveTab('chat')}
-          >
-            对话
-          </button>
+        <div className="flex items-center justify-between gap-2 border-b border-base-300 px-2 py-2 pl-5">
+          <div role="tablist" aria-label="AI 侧边栏视图" className="tabs tabs-box tabs-sm">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'summary'}
+              className={`tab ${activeTab === 'summary' ? 'tab-active' : ''}`}
+              onClick={() => setActiveTab('summary')}
+            >
+              总结
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'chat'}
+              className={`tab ${activeTab === 'chat' ? 'tab-active' : ''}`}
+              onClick={() => setActiveTab('chat')}
+            >
+              对话
+            </button>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              aria-label="AI 设置"
+              title="AI 设置"
+              onClick={() => setSettingsOpen(true)}
+            >
+              <Settings className="size-4" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              aria-label="关闭 AI 侧边栏"
+              title="关闭 AI 侧边栏"
+              onClick={() => setExpanded(false)}
+            >
+              <X className="size-4" aria-hidden="true" />
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            aria-label="AI 设置"
-            title="AI 设置"
-            onClick={() => setSettingsOpen(true)}
-          >
-            <Settings className="size-4" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            aria-label="关闭 AI 侧边栏"
-            title="关闭 AI 侧边栏"
-            onClick={() => setExpanded(false)}
-          >
-            <X className="size-4" aria-hidden="true" />
-          </button>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+          {activeTab === 'summary' ? <SummaryTab /> : <ChatTab />}
         </div>
-      </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        {activeTab === 'summary' ? <SummaryTab /> : <ChatTab />}
-      </div>
-
-      {settingsOpen && <AISettingsPanel open onClose={() => setSettingsOpen(false)} />}
-    </aside>
+        {settingsOpen && <AISettingsPanel open onClose={() => setSettingsOpen(false)} />}
+      </aside>
+    </>
   );
 }

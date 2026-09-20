@@ -1,24 +1,68 @@
- 'use client';
+'use client';
 
- import { useEffect, useRef, useState } from 'react';
- import { useReaderStore } from '@/store/readerStore';
- import { useSegmentationStore } from '@/store/segmentationStore';
- import { DEMO_MONOLITHIC_TXT, type DemoSection } from '@/services/reader/demoBook';
- import SegmentationBanner from './SegmentationBanner';
+import { useEffect, useRef, useState } from 'react';
+import { useReaderStore } from '@/store/readerStore';
+import { useSegmentationStore } from '@/store/segmentationStore';
+import { useAISidebarStore } from '@/store/aiSidebarStore';
+import { useChatStore } from '@/store/chatStore';
+import { DEMO_MONOLITHIC_TXT, type DemoSection } from '@/services/reader/demoBook';
+import { buildQuickActionPrompt, type QuickAction } from '@/services/chat/quickActions';
+import SegmentationBanner from './SegmentationBanner';
+import SelectionToolbar from './SelectionToolbar';
+import { readTextSelection, useTextSelection } from '@/hooks/useTextSelection';
 
 /**
  * Placeholder reading viewport. Renders demo-book sections as selectable
  * text so later tickets (02/05) can exercise extraction and selection
  * features before Foliate is wired in.
  */
- export default function ReaderPane({ sections }: { sections: DemoSection[] }) {
-   const sectionIndex = useReaderStore((s) => s.sectionIndex);
-   const setSection = useReaderStore((s) => s.setSection);
-   const segmentation = useSegmentationStore((s) => s.segmentation);
-   const scanAndPrompt = useSegmentationStore((s) => s.scanAndPrompt);
-   const [toast, setToast] = useState<string | null>(null);
-   const lastToastKey = useRef<string | null>(null);
-   const section = sections[sectionIndex];
+export default function ReaderPane({ sections }: { sections: DemoSection[] }) {
+  const sectionIndex = useReaderStore((s) => s.sectionIndex);
+  const setSection = useReaderStore((s) => s.setSection);
+  const segmentation = useSegmentationStore((s) => s.segmentation);
+  const scanAndPrompt = useSegmentationStore((s) => s.scanAndPrompt);
+  const [toast, setToast] = useState<string | null>(null);
+  const lastToastKey = useRef<string | null>(null);
+  const articleRef = useRef<HTMLElement | null>(null);
+  const { selection, close, reset } = useTextSelection(articleRef);
+  const section = sections[sectionIndex];
+
+  /**
+   * Selection AI quick action (design doc 4.4.3, ADR 0007): always expand the
+   * sidebar onto the chat tab; `ask` only fills the quote draft (the user
+   * types the question), the others send a preset prompt with the selection
+   * quoted in the bubble.
+   */
+  const handleQuickAction = (action: QuickAction, text: string) => {
+    const sidebar = useAISidebarStore.getState();
+    if (!sidebar.expanded) sidebar.setExpanded(true);
+    sidebar.setActiveTab('chat');
+
+    if (action === 'ask') {
+      useChatStore.getState().setQuoteDraft(text);
+      // Progressive enhancement: ChatTab may focus its composer on this event.
+      window.dispatchEvent(new CustomEvent('readest-plus:focus-chat-input'));
+    } else {
+      void useChatStore.getState().send(buildQuickActionPrompt(action, text).prompt, text);
+    }
+    // No residue: dismiss the toolbar and the native highlight together.
+    reset();
+  };
+
+  /** Clicking the article body with no live selection retracts the toolbar. */
+  const handleArticlePointerDown = (event: React.PointerEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    if (!readTextSelection(articleRef.current)) {
+      close();
+      return;
+    }
+    // A click that collapses the existing selection is confirmed after the
+    // browser default action (mouseup/selectionchange also re-evaluate).
+    window.setTimeout(() => {
+      if (!readTextSelection(articleRef.current)) close();
+    }, 0);
+  };
+
 
    // Dev-demo feedback: surface the generated virtual-section count after the
    // user answers the segmentation banner (or the fallback applies directly).
@@ -84,10 +128,14 @@
         </div>
       </div>
       <article
+        ref={articleRef}
+        data-testid="reader-article"
         className="flex-1 overflow-auto px-6 py-6 leading-loose text-base-content"
+        onPointerDown={handleArticlePointerDown}
         // Static fixture content owned by this app (demoBook.ts), not user input.
         dangerouslySetInnerHTML={{ __html: section.html }}
       />
+      <SelectionToolbar selection={selection} onAction={handleQuickAction} onClose={reset} />
     </section>
   );
 }

@@ -198,7 +198,7 @@ describe('topic lifecycle', () => {
   });
 
   it('selectTopic replays the full archived history and marks closed topics', async () => {
-    const h = makeStore({ settings: { maxTurnsPerTopic: 1 } });
+    const h = makeStore({ settings: { maxTurnsPerTopic: 1 }, now: (() => { let tick = 0; return () => ++tick; })() });
     await h.store.getState().openBook('book-d', 0);
     await h.store.getState().send('历史问题');
     const archivedId = h.store.getState().conversation!.id;

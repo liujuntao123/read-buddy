@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import { Sparkles } from 'lucide-react';
+import ThemeToggle from '@/components/ThemeToggle';
 import { useReaderStore } from '@/store/readerStore';
 import { useAISidebarStore } from '@/store/aiSidebarStore';
 
@@ -38,15 +39,18 @@ export default function HeaderBar() {
           <span className="shrink-0 text-xs text-base-content/50">{sectionCount} 章</span>
         )}
       </div>
-      <button
-        type="button"
-        className="btn btn-ghost btn-sm gap-1"
-        aria-label="切换 AI 侧边栏"
-        onClick={toggle}
-      >
-        <Sparkles className="size-4" aria-hidden="true" />
-        AI 侧栏
-      </button>
+      <div className="flex items-center gap-1">
+        <ThemeToggle />
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm gap-1"
+          aria-label="切换 AI 侧边栏"
+          onClick={toggle}
+        >
+          <Sparkles className="size-4" aria-hidden="true" />
+          AI 侧栏
+        </button>
+      </div>
     </header>
   );
 }
