@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "pnpm --filter readest-app dev",
     "build": "pnpm --filter readest-app build",
+    "verify": "pnpm typecheck && pnpm test && pnpm build",
     "typecheck": "pnpm --filter readest-app typecheck",
     "test": "pnpm --filter readest-app test",
     "test:watch": "pnpm --filter readest-app test:watch"
