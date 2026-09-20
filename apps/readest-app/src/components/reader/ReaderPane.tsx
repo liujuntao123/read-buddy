@@ -21,7 +21,7 @@ const DEMO_MONOLITHIC_HASH = 'demo-monolithic';
  * book, navigation switches to the Virtual Section list and the article
  * is sliced from the monolithic text by charOffset (ticket 02 "映射进阅读进度").
  */
-export default function ReaderPane({ sections }: { sections: DemoSection[] }) {
+export default function ReaderPane({ sections, monolithicText }: { sections: DemoSection[]; monolithicText?: string }) {
   const bookHash = useReaderStore((s) => s.bookHash);
   const sectionIndex = useReaderStore((s) => s.sectionIndex);
   const setSection = useReaderStore((s) => s.setSection);
@@ -41,10 +41,13 @@ export default function ReaderPane({ sections }: { sections: DemoSection[] }) {
   const section = !isVirtual ? sections[sectionIndex] : undefined;
   const totalSections = isVirtual ? virtualSections.length : sections.length;
 
+  // Virtual-section text source: the opened book's monolithic text (real TXT
+  // books), falling back to the demo fixture for the dev demo button path.
+  const virtualSource = monolithicText ?? DEMO_MONOLITHIC_TXT;
   const virtualText = currentVirtual
-    ? DEMO_MONOLITHIC_TXT.slice(
+    ? virtualSource.slice(
         currentVirtual.charOffset,
-        virtualSections[sectionIndex + 1]?.charOffset ?? DEMO_MONOLITHIC_TXT.length,
+        virtualSections[sectionIndex + 1]?.charOffset ?? virtualSource.length,
       )
     : '';
 
@@ -147,7 +150,7 @@ export default function ReaderPane({ sections }: { sections: DemoSection[] }) {
           {isVirtual ? currentVirtual!.title : section!.title}
         </span>
         <div className="flex gap-2">
-          {isVirtual ? (
+          {isVirtual && bookHash === DEMO_MONOLITHIC_HASH && (
             <button
               type="button"
               className="btn btn-xs btn-outline"
@@ -156,7 +159,8 @@ export default function ReaderPane({ sections }: { sections: DemoSection[] }) {
             >
               返回演示书
             </button>
-          ) : (
+          )}
+          {!isVirtual && (bookHash === DEMO_BOOK.bookHash || bookHash === '') && (
             <button
               type="button"
               className="btn btn-xs btn-outline"

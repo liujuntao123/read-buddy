@@ -1,0 +1,66 @@
+/**
+ * TXT parser (ticket 06): UTF-8 decoding with a GBK fallback, exposed as a
+ * monolithic single-section book. The segmentation flow (regex detection /
+ * fixed-length chunks, ticket 02) turns the monolithic text into virtual
+ * chapters; the AI side consumes it through `getMonolithicText`.
+ */
+import type { ParsedBook } from './epubParser';
+
+/** Share of U+FFFD replacement chars above which we assume a non-UTF-8 encoding. */
+const REPLACEMENT_RATIO_THRESHOLD = 0.02;
+
+/**
+ * Decode raw TXT bytes: UTF-8 first; when more than 2% of the decoded
+ * characters are U+FFFD replacements, retry as GBK (common for Chinese
+ * e-book TXT files). Environments without a GBK decoder keep the UTF-8 best
+ * effort instead of throwing.
+ */
+export function decodeTxt(data: ArrayBuffer): string {
+  const utf8 = new TextDecoder('utf-8').decode(data);
+  if (utf8.length === 0) return utf8;
+
+  let replacements = 0;
+  for (let i = 0; i < utf8.length; i++) {
+    if (utf8.charCodeAt(i) === 0xfffd) replacements++;
+  }
+  if (replacements / utf8.length <= REPLACEMENT_RATIO_THRESHOLD) return utf8;
+
+  try {
+    return new TextDecoder('gbk').decode(data);
+  } catch {
+    return utf8;
+  }
+}
+
+/** A TXT book: one raw section plus the monolithic full text. */
+export interface ParsedTxtBook extends ParsedBook {
+  getMonolithicText(): string;
+}
+
+const escapeHtml = (text: string): string =>
+  text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/**
+ * Parse TXT bytes into a single-section book titled `fallbackTitle`
+ * (the file name without extension, chosen by the caller).
+ */
+export function parseTxt(data: ArrayBuffer, hash: string, fallbackTitle: string): ParsedTxtBook {
+  void hash; // Part of the shared parser signature; identity lives in the registry.
+  const fullText = decodeTxt(data);
+
+  return {
+    title: fallbackTitle,
+    sectionCount: 1,
+    getSectionTitle: () => fallbackTitle,
+    // One <p> per non-empty line; user text is HTML-escaped before wrapping.
+    getSectionHtml: () =>
+      fullText
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => `<p>${escapeHtml(line)}</p>`)
+        .join('\n'),
+    getSectionText: () => fullText,
+    getMonolithicText: () => fullText,
+  };
+}

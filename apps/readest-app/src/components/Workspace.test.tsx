@@ -1,8 +1,9 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import Workspace from './Workspace';
 import { useAISidebarStore } from '@/store/aiSidebarStore';
-import { DEMO_BOOK } from '@/services/reader/demoBook';
+import { useReaderStore } from '@/store/readerStore';
+import { useLibraryStore } from '@/store/libraryStore';
 
 const sidebarState = () => useAISidebarStore.getState();
 
@@ -13,10 +14,13 @@ beforeEach(() => {
 const expand = () => fireEvent.click(screen.getByRole('button', { name: '切换 AI 侧边栏' }));
 
 describe('Workspace split-screen shell', () => {
-  it('renders the header with the loaded book title and keeps the sidebar collapsed', () => {
+  it('renders the header and the empty bookshelf before any book is opened', () => {
     render(<Workspace />);
-    expect(screen.getByText(DEMO_BOOK.title)).toBeTruthy();
-    expect(screen.getByTestId('reader-pane')).toBeTruthy();
+    expect(screen.getByText('未加载书籍')).toBeTruthy();
+    expect(screen.getByTestId('bookshelf')).toBeTruthy();
+    // Ticket 06: startup no longer auto-loads the demo book; the reader pane
+    // only appears once a library book is opened.
+    expect(screen.queryByTestId('reader-pane')).toBeNull();
     expect(screen.queryByTestId('ai-sidebar')).toBeNull();
     expect(screen.queryByTestId('summary-tab-panel')).toBeNull();
   });
@@ -102,5 +106,39 @@ describe('Workspace split-screen shell', () => {
     expand();
     fireEvent.click(screen.getByRole('button', { name: 'AI 设置' }));
     expect(screen.getByTestId('ai-settings-panel')).toBeTruthy();
+  });
+
+  it('imports a dropped txt file (drop overlay included) and opens the reader', async () => {
+    const { container } = render(<Workspace />);
+    const root = container.firstElementChild as HTMLElement;
+
+    // Drag-hover overlay appears, and disappears again on drag-leave.
+    fireEvent.dragOver(root);
+    expect(screen.getByTestId('drop-import-overlay').textContent).toContain('松开以导入书籍');
+    fireEvent.dragLeave(root, { relatedTarget: null });
+    expect(screen.queryByTestId('drop-import-overlay')).toBeNull();
+
+    const file = new File([new TextEncoder().encode('第一章 起点\n\n第一段正文。')], '落书.txt');
+    fireEvent.drop(root, { dataTransfer: { files: [file] } });
+
+    await waitFor(() => expect(screen.getByTestId('reader-pane')).toBeTruthy());
+    expect(useLibraryStore.getState().view).toBe('reader');
+    expect(useLibraryStore.getState().books).toHaveLength(1);
+    expect(useReaderStore.getState().bookHash).toBe(useLibraryStore.getState().books[0]!.hash);
+  });
+
+  it('returns to the shelf via the header 书库 button and keeps the reader context', async () => {
+    const { container } = render(<Workspace />);
+    const root = container.firstElementChild as HTMLElement;
+    const file = new File([new TextEncoder().encode('第二章 不同的内容\n\n第二段正文。')], '落书二.txt');
+    fireEvent.drop(root, { dataTransfer: { files: [file] } });
+    await waitFor(() => expect(screen.getByTestId('reader-pane')).toBeTruthy());
+    const hash = useReaderStore.getState().bookHash;
+
+    fireEvent.click(screen.getByRole('button', { name: '打开书架' }));
+
+    expect(screen.getByTestId('bookshelf')).toBeTruthy();
+    expect(screen.queryByTestId('reader-pane')).toBeNull();
+    expect(useReaderStore.getState().bookHash).toBe(hash); // AI sidebar keeps its context
   });
 });

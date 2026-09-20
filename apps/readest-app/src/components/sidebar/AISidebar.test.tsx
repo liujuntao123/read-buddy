@@ -92,17 +92,19 @@ describe('AISidebar responsive drawer mode', () => {
     expect(screen.queryByTestId('sidebar-overlay')).toBeNull();
   });
 
-  it('keeps the reader full-width beside the drawer inside the Workspace shell', () => {
+  it('keeps the main pane full-width beside the drawer inside the Workspace shell', () => {
     mockMatchMedia(true);
     render(<Workspace />);
 
     fireEvent.click(screen.getByRole('button', { name: '切换 AI 侧边栏' }));
     expect(screen.getByTestId('ai-sidebar').classList.contains('fixed')).toBe(true);
     expect(screen.getByTestId('sidebar-overlay')).toBeTruthy();
-    // The reader pane stays in normal flow and keeps its flex fill.
-    const reader = screen.getByTestId('reader-pane') as HTMLElement;
-    expect(reader.className).toContain('flex-1');
-    expect(screen.getByTestId('reader-article')).toBeTruthy();
+    // Ticket 06: startup lands on the bookshelf (flex-filled main pane, no
+    // auto-loaded demo book any more); the reader fills the same slot once a
+    // library book is opened.
+    const mainPane = screen.getByTestId('bookshelf') as HTMLElement;
+    expect(mainPane.className).toContain('flex-1');
+    expect(screen.queryByTestId('reader-pane')).toBeNull();
     // The theme switch from ticket 05 lives in the header beside the toggle.
     expect(screen.getByTestId('theme-toggle')).toBeTruthy();
   });

@@ -1,19 +1,26 @@
 'use client';
 
-import { useEffect } from 'react';
-import { Sparkles } from 'lucide-react';
+import { useEffect, useRef } from 'react';
+import { Library, Sparkles, Upload } from 'lucide-react';
 import ThemeToggle from '@/components/ThemeToggle';
 import { useReaderStore } from '@/store/readerStore';
 import { useAISidebarStore } from '@/store/aiSidebarStore';
+import { useLibraryStore } from '@/store/libraryStore';
 
 /**
  * Top navigation bar (design doc 3): book title plus the AI sidebar toggle.
- * Owns the global Cmd+/ (macOS) / Ctrl+/ (Windows) shortcut.
+ * Owns the global Cmd+/ (macOS) / Ctrl+/ (Windows) shortcut. Ticket 06 adds
+ * the 书库 (back-to-shelf) and 导入书籍 entry points; the hidden file input
+ * routes picked files through the shared library store.
  */
 export default function HeaderBar() {
   const bookTitle = useReaderStore((s) => s.bookTitle);
   const sectionCount = useReaderStore((s) => s.sectionCount);
   const toggle = useAISidebarStore((s) => s.toggle);
+  const closeToShelf = useLibraryStore((s) => s.closeToShelf);
+  const importFiles = useLibraryStore((s) => s.importFiles);
+  const importing = useLibraryStore((s) => s.importing);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -25,6 +32,12 @@ export default function HeaderBar() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [toggle]);
+
+  const onImportChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = ''; // allow picking the same file again later
+    if (files.length > 0) void importFiles(files);
+  };
 
   return (
     <header
@@ -40,6 +53,34 @@ export default function HeaderBar() {
         )}
       </div>
       <div className="flex items-center gap-1">
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm gap-1"
+          aria-label="打开书架"
+          onClick={closeToShelf}
+        >
+          <Library className="size-4" aria-hidden="true" />
+          书库
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm gap-1"
+          aria-label="导入书籍"
+          disabled={importing}
+          onClick={() => fileRef.current?.click()}
+        >
+          <Upload className="size-4" aria-hidden="true" />
+          {importing ? '导入中…' : '导入书籍'}
+        </button>
+        <input
+          ref={fileRef}
+          data-testid="header-import-input"
+          type="file"
+          accept=".epub,.txt"
+          multiple
+          className="hidden"
+          onChange={onImportChange}
+        />
         <ThemeToggle />
         <button
           type="button"
