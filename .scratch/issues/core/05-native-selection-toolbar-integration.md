@@ -1,3 +1,10 @@
+---
+id: "05"
+title: "原生选区标注栏 AI 快捷菜单融合与端到端回归"
+status: "in-progress"
+blocked_by: ["04"]
+labels: ["ready-for-agent"]
+---
 # 05: 原生选区标注栏 AI 快捷菜单融合与端到端回归
 
 **What to build:**
