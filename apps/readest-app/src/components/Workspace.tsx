@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import { useReaderStore } from '@/store/readerStore';
 import { useAISettingsStore } from '@/store/aiSettingsStore';
+import { useChatStore } from '@/store/chatStore';
 import { DEMO_BOOK } from '@/services/reader/demoBook';
 import ReaderPane from '@/components/reader/ReaderPane';
 import HeaderBar from '@/components/HeaderBar';
@@ -16,7 +17,10 @@ import AISidebar from '@/components/sidebar/AISidebar';
 export default function Workspace() {
   const loadBook = useReaderStore((s) => s.loadBook);
   const setSection = useReaderStore((s) => s.setSection);
+  const bookHash = useReaderStore((s) => s.bookHash);
+  const sectionIndex = useReaderStore((s) => s.sectionIndex);
   const loadAISettings = useAISettingsStore((s) => s.load);
+  const openChatBook = useChatStore((s) => s.openBook);
 
   useEffect(() => {
     loadBook({
@@ -31,6 +35,13 @@ export default function Workspace() {
   useEffect(() => {
     void loadAISettings();
   }, [loadAISettings]);
+
+  // Bind the companion chat to the current book (ticket 04): resume the
+  // latest open topic whenever the book or active section changes.
+  useEffect(() => {
+    if (!bookHash) return;
+    void openChatBook(bookHash, sectionIndex);
+  }, [bookHash, sectionIndex, openChatBook]);
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-base-200">

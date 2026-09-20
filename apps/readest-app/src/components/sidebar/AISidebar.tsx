@@ -4,8 +4,8 @@ import { useRef, useState } from 'react';
 import { GripVertical, Settings, X } from 'lucide-react';
 import { useAISidebarStore } from '@/store/aiSidebarStore';
 import AISettingsPanel from '@/components/settings/AISettingsPanel';
-import SummaryTabPlaceholder from './SummaryTabPlaceholder';
-import ChatTabPlaceholder from './ChatTabPlaceholder';
+import SummaryTab from './SummaryTab';
+import ChatTab from './ChatTab';
 
 interface DragState {
   pointerId: number;
@@ -126,7 +126,7 @@ export default function AISidebar() {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        {activeTab === 'summary' ? <SummaryTabPlaceholder /> : <ChatTabPlaceholder />}
+        {activeTab === 'summary' ? <SummaryTab /> : <ChatTab />}
       </div>
 
       {settingsOpen && <AISettingsPanel open onClose={() => setSettingsOpen(false)} />}

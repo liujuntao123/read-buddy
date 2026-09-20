@@ -1,3 +1,10 @@
+---
+id: "03"
+title: "严格手动触发与超长章节 Map-Reduce 结构化总结"
+status: "in-progress"
+blocked_by: ["01", "02"]
+labels: ["ready-for-agent"]
+---
 # 03: 严格手动触发与超长章节 Map-Reduce 结构化总结
 
 **What to build:**

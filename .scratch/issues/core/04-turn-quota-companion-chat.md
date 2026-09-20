@@ -1,3 +1,10 @@
+---
+id: "04"
+title: "显式轮数配额（Turn Quota）伴读对话"
+status: "in-progress"
+blocked_by: ["01", "03"]
+labels: ["ready-for-agent"]
+---
 # 04: 显式轮数配额（Turn Quota）伴读对话
 
 **What to build:**
