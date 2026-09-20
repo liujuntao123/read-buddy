@@ -13,6 +13,7 @@ import { getDatabase, type ReadestPlusDatabase } from '@/services/db/database';
 import { clearOpenedBook, registerOpenedBook, type OpenedBookContent } from './contentRegistry';
 import { parseEpub } from './epubParser';
 import { parseTxt } from './txtParser';
+import { createFoliateEngine, engineToContent, type FoliateEngineHandle } from './foliateEngine';
 
 /** Book row without the raw bytes — the shape list views / stores should hold. */
 export type LibraryBookMeta = Omit<LibraryBook, 'data'>;
@@ -20,6 +21,11 @@ export type LibraryBookMeta = Omit<LibraryBook, 'data'>;
 export interface LibraryDeps {
   /** Injectable database so tests run against an isolated fake-indexeddb. */
   db?: ReadestPlusDatabase;
+  /**
+   * Engine factory seam (ticket 07): tests inject a factory bound to a fake
+   * view module; production uses the real lazy foliate engine.
+   */
+  createEngine?: typeof createFoliateEngine;
 }
 
 export type ImportResult =
@@ -27,6 +33,9 @@ export type ImportResult =
   | { status: 'unsupported' | 'duplicate'; message: string };
 
 export const UNSUPPORTED_FORMAT_MESSAGE = '暂不支持该格式（待 Foliate 引擎接入）';
+
+/** The result of opening a book: registry content plus the live engine. */
+export type OpenedBook = OpenedBookContent & { engine?: FoliateEngineHandle };
 
 const dbOf = (deps: LibraryDeps = {}): ReadestPlusDatabase => deps.db ?? getDatabase();
 
@@ -41,14 +50,28 @@ export async function computeBookHash(data: ArrayBuffer): Promise<string> {
     .slice(0, 16);
 }
 
-/** Format detection by file extension; anything else is unsupported for now. */
+
+/** Formats rendered by the Foliate pagination engine (ticket 07). */
+export const ENGINE_FORMATS: readonly BookFormat[] = ['epub', 'mobi', 'fb2', 'cbz'];
+
+/** True when the format is rendered through the Foliate engine. */
+export const isEngineFormat = (format: BookFormat): boolean => ENGINE_FORMATS.includes(format);
+
+/**
+ * Format detection by file extension (ticket 07): the Foliate engine takes
+ * EPUB plus MOBI/AZW/AZW3/PRC, FB2/FBZ and CBZ; PDF stays unsupported until
+ * a later release. AZW variants all map to the `mobi` engine format —
+ * foliate detects the real container by magic number anyway.
+ */
 export function detectFormat(name: string): BookFormat {
   const lower = name.toLowerCase();
   if (lower.endsWith('.epub')) return 'epub';
+  if (/\.(mobi|azw3?|prc)$/.test(lower)) return 'mobi';
+  if (/\.(fb2|fbz)$/.test(lower)) return 'fb2';
+  if (lower.endsWith('.cbz')) return 'cbz';
   if (lower.endsWith('.txt')) return 'txt';
   return 'unsupported';
 }
-
 /**
  * Import a local file: detect the format, hash the bytes, reject duplicates,
  * parse enough metadata for the shelf (EPUB title/author come from the OPF)
@@ -86,6 +109,9 @@ export async function importBookFile(file: File, deps: LibraryDeps = {}): Promis
     size: data.byteLength,
     importedAt: now,
     updatedAt: now,
+    // Keep the original name: foliate's CBZ/FBZ detection keys off the
+    // extension (view.js isCBZ/isFBZ), so reopening needs the suffix intact.
+    fileName: file.name,
     data,
   };
   await db.books.put(book);
@@ -94,23 +120,30 @@ export async function importBookFile(file: File, deps: LibraryDeps = {}): Promis
 
 /**
  * Re-parse a stored book and register it as the opened content (AI features
- * resolve the current chapter through the registry). TXT books additionally
- * expose their monolithic full text for the segmentation flow.
+ * resolve the current chapter through the registry).
+ *
+ * Ticket 07: engine formats (epub/mobi/fb2/cbz) open through the Foliate
+ * engine — `prepare()` loads the book (no DOM rendering yet) so the spine /
+ * TOC are readable, and the returned handle is what the reader pane renders.
+ * TXT books keep the parseTxt path with the monolithic segmentation flow.
  */
-export async function openBook(book: LibraryBook, deps: LibraryDeps = {}): Promise<OpenedBookContent> {
-  void deps; // Bytes travel with the row; the seam stays for API symmetry.
-
-  if (book.format === 'epub') {
-    const parsed = await parseEpub(book.data, book.hash);
-    const content: OpenedBookContent = {
-      bookHash: book.hash,
-      sectionCount: parsed.sectionCount,
-      getSectionTitle: parsed.getSectionTitle,
-      getSectionHtml: parsed.getSectionHtml,
-      getSectionText: parsed.getSectionText,
-    };
+export async function openBook(book: LibraryBook, deps: LibraryDeps = {}): Promise<OpenedBook> {
+  if (isEngineFormat(book.format)) {
+    const createEngine = deps.createEngine ?? createFoliateEngine;
+    // foliate identifies formats by magic number, but CBZ/FBZ need the
+    // original file name suffix; fall back for pre-ticket-07 rows.
+    const fileName = book.fileName ?? `${book.title}.${book.format}`;
+    const file = new File([book.data], fileName, { type: 'application/octet-stream' });
+    const engine = createEngine(file);
+    try {
+      await engine.prepare();
+    } catch (err) {
+      engine.close();
+      throw err;
+    }
+    const content = engineToContent(engine, book.hash);
     registerOpenedBook(content);
-    return content;
+    return { ...content, engine };
   }
 
   if (book.format === 'txt') {
@@ -145,14 +178,24 @@ export async function removeBook(hash: string, deps: LibraryDeps = {}): Promise<
   clearOpenedBook(hash);
 }
 
-/** Persist the last read section so re-opening resumes where the reader left off. */
+/**
+ * Persist reading progress: the last read section ordinal and (engine books)
+ * the position CFI so re-opening lands on the exact spot. The options object
+ * keeps the existing call shape (`{ db }`); `cfi` is omitted by the TXT path,
+ * which leaves any previously stored CFI untouched.
+ */
 export async function saveProgress(
   hash: string,
   sectionIndex: number,
-  deps: LibraryDeps = {},
+  options: LibraryDeps & { cfi?: string } = {},
 ): Promise<void> {
-  const db = dbOf(deps);
+  const db = dbOf(options);
   const book = await db.books.get(hash);
   if (!book) return;
-  await db.books.put({ ...book, lastSectionIndex: sectionIndex, updatedAt: Date.now() });
+  await db.books.put({
+    ...book,
+    lastSectionIndex: sectionIndex,
+    lastCfi: options.cfi ?? book.lastCfi,
+    updatedAt: Date.now(),
+  });
 }

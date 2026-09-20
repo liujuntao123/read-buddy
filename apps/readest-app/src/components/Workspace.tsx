@@ -9,9 +9,11 @@ import { useLibraryStore } from '@/store/libraryStore';
 import { getOpenedBook } from '@/services/library/contentRegistry';
 import { DEMO_BOOK, type DemoSection } from '@/services/reader/demoBook';
 import ReaderPane from '@/components/reader/ReaderPane';
+import FoliatePane from '@/components/reader/FoliatePane';
 import HeaderBar from '@/components/HeaderBar';
 import AISidebar from '@/components/sidebar/AISidebar';
 import Bookshelf from '@/components/library/Bookshelf';
+import { initDesktopFileOpen } from '@/services/desktop/desktopBridge';
 
 /**
  * Client shell for the split-screen reading workspace (design doc 3):
@@ -31,6 +33,9 @@ export default function Workspace() {
 
   const view = useLibraryStore((s) => s.view);
   const currentHash = useLibraryStore((s) => s.currentHash);
+  // Ticket 07: an engine book renders through the Foliate pane; TXT / demo
+  // books keep the scroll reader.
+  const currentEngine = useLibraryStore((s) => (s.currentHash ? s.engines[s.currentHash] ?? null : null));
   const libraryBooks = useLibraryStore((s) => s.books);
   const initLibrary = useLibraryStore((s) => s.init);
   const importFiles = useLibraryStore((s) => s.importFiles);
@@ -43,6 +48,12 @@ export default function Workspace() {
   useEffect(() => {
     void initLibrary();
   }, [initLibrary]);
+
+  // Desktop shell (ticket 07): books launched via OS file association are
+  // forwarded by src-tauri and routed into the normal import flow.
+  useEffect(() => {
+    void initDesktopFileOpen();
+  }, []);
 
   // Restore the AI provider settings persisted in IndexedDB (ticket 01).
   useEffect(() => {
@@ -94,7 +105,8 @@ export default function Workspace() {
   }, [opened]);
   const monolithicText = opened?.getMonolithicText?.();
 
-  // Drag-and-drop import (ticket 06): .epub/.txt dropped anywhere imports.
+  // Drag-and-drop import (tickets 06/07): engine formats and txt dropped
+  // anywhere onto the window get imported.
   const onDragOver = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     if (!dragOver) setDragOver(true);
@@ -106,7 +118,7 @@ export default function Workspace() {
     event.preventDefault();
     setDragOver(false);
     const files = Array.from(event.dataTransfer?.files ?? []).filter((file) =>
-      /\.(epub|txt)$/i.test(file.name),
+      /\.(epub|mobi|azw3?|prc|fb2|fbz|cbz|txt)$/i.test(file.name),
     );
     if (files.length > 0) void importFiles(files);
   };
@@ -122,6 +134,10 @@ export default function Workspace() {
       <main className="relative flex min-h-0 flex-1">
         {view === 'shelf' ? (
           <Bookshelf />
+        ) : currentEngine ? (
+          // Ticket 07: paginated engine rendering replaces the scroll branch
+          // for epub/mobi/fb2/cbz books; TXT/demo keep ReaderPane.
+          <FoliatePane engine={currentEngine} />
         ) : (
           <ReaderPane sections={sections} monolithicText={monolithicText} />
         )}
@@ -131,7 +147,7 @@ export default function Workspace() {
             data-testid="drop-import-overlay"
             className="pointer-events-none absolute inset-4 z-50 flex items-center justify-center rounded-lg border-4 border-dashed border-primary bg-base-200/80 text-lg font-medium text-primary"
           >
-            松开以导入书籍（.epub / .txt）
+            松开以导入书籍（.epub / .mobi / .fb2 / .cbz / .txt）
           </div>
         )}
       </main>

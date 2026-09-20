@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ReadestPlusDatabase } from '@/services/db/database';
 import { BookSegmentationRepository } from '@/services/db/repositories';
 import { getOpenedBook } from '@/services/library/contentRegistry';
+import type { FoliateEngineHandle } from '@/services/library/foliateEngine';
 import { DEMO_MONOLITHIC_TXT } from '@/services/reader/demoBook';
 import { useReaderStore } from '@/store/readerStore';
 import { setSegmentationRepository, useSegmentationStore } from '@/store/segmentationStore';
@@ -60,7 +61,7 @@ describe('createLibraryStore', () => {
   });
 
   it('surfaces import problems as toast copy without blocking good files', async () => {
-    await store.getState().importFiles([txtFile(), new File([new Uint8Array([1])], 'bad.mobi')]);
+    await store.getState().importFiles([txtFile(), new File([new Uint8Array([1])], 'bad.pdf')]);
 
     const state = store.getState();
     expect(state.books).toHaveLength(1); // the txt made it in
@@ -159,5 +160,116 @@ describe('createLibraryStore', () => {
     await store.getState().open('no-such-hash');
     expect(store.getState().error).toBe('书籍不存在或已被删除');
     expect(store.getState().view).toBe('shelf');
+  });
+
+  // ── Ticket 07: Foliate engine books ─────────────────────────────────────
+
+  const makeEngine = (opts: { sectionCount?: number; cfi?: string } = {}) => {
+    let current = opts.cfi ?? null;
+    return {
+      openIn: vi.fn(async () => {}),
+      prepare: vi.fn(async () => {}),
+      goToCfi: vi.fn(async () => {}),
+      next: vi.fn(async () => {}),
+      prev: vi.fn(async () => {}),
+      goTo: vi.fn(async () => {}),
+      goToFraction: vi.fn(async () => {}),
+      onRelocate: vi.fn(() => () => {}),
+      onLoad: vi.fn(() => () => {}),
+      getSectionText: vi.fn(async () => ''),
+      getCachedSectionHtml: vi.fn(() => ''),
+      getCachedSectionText: vi.fn(() => ''),
+      getSectionTitle: vi.fn((index: number) => `第 ${index + 1} 章`),
+      sectionCount: opts.sectionCount ?? 3,
+      tocItems: vi.fn(() => []),
+      currentLocation: vi.fn(() => (current ? { index: 1, fraction: 0.5, cfi: current } : null)),
+      close: vi.fn(() => {
+        current = null;
+      }),
+      __setCfi: (cfi: string | null) => {
+        current = cfi;
+      },
+    };
+  };
+  type EngineDouble = ReturnType<typeof makeEngine>;
+
+  const engineStore = (engine: EngineDouble): LibraryStoreHook =>
+    createLibraryStore({
+      db,
+      createEngine: () => engine as unknown as FoliateEngineHandle,
+    });
+
+  const mobiFile = (): File => new File([new Uint8Array([1, 2, 3, 4])], '冰与火之诗.mobi');
+
+  it('opens an engine book: reader context, engine registry, resume CFI', async () => {
+    const engine = makeEngine();
+    store = engineStore(engine);
+    resetStores();
+    await store.getState().importFiles([mobiFile()]);
+
+    const state = store.getState();
+    expect(state.books).toHaveLength(1);
+    expect(state.books[0]!.format).toBe('mobi');
+    expect(state.view).toBe('reader');
+    const hash = state.currentHash!;
+    expect(hash).toBe(state.books[0]!.hash);
+    expect(state.engines[hash]).toBe(engine);
+
+    expect(useReaderStore.getState().bookHash).toBe(hash);
+    expect(useReaderStore.getState().sectionCount).toBe(3); // engine spine
+    expect(useReaderStore.getState().chapterTitle).toBe('第 1 章');
+    expect(getOpenedBook(hash)?.sectionCount).toBe(3);
+    expect(state.resumeCfi).toBeNull(); // never read before
+    expect(state.consumeResumeCfi()).toBeNull();
+  });
+
+  it('saves engine progress including the CFI and restores it on re-open', async () => {
+    const engine = makeEngine();
+    store = engineStore(engine);
+    resetStores();
+    await store.getState().importFiles([mobiFile()]);
+    const hash = store.getState().currentHash!;
+
+    engine.__setCfi('epubcfi(/6/8!/2/2)');
+    useReaderStore.getState().setSection(1, '第 2 章');
+    await store.getState().saveProgress();
+
+    expect((await db.books.get(hash))?.lastSectionIndex).toBe(1);
+    expect((await db.books.get(hash))?.lastCfi).toBe('epubcfi(/6/8!/2/2)');
+
+    // Re-open (fresh store, same fake engine) resumes from the stored CFI.
+    resetStores();
+    store = engineStore(engine);
+    await store.getState().open(hash);
+    expect(useReaderStore.getState().sectionIndex).toBe(1);
+    expect(useReaderStore.getState().chapterTitle).toBe('第 2 章');
+    expect(store.getState().resumeCfi).toBe('epubcfi(/6/8!/2/2)');
+    expect(store.getState().consumeResumeCfi()).toBe('epubcfi(/6/8!/2/2)');
+    expect(store.getState().consumeResumeCfi()).toBeNull(); // one-shot
+  });
+
+  it('closes the previous engine when opening or deleting another book', async () => {
+    const engineA = makeEngine();
+    store = engineStore(engineA);
+    resetStores();
+    await store.getState().importFiles([mobiFile()]);
+    const hashA = store.getState().currentHash!;
+    expect(store.getState().engines[hashA]).toBe(engineA);
+
+    // Opening the TXT switches books: engine A must be closed and dropped.
+    await store.getState().importFiles([txtFile()]);
+    expect(engineA.close).toHaveBeenCalledTimes(1);
+    expect(store.getState().engines[hashA]).toBeUndefined();
+
+    // Opening a book and deleting it closes its engine too.
+    const engineB = makeEngine();
+    store = engineStore(engineB);
+    resetStores();
+    await store.getState().importFiles([new File([new Uint8Array([9, 9])], '第二本.mobi')]);
+    const hashB = store.getState().currentHash!;
+    await store.getState().remove(hashB);
+    expect(engineB.close).toHaveBeenCalledTimes(1);
+    expect(store.getState().view).toBe('shelf');
+    expect(store.getState().engines[hashB]).toBeUndefined();
   });
 });

@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import Workspace from './Workspace';
 import { useAISidebarStore } from '@/store/aiSidebarStore';
 import { useReaderStore } from '@/store/readerStore';
 import { useLibraryStore } from '@/store/libraryStore';
+import type { FoliateEngineHandle } from '@/services/library/foliateEngine';
 
 const sidebarState = () => useAISidebarStore.getState();
 
@@ -140,5 +141,47 @@ describe('Workspace split-screen shell', () => {
     expect(screen.getByTestId('bookshelf')).toBeTruthy();
     expect(screen.queryByTestId('reader-pane')).toBeNull();
     expect(useReaderStore.getState().bookHash).toBe(hash); // AI sidebar keeps its context
+  });
+
+  it('renders engine books through the Foliate pane instead of the scroll reader', async () => {
+    window.localStorage.removeItem('readest-plus:last-book');
+    render(<Workspace />);
+
+    // Ticket 07: an engine registered for the current book switches the
+    // reading viewport to the paginated pane (TXT/demo keep ReaderPane).
+    const engine = {
+      openIn: async (el: HTMLElement) => {
+        el.appendChild(document.createElement('div'));
+      },
+      prepare: async () => {},
+      goToCfi: async () => {},
+      next: async () => {},
+      prev: async () => {},
+      goTo: async () => {},
+      goToFraction: async () => {},
+      onRelocate: () => () => {},
+      onLoad: () => () => {},
+      getSectionText: async () => '',
+      getCachedSectionHtml: () => '',
+      getCachedSectionText: () => '',
+      getSectionTitle: () => '第一章',
+      sectionCount: 1,
+      tocItems: () => [],
+      currentLocation: () => null,
+      close: () => {},
+    } as unknown as FoliateEngineHandle;
+
+    act(() => {
+      useLibraryStore.setState({
+        view: 'reader',
+        currentHash: 'engine-book',
+        engines: { 'engine-book': engine },
+      });
+    });
+
+    expect(await screen.findByTestId('foliate-pane')).toBeTruthy();
+    expect(screen.queryByTestId('reader-pane')).toBeNull();
+
+    useLibraryStore.setState({ view: 'shelf', currentHash: null, engines: {} });
   });
 });

@@ -16,7 +16,13 @@ interface BookshelfProps {
   store?: LibraryStoreHook;
 }
 
-const FORMAT_LABEL: Record<string, string> = { epub: 'EPUB', txt: 'TXT' };
+const FORMAT_LABEL: Record<string, string> = {
+  epub: 'EPUB',
+  mobi: 'MOBI',
+  fb2: 'FB2',
+  cbz: 'CBZ',
+  txt: 'TXT',
+};
 
 const formatDate = (ts: number): string => {
   const d = new Date(ts);
@@ -75,7 +81,7 @@ export default function Bookshelf({ store = useLibraryStore }: BookshelfProps) {
           ref={inputRef}
           data-testid="bookshelf-file-input"
           type="file"
-          accept=".epub,.txt"
+          accept=".epub,.mobi,.azw,.azw3,.prc,.fb2,.fbz,.cbz,.txt"
           multiple
           className="hidden"
           onChange={onInputChange}

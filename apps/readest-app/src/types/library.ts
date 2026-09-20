@@ -6,7 +6,7 @@
  * reused by summaries / conversations / segmentation (CONTEXT.md "Book").
  */
 
-export type BookFormat = 'epub' | 'txt' | 'unsupported';
+export type BookFormat = 'epub' | 'mobi' | 'fb2' | 'cbz' | 'txt' | 'unsupported';
 
 export interface LibraryBook {
   /** SHA-256 hex (truncated) of the file bytes — primary key. */
@@ -20,6 +20,18 @@ export interface LibraryBook {
   updatedAt: number;
   /** Last read section ordinal, restored on re-open. */
   lastSectionIndex?: number;
+  /**
+   * Last read position CFI (Foliate engine books), restored on re-open.
+   * Optional so pre-ticket-07 rows (and TXT books) stay compatible.
+   */
+  lastCfi?: string;
+  /**
+   * Original file name including its extension. The Foliate engine re-opens
+   * the stored bytes as a File, and CBZ/FBZ detection keys off the name
+   * suffix (view.js `isCBZ`/`isFBZ`), so the name must survive the import.
+   * Optional for pre-ticket-07 rows; openBook falls back to `title.format`.
+   */
+  fileName?: string;
   /** Raw file bytes (ArrayBuffer) so the book reopens without the file. */
   data: ArrayBuffer;
 }

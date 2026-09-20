@@ -3,13 +3,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useReaderStore } from '@/store/readerStore';
 import { useSegmentationStore } from '@/store/segmentationStore';
-import { useAISidebarStore } from '@/store/aiSidebarStore';
-import { useChatStore } from '@/store/chatStore';
 import { DEMO_BOOK, DEMO_MONOLITHIC_TXT, type DemoSection } from '@/services/reader/demoBook';
-import { buildQuickActionPrompt, type QuickAction } from '@/services/chat/quickActions';
+import { type QuickAction } from '@/services/chat/quickActions';
 import SegmentationBanner from './SegmentationBanner';
 import SelectionToolbar from './SelectionToolbar';
 import { readTextSelection, useTextSelection } from '@/hooks/useTextSelection';
+import { useQuickActions } from '@/hooks/useQuickActions';
 
 /** Demo hash for the monolithic no-TOC TXT fixture (design doc 4.2 flow). */
 const DEMO_MONOLITHIC_HASH = 'demo-monolithic';
@@ -32,6 +31,7 @@ export default function ReaderPane({ sections, monolithicText }: { sections: Dem
   const lastToastKey = useRef<string | null>(null);
   const articleRef = useRef<HTMLElement | null>(null);
   const { selection, close, reset } = useTextSelection(articleRef);
+  const runQuickAction = useQuickActions();
 
   // Virtual-section mode: the segmentation belongs to the book being read.
   const virtualSections =
@@ -52,26 +52,12 @@ export default function ReaderPane({ sections, monolithicText }: { sections: Dem
     : '';
 
   /**
-   * Selection AI quick action (design doc 4.4.3, ADR 0007): always expand the
-   * sidebar onto the chat tab; `ask` only fills the quote draft (the user
-   * types the question), the others send a preset prompt with the selection
-   * quoted in the bubble.
+   * Selection AI quick action (design doc 4.4.3, ADR 0007) — shared with the
+   * Foliate engine pane via `useQuickActions` (ticket 07); see the hook for
+   * the sidebar/quote/send behaviour.
    */
   const handleQuickAction = (action: QuickAction, text: string) => {
-    const sidebar = useAISidebarStore.getState();
-    if (!sidebar.expanded) sidebar.setExpanded(true);
-    sidebar.setActiveTab('chat');
-
-    if (action === 'ask') {
-      useChatStore.getState().setQuoteDraft(text);
-      // Progressive enhancement: ChatTab also focuses its composer when the
-      // quote draft arrives (it may not be mounted yet at this instant).
-      window.dispatchEvent(new CustomEvent('readest-plus:focus-chat-input'));
-    } else {
-      void useChatStore.getState().send(buildQuickActionPrompt(action, text).prompt, text);
-    }
-    // No residue: dismiss the toolbar and the native highlight together.
-    reset();
+    runQuickAction(action, text, reset);
   };
 
   /** Clicking the article body with no live selection retracts the toolbar. */
