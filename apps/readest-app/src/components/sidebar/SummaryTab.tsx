@@ -188,14 +188,24 @@ export default function SummaryTab() {
             </p>
           )}
           {phase === 'aborted' && content ? <SummaryBody content={content} /> : null}
-          <button
-            type="button"
-            data-testid="generate-summary"
-            className="btn btn-primary btn-sm mt-1 w-full"
-            onClick={() => void generate()}
-          >
-            ⚡ 生成本章总结
-          </button>
+          {charCount < 50 ? (
+            <p
+              data-testid="summary-empty-text-warning"
+              role="status"
+              className="alert alert-warning py-2 text-xs"
+            >
+              当前章节正文为图像或字数极少，无法提取纯文本总结。
+            </p>
+          ) : (
+            <button
+              type="button"
+              data-testid="generate-summary"
+              className="btn btn-primary btn-sm mt-1 w-full"
+              onClick={() => void generate()}
+            >
+              ⚡ 生成本章总结
+            </button>
+          )}
         </div>
       </div>
     );

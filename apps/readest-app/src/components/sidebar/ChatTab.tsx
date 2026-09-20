@@ -72,6 +72,18 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
     window.addEventListener('readest-plus:focus-chat-input', focusInput);
     return () => window.removeEventListener('readest-plus:focus-chat-input', focusInput);
   }, []);
+
+  // When the "ask" action arrives from another tab the ChatTab may have just
+  // been mounted, missing the focus event — focus whenever a quote draft appears.
+  useEffect(() => {
+    if (!quoteDraft) return;
+    const el = inputRef.current;
+    if (!el || el.disabled) return;
+    el.focus();
+    const end = el.value.length;
+    el.setSelectionRange(end, end);
+  }, [quoteDraft]);
+
   const streaming = phase === 'streaming';
   const isClosed = conversation?.isClosed ?? false;
 

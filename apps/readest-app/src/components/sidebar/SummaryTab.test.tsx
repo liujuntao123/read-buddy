@@ -21,8 +21,8 @@ const CHAPTER: SummaryChapterContext = {
   sectionIndex: 1,
   bookTitle: DEMO_BOOK.title,
   chapterTitle: '第二章 图书馆的密语',
-  text: '图书馆的木门在她身后合上时，穹顶上的星图亮了起来。',
-  charCount: 23,
+  text: '图书馆的木门在她身后合上时，穹顶上的星图亮了起来，一行行微光顺着书架流淌，像有人在低声读书。林晚握紧了信纸，想起父亲失踪前留下的最后一页手稿。',
+  charCount: 71,
 };
 
 interface Setup {
@@ -94,8 +94,26 @@ describe('SummaryTab', () => {
     // demo chapter 2 extracted char count, resolved from the real chapterSource
     const chapterTwoChars = screen.getByText(/约 \d+ 字/);
     expect(chapterTwoChars.textContent).toMatch(/约 \d{2,} 字/);
+
     expect(factory).not.toHaveBeenCalled();
     expect(screen.queryByTestId('stop-generation')).toBeNull();
+  });
+
+  it('warns instead of offering generation when the chapter has <50 extractable chars', async () => {
+    const { store, factory } = setup();
+    render(<SummaryTab />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('generate-summary')).toBeTruthy();
+    });
+
+    act(() => {
+      store.getState().openChapter(DEMO_BOOK.bookHash, 0, '扫描版第一章（纯图像）', 12);
+    });
+
+    expect(await screen.findByTestId('summary-empty-text-warning')).toBeTruthy();
+    expect(screen.queryByTestId('generate-summary')).toBeNull();
+    expect(factory).not.toHaveBeenCalled();
   });
 
   it('streams a generation: stop button + content while generating, then cached with regenerate', async () => {
