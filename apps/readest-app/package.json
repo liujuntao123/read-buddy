@@ -8,10 +8,12 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "tauri": "tauri"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.53",
+    "@tauri-apps/api": "^2.11.1",
     "ai": "^7.0.107",
     "dexie": "^4.4.6",
     "jszip": "^3.10.2",
@@ -23,6 +25,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",
+    "@tauri-apps/cli": "^2.11.4",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^24",
     "@types/react": "^19",

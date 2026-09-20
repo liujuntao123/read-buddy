@@ -5,3 +5,5 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 *.log
+src-tauri/target/
+src-tauri/gen/schemas/
