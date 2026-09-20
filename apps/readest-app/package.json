@@ -14,6 +14,7 @@
     "@ai-sdk/openai-compatible": "^3.0.53",
     "ai": "^7.0.107",
     "dexie": "^4.4.6",
+    "jszip": "^3.10.2",
     "lucide-react": "^1.47.0",
     "next": "^16.3.5",
     "react": "^19.3.0",

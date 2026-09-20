@@ -10,7 +10,8 @@
  *
  * Factory `createChatStore` takes injectable manager/stream/settings/chapter
  * seams; the app uses the `useChatStore` singleton bound to the real Dexie
- * repository, the AI-SDK stream, the live settings store and the demo book.
+ * repository, the AI-SDK stream, the live settings store and the shared
+ * chapter source (opened-book registry with demo fallback).
  */
 import { create } from 'zustand';
 import type { StoreApi, UseBoundStore } from 'zustand';
@@ -22,12 +23,10 @@ import {
   createConversationManager,
   type ConversationManager,
 } from '@/services/chat/conversationManager';
+import { resolveCurrentChapterText } from '@/services/summary/chapterSource';
 import { buildChatPrompt, buildSystemPrompt } from '@/services/chat/promptAssembly';
 import { useAISettingsStore } from '@/store/aiSettingsStore';
 import { useReaderStore } from '@/store/readerStore';
-import { useSegmentationStore } from '@/store/segmentationStore';
-import { DEMO_BOOK, DEMO_MONOLITHIC_TXT } from '@/services/reader/demoBook';
-import { extractChapterText } from '@/services/reader/extractor';
 
 export type ChatPhase = 'idle' | 'streaming' | 'error' | 'closed';
 
@@ -259,39 +258,12 @@ export function createChatStore(deps: ChatStoreDeps): ChatStoreHook {
   });
 }
 
-const clampIndex = (index: number, length: number): number =>
-  Math.min(Math.max(index, 0), Math.max(length - 1, 0));
-
 /**
- * Demo-book chapter binding for the singleton store:
- * - 'demo-monolithic' (TXT, no TOC): slice the full text at the persisted
- *   segmentation offsets for the reader's current virtual section; without a
- *   segmentation the whole text flows through `buildChatPrompt`, which applies
- *   the visible 12,000-char truncation.
- * - otherwise (EPUB-style demo): strip the spine section's HTML with
- *   `extractChapterText` (services/reader, NOT services/summary).
+ * App-wide singleton (AISidebar's 对话 tab binds ChatTab to this by default).
+ * Chapter context resolves through the shared chapterSource, which prefers
+ * the opened-book registry (real imported books) and falls back to the demo
+ * fixtures — identical to what the summary tab sees.
  */
-const demoChapterText = (): ChatChapterText => {
-  const reader = useReaderStore.getState();
-  if (reader.bookHash === 'demo-monolithic') {
-    const sections = useSegmentationStore.getState().segmentation?.virtualSections ?? [];
-    if (sections.length === 0) return { title: '', text: DEMO_MONOLITHIC_TXT };
-    const index = clampIndex(reader.sectionIndex, sections.length);
-    const current = sections[index];
-    const next = sections[index + 1];
-    const end = next ? next.charOffset : DEMO_MONOLITHIC_TXT.length;
-    return {
-      title: current.title,
-      text: DEMO_MONOLITHIC_TXT.slice(current.charOffset, Math.max(end, current.charOffset)),
-    };
-  }
-  const index = clampIndex(reader.sectionIndex, DEMO_BOOK.sections.length);
-  const section = DEMO_BOOK.sections[index];
-  const { title, text } = extractChapterText(section.html);
-  return { title: title || section.title, text };
-};
-
-/** App-wide singleton (AISidebar's 对话 tab binds ChatTab to this by default). */
 export const useChatStore: ChatStoreHook = createChatStore({
   manager: createConversationManager({ repository: new ConversationRepository() }),
   // Lazy dynamic import keeps the AI SDK out of module-load (and unit tests).
@@ -300,5 +272,8 @@ export const useChatStore: ChatStoreHook = createChatStore({
     yield* createAiSdkStreamFn()(req, settings);
   },
   getSettings: () => useAISettingsStore.getState().settings,
-  getChapterText: demoChapterText,
+  getChapterText: () => {
+    const { title, text } = resolveCurrentChapterText();
+    return { title: title || useReaderStore.getState().chapterTitle, text };
+  },
 });

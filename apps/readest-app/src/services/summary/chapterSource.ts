@@ -16,6 +16,7 @@
  */
 import { extractChapterText, type ChapterText } from '@/services/reader/extractor';
 import { DEMO_BOOK, DEMO_MONOLITHIC_TXT } from '@/services/reader/demoBook';
+import { getOpenedBook } from '@/services/library/contentRegistry';
 import { useReaderStore } from '@/store/readerStore';
 import { useSegmentationStore } from '@/store/segmentationStore';
 
@@ -56,13 +57,23 @@ export function createChapterSource({ getStructuredHtml, getMonolithicText }: Ch
     return extractChapterText(html);
   };
 }
-
 /**
- * Default binding to the demo fixtures. `demo-monolithic` is the hash the
- * reader pane uses for the no-TOC TXT demo; every other hash takes the
- * structured DEMO_BOOK path.
+ * Default binding: the opened-book content registry (real imported books)
+ * wins; the demo fixtures remain as the fallback when nothing real is open.
+ * `demo-monolithic` keeps working for the no-TOC TXT demo button.
  */
-export const resolveCurrentChapterText = createChapterSource({
-  getStructuredHtml: (sectionIndex) => DEMO_BOOK.sections[sectionIndex]?.html,
-  getMonolithicText: (bookHash) => (bookHash === 'demo-monolithic' ? DEMO_MONOLITHIC_TXT : undefined),
+const registrySource = createChapterSource({
+  getStructuredHtml: (sectionIndex) =>
+    getOpenedBook(useReaderStore.getState().bookHash)?.getSectionHtml(sectionIndex),
+  getMonolithicText: (bookHash) => getOpenedBook(bookHash)?.getMonolithicText?.(),
 });
+
+const demoSource = createChapterSource({
+  getStructuredHtml: (sectionIndex) => DEMO_BOOK.sections[sectionIndex]?.html,
+  getMonolithicText: (bookHash) =>
+    bookHash === 'demo-monolithic' ? DEMO_MONOLITHIC_TXT : undefined,
+});
+
+export const resolveCurrentChapterText = (): ChapterSourceResult =>
+  getOpenedBook(useReaderStore.getState().bookHash) ? registrySource() : demoSource();
+
