@@ -1,0 +1,13 @@
+{
+  "name": "readest-plus",
+  "private": true,
+  "description": "Zero-embedding, chapter-first desktop AI reading companion built on readest architecture",
+  "scripts": {
+    "dev": "pnpm --filter readest-app dev",
+    "build": "pnpm --filter readest-app build",
+    "typecheck": "pnpm --filter readest-app typecheck",
+    "test": "pnpm --filter readest-app test",
+    "test:watch": "pnpm --filter readest-app test:watch"
+  },
+  "packageManager": "pnpm@12.4.2"
+}

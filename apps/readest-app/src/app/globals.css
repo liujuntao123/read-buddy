@@ -1,0 +1,41 @@
+@import 'tailwindcss';
+
+@plugin 'daisyui' {
+  themes: light --default, dark --prefersdark;
+}
+
+/* 羊皮纸护眼黄 (Sepia) theme per design doc section 3.1 */
+@plugin 'daisyui/theme' {
+  name: 'sepia';
+  default: false;
+  prefersdark: false;
+  color-scheme: light;
+  --color-base-100: oklch(93% 0.028 82);
+  --color-base-200: oklch(88% 0.034 82);
+  --color-base-300: oklch(80% 0.04 80);
+  --color-base-content: oklch(32% 0.03 60);
+  --color-primary: oklch(48% 0.09 62);
+  --color-primary-content: oklch(97% 0.01 82);
+  --color-secondary: oklch(55% 0.07 70);
+  --color-secondary-content: oklch(97% 0.01 82);
+  --color-accent: oklch(52% 0.1 50);
+  --color-accent-content: oklch(97% 0.01 82);
+  --color-neutral: oklch(35% 0.03 60);
+  --color-neutral-content: oklch(95% 0.01 82);
+  --color-info: oklch(60% 0.12 250);
+  --color-info-content: oklch(98% 0.01 250);
+  --color-success: oklch(60% 0.12 150);
+  --color-success-content: oklch(98% 0.01 150);
+  --color-warning: oklch(70% 0.13 80);
+  --color-warning-content: oklch(25% 0.05 80);
+  --color-error: oklch(55% 0.16 30);
+  --color-error-content: oklch(98% 0.01 30);
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.75rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 1;
+  --noise: 0;
+}
