@@ -1,41 +1,220 @@
-@import 'tailwindcss';
+/* Astryx design system: reset, base component styles, and the app themes. */
+@import '@astryxdesign/core/reset.css';
+@import '@astryxdesign/core/astryx.css';
+@import '../theme/readest.css';
+@import '../theme/readest-sepia.css';
+/* LXGW WenKai reading face: 97 unicode-range subsets, only the slices with
+   glyphs actually rendered are fetched at runtime. */
+@import 'lxgw-wenkai-webfont/lxgwwenkai-regular.css';
 
-@plugin 'daisyui' {
-  themes: light --default, dark --prefersdark;
+/* The Astryx <Theme> provider renders a plain wrapper div; make it the app
+   frame so the header + workspace row below can flex to the viewport. */
+[data-astryx-theme] {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  /* One continuous app surface: the header merges into the page instead of
+     floating as a separate band over the body canvas. */
+  background: var(--color-background-surface);
 }
 
-/* 羊皮纸护眼黄 (Sepia) theme per design doc section 3.1 */
-@plugin 'daisyui/theme' {
-  name: 'sepia';
-  default: false;
-  prefersdark: false;
-  color-scheme: light;
-  --color-base-100: oklch(93% 0.028 82);
-  --color-base-200: oklch(88% 0.034 82);
-  --color-base-300: oklch(80% 0.04 80);
-  --color-base-content: oklch(32% 0.03 60);
-  --color-primary: oklch(48% 0.09 62);
-  --color-primary-content: oklch(97% 0.01 82);
-  --color-secondary: oklch(55% 0.07 70);
-  --color-secondary-content: oklch(97% 0.01 82);
-  --color-accent: oklch(52% 0.1 50);
-  --color-accent-content: oklch(97% 0.01 82);
-  --color-neutral: oklch(35% 0.03 60);
-  --color-neutral-content: oklch(95% 0.01 82);
-  --color-info: oklch(60% 0.12 250);
-  --color-info-content: oklch(98% 0.01 250);
-  --color-success: oklch(60% 0.12 150);
-  --color-success-content: oklch(98% 0.01 150);
-  --color-warning: oklch(70% 0.13 80);
-  --color-warning-content: oklch(25% 0.05 80);
-  --color-error: oklch(55% 0.16 30);
-  --color-error-content: oklch(98% 0.01 30);
-  --radius-selector: 0.5rem;
-  --radius-field: 0.5rem;
-  --radius-box: 0.75rem;
-  --size-selector: 0.25rem;
-  --size-field: 0.25rem;
-  --border: 1px;
-  --depth: 1;
-  --noise: 0;
+/* TopNav is layout-only; keep it transparent so the unified surface shows
+   through (defensive against themes that paint it). */
+.astryx-top-nav {
+  background: transparent;
+}
+
+/* Foliate engine view fills its container (mirrors the original readest app:
+   without this the custom element defaults to display:inline and the
+   paginator's scroll container doesn't get a proper box). */
+foliate-view {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Markdown rendering (MarkdownView): scoped to .markdown-content wrappers
+   so chat bubbles / summaries share one global stylesheet instead of
+   per-instance <style> tags. */
+.markdown-content p {
+  margin-block: 0 0.5em;
+}
+.markdown-content p:last-child {
+  margin-bottom: 0;
+}
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4,
+.markdown-content h5,
+.markdown-content h6 {
+  margin-top: 0.8em;
+  margin-bottom: 0.3em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.markdown-content h1 { font-size: 1.25em; }
+.markdown-content h2 { font-size: 1.15em; }
+.markdown-content h3 { font-size: 1.05em; }
+.markdown-content ul,
+.markdown-content ol {
+  margin-block: 0.3em 0.5em;
+  padding-inline-start: 1.4em;
+}
+.markdown-content li {
+  margin-block: 0.2em;
+}
+.markdown-content pre {
+  background: var(--color-background-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-container);
+  padding: var(--spacing-2) var(--spacing-3);
+  overflow-x: auto;
+  margin-block: 0.5em;
+  font-family: monospace;
+  font-size: 0.9em;
+}
+.markdown-content code {
+  background: var(--color-background-muted);
+  border-radius: var(--radius-container);
+  padding: 0.1em 0.3em;
+  font-family: monospace;
+  font-size: 0.9em;
+}
+.markdown-content pre code {
+  background: transparent;
+  padding: 0;
+}
+.markdown-content blockquote {
+  border-inline-start: 3px solid var(--color-accent);
+  padding-inline-start: var(--spacing-3);
+  margin-inline: 0;
+  margin-block: 0.4em;
+  color: var(--color-text-secondary);
+}
+.markdown-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-block: 0.5em;
+}
+.markdown-content th,
+.markdown-content td {
+  border: 1px solid var(--color-border);
+  padding: var(--spacing-1) var(--spacing-2);
+  text-align: start;
+}
+.markdown-content th {
+  background: var(--color-background-muted);
+  font-weight: 600;
+}
+.markdown-content a {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+.markdown-content hr {
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  margin-block: 0.8em;
+}
+.markdown-content img {
+  max-width: 100%;
+}
+
+/* Live-generation cursor appended while a model is still streaming. */
+.markdown-streaming-cursor {
+  display: inline-block;
+  font-weight: bold;
+  color: var(--color-accent);
+  animation: markdown-blink 1s step-start infinite;
+  margin-left: var(--spacing-1);
+}
+
+@keyframes markdown-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Floating reader dock (ReaderDock): a vertical strip of reading controls at
+   the bottom-right corner of the reading pane. Hidden until the pointer
+   enters its corner zone (or a control inside gains focus / a popover from
+   it is open), so it never competes with the page itself. */
+.reader-dock-zone {
+  position: absolute;
+  inset-block-end: 0;
+  inset-inline-end: 0;
+  z-index: 20;
+  /* Generous hover catcher around the strip. */
+  padding: var(--spacing-4);
+}
+
+.reader-dock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2);
+  border-radius: var(--radius-container);
+  border: 1px solid var(--color-border);
+  background: var(--color-background-surface);
+  box-shadow: var(--shadow-low);
+  opacity: 0;
+  transform: translateY(var(--spacing-1));
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+  pointer-events: none;
+}
+
+.reader-dock-zone:hover .reader-dock,
+.reader-dock-zone:focus-within .reader-dock,
+.reader-dock[data-open='true'] {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+/* Shelf cards: gentle lift on hover, settle on press. Disabled under
+   prefers-reduced-motion. */
+.shelf-card {
+  transition:
+    transform var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.shelf-card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-med);
+}
+
+.shelf-card:active {
+  transform: translateY(-1px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shelf-card,
+  .shelf-card:hover,
+  .shelf-card:active {
+    transition: none;
+    transform: none;
+  }
+}
+
+/* Slim token-colored scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-emphasized);
 }

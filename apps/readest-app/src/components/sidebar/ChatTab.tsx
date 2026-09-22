@@ -1,37 +1,92 @@
 'use client';
 
 /**
- * 伴读对话 tab (ticket 04, design doc 4.4, ADR 0006): turn-quota companion
- * chat. The parent (AISidebar) mounts this without props to use the default
+ * 伴读 Agent 工作台 (reading-agent architecture doc §7): the upgraded
+ * companion chat tab. Every assistant reply may carry a collapsed tool-trace
+ * accordion (思考与工具调用轨迹) and whole-book evidence citation cards that
+ * jump the reader viewport; a silent indexing status row tracks the import
+ * pipeline; the composer keeps the turn-quota topic model (ADR 0006).
+ *
+ * The parent (AISidebar) mounts this without props to use the default
  * `useChatStore` singleton; tests inject a store built by `createChatStore`.
  */
 import { useEffect, useRef, useState } from 'react';
-import { Check, Copy, Plus, Send, Square, X } from 'lucide-react';
-import type { Message } from '@/types/ai';
+import { Check, Clock, Copy, Plus, Send, Square, X } from 'lucide-react';
+import { Button } from '@astryxdesign/core/Button';
+import { Card } from '@astryxdesign/core/Card';
+import { ChatMessage, ChatMessageBubble, ChatMessageList } from '@astryxdesign/core/Chat';
+import { IconButton } from '@astryxdesign/core/IconButton';
+import { HStack, VStack } from '@astryxdesign/core/Stack';
+import { List, ListItem } from '@astryxdesign/core/List';
+import { Popover } from '@astryxdesign/core/Popover';
+import { Text } from '@astryxdesign/core/Text';
+import { TextArea } from '@astryxdesign/core/TextArea';
+import { Token } from '@astryxdesign/core/Token';
+import { type Message } from '@/types/ai';
 import { useAISettingsStore } from '@/store/aiSettingsStore';
 import { useChatStore, type ChatStoreHook } from '@/store/chatStore';
+import { useDismissOnWindowBlur } from '@/hooks/useDismissOnWindowBlur';
+import MarkdownView from '@/components/common/MarkdownView';
+import QuoteBlock from '@/components/common/QuoteBlock';
+import AgentTraceAccordion from './AgentTraceAccordion';
+import CitationCard from './CitationCard';
+import IndexingStatusBar from './IndexingStatusBar';
 
 interface ChatTabProps {
   /** Injectable store seam; defaults to the app-wide singleton. */
   store?: ChatStoreHook;
 }
 
-function MessageBubble({ message }: { message: Message }) {
-  const isUser = message.role === 'user';
+function UserMessage({ message }: { message: Message }) {
   return (
-    <div className={`chat ${isUser ? 'chat-end' : 'chat-start'}`}>
+    <ChatMessage sender="user">
       {message.quoteText && (
-        <blockquote className="mb-1 max-w-[85%] whitespace-pre-wrap border-l-2 border-base-300 pl-2 text-xs text-base-content/60">
-          {`> ${message.quoteText}`}
-        </blockquote>
+        <ChatMessageBubble variant="ghost" width="100%">
+          <QuoteBlock text={message.quoteText} source={message.quoteSource} compact testId="user-quote" />
+        </ChatMessageBubble>
       )}
-      <div
-        data-testid={isUser ? 'user-bubble' : 'assistant-bubble'}
-        className={`chat-bubble whitespace-pre-wrap ${isUser ? 'chat-bubble-primary' : ''}`}
-      >
-        {message.content}
-      </div>
-    </div>
+      <ChatMessageBubble data-testid="user-bubble">{message.content}</ChatMessageBubble>
+    </ChatMessage>
+  );
+}
+
+/** Assistant reply: trace accordion + markdown body + citation cards. */
+function AssistantMessage({ message }: { message: Message }) {
+  const traces = message.toolCalls ?? [];
+  const citations = message.citations ?? [];
+  return (
+    <ChatMessage sender="assistant">
+      <ChatMessageBubble width="100%" data-testid="assistant-bubble">
+        <VStack gap={2}>
+          <AgentTraceAccordion traces={traces} />
+          <MarkdownView content={message.content} />
+        </VStack>
+      </ChatMessageBubble>
+      {citations.map((citation, index) => (
+        <CitationCard key={`${citation.nodeIndex}-${index}`} citation={citation} />
+      ))}
+    </ChatMessage>
+  );
+}
+
+/** Live turn: open trace trail while the answer streams in. */
+function StreamingMessage({
+  streamingText,
+  liveTraces,
+}: {
+  streamingText: string;
+  liveTraces: Message['toolCalls'];
+}) {
+  const hasToolActivity = (liveTraces?.length ?? 0) > 0;
+  return (
+    <ChatMessage sender="assistant">
+      <ChatMessageBubble width="100%" data-testid="streaming-bubble">
+        <VStack gap={2}>
+          {hasToolActivity && <AgentTraceAccordion traces={liveTraces!} defaultOpen />}
+          <MarkdownView content={streamingText} streaming />
+        </VStack>
+      </ChatMessageBubble>
+    </ChatMessage>
   );
 }
 
@@ -40,6 +95,7 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
   const messages = store((s) => s.messages);
   const topics = store((s) => s.topics);
   const streamingText = store((s) => s.streamingText);
+  const liveTraces = store((s) => s.liveTraces);
   const phase = store((s) => s.phase);
   const error = store((s) => s.error);
   const quoteDraft = store((s) => s.quoteDraft);
@@ -50,6 +106,10 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
   const [input, setInput] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  // Clicks into the book iframe (most of the window while reading) must
+  // also dismiss the history popover.
+  useDismissOnWindowBlur(historyOpen, () => setHistoryOpen(false));
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -59,8 +119,8 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView?.({ block: 'end' });
-  }, [messages.length, streamingText]);
-  // Selection toolbar "ask" action (ticket 05) requests input focus via event.
+  }, [messages.length, streamingText, liveTraces.length]);
+  // Selection toolbar "ask" action (ticket 05) requests input focus by event.
   useEffect(() => {
     const focusInput = () => {
       const el = inputRef.current;
@@ -126,194 +186,218 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
   };
 
   return (
-    <div data-testid="chat-tab-panel" className="flex h-full min-h-0 flex-col gap-2">
-      {/* Topic switcher bar: current topic, history dropdown, new topic. */}
-      <div className="flex items-center gap-1">
-        <span className="min-w-0 flex-1 truncate text-sm font-medium" data-testid="current-topic-title">
+    <VStack data-testid="chat-tab-panel" gap={2} height="100%" style={{ minHeight: 0 }}>
+      {/* Silent indexing status + topic switcher bar. */}
+      <IndexingStatusBar />
+      <HStack gap={1} vAlign="center">
+        <Text weight="medium" maxLines={1} style={{ flex: 1, minWidth: 0 }} data-testid="current-topic-title">
           {conversation ? conversation.title : '新话题'}
-        </span>
-        <div className="dropdown dropdown-end">
-          <button
-            type="button"
-            data-testid="history-topics-toggle"
-            className="btn btn-ghost btn-xs whitespace-nowrap"
-            onClick={() => setHistoryOpen((open) => !open)}
-          >
-            🕘 历史话题
-          </button>
-          {historyOpen && (
-            <ul
-              data-testid="topic-history-list"
-              className="menu dropdown-content z-20 mt-1 max-h-64 w-64 overflow-y-auto rounded-box border border-base-300 bg-base-100 p-1 text-sm shadow-lg"
-            >
+        </Text>
+        <Popover
+          isOpen={historyOpen}
+          onOpenChange={setHistoryOpen}
+          placement="below"
+          alignment="end"
+          label="历史话题"
+          width={256}
+          content={
+            <List density="compact" data-testid="topic-history-list">
               {topics.length === 0 && (
-                <li className="px-2 py-1 text-base-content/50" aria-disabled="true">
+                <Text type="supporting" color="secondary" as="div" style={{ padding: 'var(--spacing-2)' }}>
                   暂无历史话题
-                </li>
+                </Text>
               )}
               {topics.map((topic) => (
-                <li key={topic.id}>
-                  <button
-                    type="button"
-                    data-testid="topic-item"
-                    className={topic.id === conversation?.id ? 'active' : ''}
-                    onClick={() => {
-                      setHistoryOpen(false);
-                      void store.getState().selectTopic(topic.id);
-                    }}
-                  >
-                    <span className="truncate">
-                      {topic.isClosed ? '🔒 ' : ''}
-                      {topic.title}
-                    </span>
-                    <span className="text-xs text-base-content/50">
+                <ListItem
+                  key={topic.id}
+                  data-testid="topic-item"
+                  label={`${topic.isClosed ? '🔒 ' : ''}${topic.title}`}
+                  isSelected={topic.id === conversation?.id}
+                  endContent={
+                    <Text type="supporting" hasTabularNumbers>
                       {topic.turnCount} / {maxTurns}
-                    </span>
-                  </button>
-                </li>
+                    </Text>
+                  }
+                  onClick={() => {
+                    setHistoryOpen(false);
+                    void store.getState().selectTopic(topic.id);
+                  }}
+                />
               ))}
-            </ul>
-          )}
-        </div>
-        <button
-          type="button"
-          className="btn btn-ghost btn-xs whitespace-nowrap"
-          onClick={() => store.getState().startNewTopic()}
+            </List>
+          }
         >
-          <Plus className="size-3.5" aria-hidden="true" />➕ 开启新话题
-        </button>
-      </div>
+          <IconButton
+            label="历史话题"
+            variant="ghost"
+            size="sm"
+            tooltip="历史话题"
+            data-testid="history-topics-toggle"
+            icon={<Clock size={14} aria-hidden />}
+          />
+        </Popover>
+        <IconButton
+          label="开启新话题"
+          variant="ghost"
+          size="sm"
+          tooltip="开启新话题"
+          icon={<Plus size={14} aria-hidden />}
+          onClick={() => store.getState().startNewTopic()}
+        />
+      </HStack>
 
-      {/* Message stream: user right, assistant left, live streaming bubble. */}
-      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto py-1" data-testid="chat-messages">
+      {/* Message stream: user right, assistant left, live agent turn. */}
+      <ChatMessageList
+        data-testid="chat-messages"
+        isStreaming={streaming}
+        density="compact"
+        style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingBlock: 'var(--spacing-1)' }}
+      >
         {messages.length === 0 && !streaming && (
-          <p className="text-xs text-base-content/50">向 AI 伴读助手提问当前章节的内容吧。</p>
+          <Text type="supporting" color="secondary" as="p">
+            向全书伴读智能体提问吧——可以聚焦当前章节，也可以纵览全书剧情、人物与伏笔。
+          </Text>
         )}
-        {messages.map((message) => (
-          <MessageBubble key={message.id} message={message} />
-        ))}
+        {messages.map((message) =>
+          message.role === 'user' ? (
+            <UserMessage key={message.id} message={message} />
+          ) : (
+            <AssistantMessage key={message.id} message={message} />
+          ),
+        )}
         {streaming && (
-          <div className="chat chat-start">
-            <div data-testid="streaming-bubble" className="chat-bubble whitespace-pre-wrap">
-              {streamingText}
-              <span className="ml-0.5 inline-block animate-pulse" aria-hidden="true">
-                ▍
-              </span>
-            </div>
-          </div>
+          <StreamingMessage streamingText={streamingText} liveTraces={liveTraces} />
         )}
         <div ref={bottomRef} />
-      </div>
+      </ChatMessageList>
 
       {/* Turn quota pill + error surface. */}
-      <div className="flex items-center justify-between gap-2 border-t border-base-300 pt-2">
-        <span data-testid="turn-quota" className="badge badge-soft badge-sm whitespace-nowrap">
-          💬 {conversation?.turnCount ?? 0} / {maxTurns} 轮
-        </span>
+      <HStack justify="between" gap={2} vAlign="center" style={{ borderTop: '1px solid var(--color-border)', paddingTop: 'var(--spacing-2)' }}>
+        <Token
+          data-testid="turn-quota"
+          label={`💬 ${conversation?.turnCount ?? 0} / ${maxTurns} 轮`}
+          size="sm"
+        />
         {error && (
-          <span data-testid="chat-error" className="truncate text-xs text-error" title={error}>
+          <Text
+            type="supporting"
+            maxLines={1}
+            data-testid="chat-error"
+            style={{ color: 'var(--color-error)' }}
+          >
             {error}
-          </span>
+          </Text>
         )}
-      </div>
+      </HStack>
 
       {/* Pending selection quote (ticket 05 fills this via setQuoteDraft). */}
       {quoteDraft && (
-        <div className="flex items-start gap-2 rounded-box bg-base-200 px-2 py-1" data-testid="quote-draft">
-          <blockquote className="min-w-0 flex-1 whitespace-pre-wrap border-l-2 border-base-300 pl-2 text-xs text-base-content/70">
-            {`> ${quoteDraft}`}
-          </blockquote>
-          <button
-            type="button"
-            className="btn btn-ghost btn-xs"
-            aria-label="清除引用"
+        <HStack data-testid="quote-draft" gap={2} vAlign="start" style={{ width: '100%' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <QuoteBlock text={quoteDraft} compact testId="quote-draft-block" />
+          </div>
+          <IconButton
+            label="清除引用"
+            variant="ghost"
+            size="sm"
+            icon={<X size={14} aria-hidden />}
             onClick={() => store.getState().setQuoteDraft(null)}
-          >
-            <X className="size-3.5" aria-hidden="true" />
-          </button>
-        </div>
+          />
+        </HStack>
       )}
 
       {/* Quota exhausted: lock the input and offer the two primary actions. */}
       {isClosed && (
-        <div
-          data-testid="quota-exhausted-hint"
-          className="rounded-box border border-warning/40 bg-warning/10 p-2 text-xs"
-        >
-          <p>本轮话题探讨已达上限（{maxTurns}/{maxTurns}），建议开启新话题以保持解答精准度</p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <button
-              type="button"
-              data-testid="start-new-topic"
-              className="btn btn-primary btn-xs"
-              onClick={() => store.getState().startNewTopic()}
-            >
-              <Plus className="size-3.5" aria-hidden="true" />➕ 开启新话题
-            </button>
-            <button
-              type="button"
-              data-testid="copy-transcript"
-              className="btn btn-outline btn-xs"
-              onClick={() => void copyTranscript()}
-            >
-              {copied ? (
-                <>
-                  <Check className="size-3.5" aria-hidden="true" />已复制
-                </>
-              ) : (
-                <>
-                  <Copy className="size-3.5" aria-hidden="true" />📋 导出/复制本轮对话
-                </>
-              )}
-            </button>
-          </div>
-        </div>
+        <Card data-testid="quota-exhausted-hint" variant="yellow" padding={3}>
+          <VStack gap={2}>
+            <Text as="p" style={{ lineHeight: 1.6 }}>
+              本轮话题探讨已达上限（{maxTurns}/{maxTurns}），建议开启新话题以保持解答精准度
+            </Text>
+            <HStack gap={2}>
+              <Button
+                label="➕ 开启新话题"
+                variant="primary"
+                size="sm"
+                data-testid="start-new-topic"
+                icon={<Plus size={14} aria-hidden />}
+                onClick={() => store.getState().startNewTopic()}
+              />
+              <Button
+                label="导出/复制本轮对话"
+                variant="secondary"
+                size="sm"
+                data-testid="copy-transcript"
+                icon={copied ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />}
+                onClick={() => void copyTranscript()}
+              >
+                {copied ? '已复制' : '导出/复制本轮对话'}
+              </Button>
+            </HStack>
+          </VStack>
+        </Card>
       )}
 
-      {/* Composer. */}
-      <form
-        className="flex items-end gap-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          submit();
-        }}
-      >
-        <textarea
+      {/* Composer: full width with inside-positioned action button and fixed height. */}
+      <div style={{ position: 'relative', width: '100%', flexShrink: 0 }}>
+        <TextArea
           ref={inputRef}
           data-testid="chat-input"
-          className="textarea textarea-bordered min-h-16 flex-1 resize-none text-sm"
-          placeholder="围绕当前章节提问…（Enter 发送，Shift+Enter 换行）"
+          label="对话输入"
+          isLabelHidden
+          width="100%"
+          rows={3}
           value={input}
-          disabled={inputDisabled}
-          onChange={(event) => setInput(event.target.value)}
+          isDisabled={inputDisabled}
+          placeholder="输入你的疑问，或探讨全书剧情与伏笔…（Enter 发送，Shift+Enter 换行）"
+          onChange={setInput}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault();
               submit();
             }
           }}
+          style={{
+            width: '100%',
+            height: '84px',
+            minHeight: '84px',
+            maxHeight: '84px',
+            resize: 'none',
+            paddingBottom: '32px',
+            paddingRight: '48px',
+            boxSizing: 'border-box',
+          }}
         />
-        {streaming ? (
-          <button
-            type="button"
-            data-testid="stop-stream"
-            className="btn btn-error btn-sm"
-            onClick={() => store.getState().stop()}
-          >
-            <Square className="size-4" aria-hidden="true" />⏹ 停止
-          </button>
-        ) : (
-          <button
-            type="submit"
-            data-testid="send-message"
-            className="btn btn-primary btn-sm"
-            disabled={inputDisabled}
-            aria-label="发送"
-          >
-            <Send className="size-4" aria-hidden="true" />
-          </button>
-        )}
-      </form>
-    </div>
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 'var(--spacing-2)',
+            right: 'var(--spacing-2)',
+            zIndex: 5,
+          }}
+        >
+          {streaming ? (
+            <Button
+              label="⏹ 停止"
+              variant="destructive"
+              size="sm"
+              data-testid="stop-stream"
+              icon={<Square size={14} aria-hidden />}
+              onClick={() => store.getState().stop()}
+            />
+          ) : (
+            <Button
+              label="发送"
+              variant="primary"
+              size="sm"
+              isIconOnly
+              data-testid="send-message"
+              isDisabled={inputDisabled}
+              icon={<Send size={15} aria-hidden />}
+              onClick={submit}
+            />
+          )}
+        </div>
+      </div>
+    </VStack>
   );
 }

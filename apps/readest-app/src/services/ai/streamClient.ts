@@ -31,7 +31,7 @@ export const createAiSdkStreamFn = (): StreamTextFn => {
       model: provider.chatModel(settings.model),
       system,
       prompt,
-      temperature: settings.temperature,
+      ...(typeof settings.temperature === 'number' ? { temperature: settings.temperature } : {}),
       abortSignal: signal,
     });
     return result.textStream;

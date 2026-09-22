@@ -211,7 +211,7 @@ const languageInfo = lang => {
 }
 
 export class View extends HTMLElement {
-    #root = this.attachShadow({ mode: 'closed' })
+    #root = this.attachShadow({ mode: 'open' })
     #sectionProgress
     #tocProgress
     #pageProgress
@@ -220,6 +220,12 @@ export class View extends HTMLElement {
     #searchDrawOptions
     #cursorAutohider = new CursorAutohider(this, () =>
         this.hasAttribute('autohide-cursor'))
+    #styles
+    #maxColumnCount
+    #flow
+    #maxInlineSize
+    #gap
+    #margin
     isFixedLayout = false
     lastLocation
     history = new History()
@@ -259,6 +265,7 @@ export class View extends HTMLElement {
             this.renderer = document.createElement('foliate-paginator')
         }
         this.renderer.setAttribute('exportparts', 'head,foot,filter')
+        this.#applyRendererConfig()
         this.renderer.addEventListener('load', e => this.#onLoad(e.detail))
         this.renderer.addEventListener('relocate', e => this.#onRelocate(e.detail))
         this.renderer.addEventListener('create-overlayer', e =>
@@ -515,6 +522,49 @@ export class View extends HTMLElement {
     }
     async next(distance) {
         await this.renderer.next(distance)
+    }
+    setStyles(styles) {
+        this.#styles = styles
+        return this.renderer?.setStyles?.(styles)
+    }
+    setMaxColumnCount(count) {
+        this.#maxColumnCount = count
+        if (this.renderer) {
+            this.renderer.setAttribute('max-column-count', count)
+        }
+    }
+    // Layout configuration (readest-plus): the paginator exposes `flow`,
+    // `max-inline-size` (content column width), `gap` and `margin` as
+    // attributes. The values are cached so a renderer (re)created by
+    // `open()` picks them up — mirroring #styles/#maxColumnCount above.
+    #applyRendererConfig() {
+        const r = this.renderer
+        if (!r) return
+        if (this.#maxColumnCount != null) r.setAttribute('max-column-count', this.#maxColumnCount)
+        if (this.#flow != null) r.setAttribute('flow', this.#flow)
+        if (this.#maxInlineSize != null) r.setAttribute('max-inline-size', this.#maxInlineSize)
+        if (this.#gap != null) r.setAttribute('gap', this.#gap)
+        if (this.#margin != null) r.setAttribute('margin', this.#margin)
+        if (this.#styles) r.setStyles?.(this.#styles)
+    }
+    setFlow(flow) {
+        this.#flow = flow
+        if (this.renderer) {
+            if (flow == null) this.renderer.removeAttribute('flow')
+            else this.renderer.setAttribute('flow', flow)
+        }
+    }
+    setMaxInlineSize(px) {
+        this.#maxInlineSize = px
+        if (this.renderer) this.renderer.setAttribute('max-inline-size', px)
+    }
+    setGap(value) {
+        this.#gap = value
+        if (this.renderer) this.renderer.setAttribute('gap', value)
+    }
+    setMargin(value) {
+        this.#margin = value
+        if (this.renderer) this.renderer.setAttribute('margin', value)
     }
     goLeft() {
         return this.book.dir === 'rtl' ? this.next() : this.prev()

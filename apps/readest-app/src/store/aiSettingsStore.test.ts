@@ -65,6 +65,7 @@ describe('createAISettingsStore', () => {
     const errors = await store.getState().save(custom);
     expect(errors).toEqual({});
     expect(store.getState().settings).toEqual(custom);
+    expect(store.getState().toast).toEqual({ type: 'success', text: '设置已成功保存' });
     expect(await repository.load()).toEqual(custom);
   });
 

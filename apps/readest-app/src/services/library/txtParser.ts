@@ -50,17 +50,21 @@ export function parseTxt(data: ArrayBuffer, hash: string, fallbackTitle: string)
 
   return {
     title: fallbackTitle,
-    sectionCount: 1,
-    getSectionTitle: () => fallbackTitle,
+    spineCount: 1,
+    getSpineTitle: () => fallbackTitle,
     // One <p> per non-empty line; user text is HTML-escaped before wrapping.
-    getSectionHtml: () =>
+    getSpineHtml: () =>
       fullText
         .split('\n')
         .map((line) => line.trim())
         .filter(Boolean)
         .map((line) => `<p>${escapeHtml(line)}</p>`)
         .join('\n'),
-    getSectionText: () => fullText,
+    getSpineText: () => fullText,
     getMonolithicText: () => fullText,
+    // A TXT book ships no directory, so the node model falls back to regex /
+    // fixed-length segmentation over the monolithic text.
+    getTocEntries: () => [],
+    getSpineAnchors: () => [],
   };
 }

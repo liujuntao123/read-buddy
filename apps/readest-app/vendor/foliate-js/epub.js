@@ -785,6 +785,13 @@ class Loader {
     }
     async loadHref(href, base, parents = []) {
         if (isExternal(href)) return href
+        // An empty reference (a bare `url()` in CSS) resolves to the base file
+        // itself per WHATWG URL semantics; treat it as no reference instead of
+        // recursing into the file being replaced — the circular guard would
+        // then bypass replacement and hand a Blob to the paginator's CSS
+        // transform, which expects a string (broke every section linking such
+        // a stylesheet; e.g. Epubor-exported books with `url()` in flow css).
+        if (!href) return href
         const path = resolveURL(href, base)
         const item = this.manifest.find(item => item.href === path)
         if (!item) return href

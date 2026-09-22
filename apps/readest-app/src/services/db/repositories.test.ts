@@ -2,10 +2,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ReadestPlusDatabase } from './database';
 import {
   AISettingsRepository,
-  ChapterSummaryRepository,
+  BookNodeRepository,
+  NodeSummaryRepository,
   ConversationRepository,
 } from './repositories';
-import { DEFAULT_AI_SETTINGS, chapterSummaryId } from '@/types/ai';
+import { DEFAULT_AI_SETTINGS, nodeSummaryId } from '@/types/ai';
+import { bookNodeId, type BookNodeRecord } from '@/types/readingAgent';
 
 /**
  * Foundation smoke test: proves the Dexie + fake-indexeddb harness works
@@ -44,15 +46,69 @@ describe('AISettingsRepository', () => {
   });
 });
 
-describe('ChapterSummaryRepository', () => {
-  it('keys summaries by `${bookHash}:${sectionIndex}`', async () => {
-    const repo = new ChapterSummaryRepository(db);
+describe('BookNodeRepository', () => {
+  const node = (bookHash: string, index: number, depth = 0): BookNodeRecord => ({
+    nodeId: bookNodeId(bookHash, index),
+    bookHash,
+    nodeIndex: index,
+    title: `节点 ${index + 1}`,
+    depth,
+    startOffset: index * 100,
+    endOffset: (index + 1) * 100,
+    charCount: 100,
+    spineIndex: index,
+    indexStatus: 'pending',
+    updatedAt: 1,
+  });
+
+  it('keys nodes by `${bookHash}:n_${nodeIndex}` and lists them in document order', async () => {
+    const repo = new BookNodeRepository(db);
+    // Written out of order: the bookHash index must come back sorted.
+    await repo.bulkPut([node('book-b', 2, 1), node('book-b', 0), node('book-b', 1, 1)]);
+
+    expect((await repo.listByBook('book-b')).map((row) => row.nodeIndex)).toEqual([0, 1, 2]);
+    await expect(repo.get('book-b', 1)).resolves.toMatchObject({
+      nodeId: 'book-b:n_1',
+      title: '节点 2',
+      depth: 1,
+    });
+    expect(await repo.get('book-b', 9)).toBeUndefined();
+    // Rows of another book never leak into the listing.
+    await repo.put(node('book-c', 0));
+    expect((await repo.listByBook('book-b')).map((row) => row.bookHash)).toEqual([
+      'book-b',
+      'book-b',
+      'book-b',
+    ]);
+  });
+
+  it('updates a node in place by its computed primary key (brief scheduler path)', async () => {
+    const repo = new BookNodeRepository(db);
+    await repo.put({ ...node('book-b', 1, 1), brief: '本节微简介', indexStatus: 'ready', updatedAt: 2 });
+    await expect(repo.get('book-b', 1)).resolves.toMatchObject({
+      brief: '本节微简介',
+      indexStatus: 'ready',
+    });
+  });
+
+  it('deleteByBook drops every node of one book only', async () => {
+    const repo = new BookNodeRepository(db);
+    await repo.deleteByBook('book-b');
+    expect(await repo.listByBook('book-b')).toEqual([]);
+    expect(await repo.listByBook('book-c')).toHaveLength(1);
+    await repo.deleteByBook('book-c');
+  });
+});
+
+describe('NodeSummaryRepository', () => {
+  it('keys summaries by `${bookHash}:${nodeIndex}` in node_summaries', async () => {
+    const repo = new NodeSummaryRepository(db);
     const now = Date.now();
     await repo.put({
-      id: chapterSummaryId('book-a', 2),
+      id: nodeSummaryId('book-a', 2),
       bookHash: 'book-a',
-      sectionIndex: 2,
-      chapterTitle: '第三章',
+      nodeIndex: 2,
+      nodeTitle: '第三章',
       modelUsed: 'deepseek-chat',
       summaryContent: '### 📌 章节核心要义\n...',
       pipeline: 'single',
@@ -60,6 +116,11 @@ describe('ChapterSummaryRepository', () => {
       updatedAt: now,
     });
     expect((await repo.get('book-a', 2))?.id).toBe('book-a:2');
+    // The row really lands in the v5 `node_summaries` store (not a v1 leftover).
+    await expect(db.node_summaries.get(nodeSummaryId('book-a', 2))).resolves.toMatchObject({
+      nodeIndex: 2,
+      nodeTitle: '第三章',
+    });
     expect(await repo.get('book-a', 3)).toBeUndefined();
     expect((await repo.listByBook('book-a')).length).toBe(1);
     await repo.remove('book-a', 2);

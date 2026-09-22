@@ -33,9 +33,9 @@ describe('parseTxt', () => {
     const book = parseTxt(toBuffer(text), 'hash-txt-1', '风起之地');
 
     expect(book.title).toBe('风起之地');
-    expect(book.sectionCount).toBe(1);
-    expect(book.getSectionTitle(0)).toBe('风起之地');
-    expect(book.getSectionText(0)).toBe(text);
+    expect(book.spineCount).toBe(1);
+    expect(book.getSpineTitle(0)).toBe('风起之地');
+    expect(book.getSpineText(0)).toBe(text);
     expect(book.getMonolithicText()).toBe(text);
   });
 
@@ -43,7 +43,7 @@ describe('parseTxt', () => {
     const text = '第一行\n\n<script>alert(1)</script>\n第三行';
     const book = parseTxt(toBuffer(text), 'hash-txt-2', '测试书');
 
-    const html = book.getSectionHtml(0);
+    const html = book.getSpineHtml(0);
     expect(html).toContain('<p>第一行</p>');
     expect(html).toContain('<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>');
     expect(html).toContain('<p>第三行</p>');
@@ -53,6 +53,6 @@ describe('parseTxt', () => {
   it('decodes gbk content into readable chinese', () => {
     const book = parseTxt(gbkBytes(10), 'hash-txt-3', 'GBK 书');
     expect(book.getMonolithicText()).toBe('迷的'.repeat(10));
-    expect(book.getSectionHtml(0)).toContain('<p>迷的迷的迷的迷的迷的迷的迷的迷的迷的迷的</p>');
+    expect(book.getSpineHtml(0)).toContain('<p>迷的迷的迷的迷的迷的迷的迷的迷的迷的迷的</p>');
   });
 });

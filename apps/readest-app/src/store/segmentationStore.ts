@@ -1,22 +1,29 @@
 /**
- * Segmentation store (ticket 02): orchestrates detection → user prompt →
- * persisted virtual sections, per design doc 4.2 and ADR 0005.
+ * Segmentation store (ADR 0005, superseded flow per the reading-agent
+ * architecture doc §3.2): orchestrates segmentation → persisted virtual
+ * sections for monolithic TXT books.
  *
  * Flow:
  * - `scanAndPrompt`: loads any persisted segmentation (idempotent re-scan),
- *   otherwise runs the regex detector; ≥2 hits show the confirm banner,
- *   anything less falls straight back to fixed-length chunks.
- * - `applyRegex` / `rejectAndFallback`: persist the chosen strategy to the
- *   BookSegmentation table and hide the banner.
+ *   otherwise runs the THREE-LEVEL layered segmenter (front TOC-page filter
+ *   → multi-pattern confidence scan → smooth fixed-length fallback) and
+ *   auto-applies the result — the pipeline is fully automatic, so the old
+ *   interactive confirm banner no longer triggers. `applyRegex` /
+ *   `rejectAndFallback` remain for the legacy banner surfaces.
+ *
+ * The resulting virtual sections share the exact offsets of the agent
+ * pipeline's BookNodes (same layered segmenter), so the reader, the DOM
+ * selection and the agent tools live in one coordinate space.
  *
  * The repository is injectable so tests can target an isolated
  * ReadestPlusDatabase instead of the app singleton.
  */
 import { create } from 'zustand';
 import { BookSegmentationRepository } from '@/services/db/repositories';
-import { buildVirtualSections, detectChapters, MIN_DETECTED_CHAPTERS } from '@/services/segmentation/detector';
+import { buildVirtualSections, detectChapters } from '@/services/segmentation/detector';
 import { buildFixedLengthSections, DEFAULT_CHUNK_LENGTH } from '@/services/segmentation/chunker';
-import { CHAPTER_HEADING_PATTERN, type BookSegmentation } from '@/types/ai';
+import { segmentMonolithic } from '@/services/segmentation/layeredSegmenter';
+import { NODE_HEADING_PATTERN, type BookSegmentation } from '@/types/ai';
 
 export type ApplyDecision = 'pending' | 'applied' | 'rejected' | null;
 
@@ -73,23 +80,20 @@ export const useSegmentationStore = create<SegmentationState>()((set) => ({
       return;
     }
 
-    const detected = detectChapters(fullText);
-    if (detected.length >= MIN_DETECTED_CHAPTERS) {
-      set({
-        segmentation: null,
-        banner: { visible: true, detectedCount: detected.length },
-        applyDecision: 'pending',
-        scanContext: { bookHash, fullText },
-      });
-      return;
-    }
-
-    // No usable headings: skip the prompt and apply the fallback directly.
+    // Reading-agent pipeline: auto-apply the three-level layered
+    // segmentation (TOC-page filter + confidence + smooth fallback).
+    const result = segmentMonolithic(bookHash, fullText);
     const segmentation: BookSegmentation = {
       bookHash,
-      strategy: 'fixed-length',
-      chunkLength: DEFAULT_CHUNK_LENGTH,
-      virtualSections: buildFixedLengthSections(fullText),
+      strategy: result.strategy,
+      ...(result.strategy === 'regex'
+        ? { regexPattern: NODE_HEADING_PATTERN.source }
+        : { chunkLength: DEFAULT_CHUNK_LENGTH }),
+      virtualSections: result.nodes.map((node) => ({
+        virtualIndex: node.nodeIndex,
+        title: node.title,
+        charOffset: node.startOffset,
+      })),
     };
     await getRepository().save(segmentation);
     set({ segmentation, banner: HIDDEN_BANNER, applyDecision: 'applied', scanContext: null });
@@ -99,7 +103,7 @@ export const useSegmentationStore = create<SegmentationState>()((set) => ({
     const segmentation: BookSegmentation = {
       bookHash,
       strategy: 'regex',
-      regexPattern: CHAPTER_HEADING_PATTERN.source,
+      regexPattern: NODE_HEADING_PATTERN.source,
       virtualSections: buildVirtualSections(detectChapters(fullText)),
     };
     await getRepository().save(segmentation);

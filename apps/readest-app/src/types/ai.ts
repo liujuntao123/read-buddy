@@ -14,7 +14,7 @@ export interface AISettings {
   baseUrl: string;
   apiKey: string;
   model: string;
-  temperature: number;
+  temperature?: number;
   maxTurnsPerTopic: number; // default: 10
 }
 
@@ -23,7 +23,6 @@ export const DEFAULT_AI_SETTINGS: AISettings = {
   baseUrl: 'https://api.openai.com/v1',
   apiKey: '',
   model: 'gpt-4o-mini',
-  temperature: 0.6,
   maxTurnsPerTopic: 10,
 };
 
@@ -38,7 +37,7 @@ export const SEGMENT_CHUNK_MIN_CHARS = 6_000;
 export const SEGMENT_CHUNK_MAX_CHARS = 8_000;
 
 /** Canonical chapter-heading heuristic (design doc 4.2). */
-export const CHAPTER_HEADING_PATTERN =
+export const NODE_HEADING_PATTERN =
   /(第[0-9一二三四五六七八九十百千]+[章回节卷]|Chapter\s+\d+|SECTION\s+\d+)/i;
 
 export interface VirtualSection {
@@ -56,12 +55,12 @@ export interface BookSegmentation {
   virtualSections: VirtualSection[];
 }
 
-export interface ChapterSummary {
-  /** Primary key: `${bookHash}:${sectionIndex}` (see CONTEXT.md glossary). */
+export interface NodeSummary {
+  /** Primary key: `${bookHash}:${nodeIndex}` (see CONTEXT.md glossary). */
   id: string;
   bookHash: string;
-  sectionIndex: number;
-  chapterTitle: string;
+  nodeIndex: number;
+  nodeTitle: string;
   modelUsed: string;
   summaryContent: string;
   pipeline: 'single' | 'map-reduce';
@@ -69,15 +68,15 @@ export interface ChapterSummary {
   updatedAt: number;
 }
 
-export const chapterSummaryId = (bookHash: string, sectionIndex: number): string =>
-  `${bookHash}:${sectionIndex}`;
+export const nodeSummaryId = (bookHash: string, nodeIndex: number): string =>
+  `${bookHash}:${nodeIndex}`;
 
 export type ChatRole = 'user' | 'assistant' | 'system';
 
 export interface Conversation {
   id: string;
   bookHash: string;
-  sectionIndex?: number;
+  nodeIndex?: number;
   title: string;
   turnCount: number;
   isClosed: boolean;
@@ -91,5 +90,11 @@ export interface Message {
   role: ChatRole;
   content: string;
   quoteText?: string;
+  /** Resolved chapter attribution of the quote (selection tracking). */
+  quoteSource?: string;
   createdAt: number;
+  /** Tool-call trail behind an assistant reply (reading-agent workspace). */
+  toolCalls?: import('./readingAgent').ToolCallTrace[];
+  /** Whole-book evidence citations pinned to this reply. */
+  citations?: import('./readingAgent').AgentCitation[];
 }

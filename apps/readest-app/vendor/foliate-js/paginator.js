@@ -283,7 +283,7 @@ class View {
         })
     }
     render(layout) {
-        if (!layout) return
+        if (!layout || !this.document?.documentElement) return
         this.#column = layout.flow !== 'scrolled'
         this.#layout = layout
         if (this.#column) this.columnize(layout)
@@ -292,16 +292,30 @@ class View {
     scrolled({ gap, columnWidth }) {
         const vertical = this.#vertical
         const doc = this.document
+        if (!doc?.documentElement) return
         setStylesImportant(doc.documentElement, {
             'box-sizing': 'border-box',
             'padding': vertical ? `${gap}px 0` : `0 ${gap}px`,
             'column-width': 'auto',
+            'column-gap': 'normal',
+            'column-fill': 'auto',
             'height': 'auto',
             'width': 'auto',
+            'overflow': 'visible',
+            'position': 'static',
+            'border': '0',
+            'margin': '0',
+            'max-height': 'none',
+            'max-width': 'none',
         })
         setStylesImportant(doc.body, {
             [vertical ? 'max-height' : 'max-width']: `${columnWidth}px`,
-            'margin': 'auto',
+            'margin-left': 'auto',
+            'margin-right': 'auto',
+            'margin-top': '0',
+            'margin-bottom': '0',
+            'width': '100%',
+            'box-sizing': 'border-box',
         })
         this.setImageSize()
         this.expand()
@@ -311,6 +325,7 @@ class View {
         this.#size = vertical ? height : width
 
         const doc = this.document
+        if (!doc?.documentElement) return
         setStylesImportant(doc.documentElement, {
             'box-sizing': 'border-box',
             'column-width': `${Math.trunc(columnWidth)}px`,
@@ -342,6 +357,7 @@ class View {
         const { width, height, margin } = this.#layout
         const vertical = this.#vertical
         const doc = this.document
+        if (!doc?.body) return
         for (const el of doc.body.querySelectorAll('img, svg, video')) {
             // preserve max size if they are already set
             const { maxHeight, maxWidth } = doc.defaultView.getComputedStyle(el)
@@ -426,7 +442,7 @@ export class Paginator extends HTMLElement {
         'flow', 'gap', 'margin',
         'max-inline-size', 'max-block-size', 'max-column-count',
     ]
-    #root = this.attachShadow({ mode: 'closed' })
+    #root = this.attachShadow({ mode: 'open' })
     #observer = new ResizeObserver(() => this.render())
     #top
     #background
@@ -482,9 +498,9 @@ export class Paginator extends HTMLElement {
                 var(--_half-gap)
                 minmax(var(--_half-gap), 1fr);
             grid-template-rows:
-                minmax(var(--_margin), 1fr)
-                minmax(0, var(--_max-height))
-                minmax(var(--_margin), 1fr);
+                var(--_margin)
+                minmax(0, 1fr)
+                var(--_margin);
             &.vertical {
                 --_max-column-count-spread: var(--_max-column-count-portrait);
                 --_max-width: var(--_max-block-size);
@@ -630,17 +646,31 @@ export class Paginator extends HTMLElement {
             case 'flow':
                 this.render()
                 break
-            case 'gap':
-            case 'margin':
-            case 'max-block-size':
-            case 'max-column-count':
-                this.#top.style.setProperty('--_' + name, value)
+            case 'gap': {
+                const val = typeof value === 'string' && value.endsWith('%') ? value : `${parseFloat(value) || 7}%`
+                this.#top.style.setProperty('--_gap', val)
                 break
-            case 'max-inline-size':
-                // needs explicit `render()` as it doesn't necessarily resize
-                this.#top.style.setProperty('--_' + name, value)
+            }
+            case 'margin': {
+                const val = typeof value === 'string' && (value.endsWith('px') || value.endsWith('%')) ? value : `${parseFloat(value) || 48}px`
+                this.#top.style.setProperty('--_margin', val)
+                break
+            }
+            case 'max-block-size': {
+                const val = typeof value === 'string' && (value.endsWith('px') || value.endsWith('%')) ? value : `${parseFloat(value) || 1440}px`
+                this.#top.style.setProperty('--_max-block-size', val)
+                break
+            }
+            case 'max-column-count':
+                this.#top.style.setProperty('--_max-column-count', value)
                 this.render()
                 break
+            case 'max-inline-size': {
+                const val = typeof value === 'string' && (value.endsWith('px') || value.endsWith('%')) ? value : `${parseFloat(value) || 720}px`
+                this.#top.style.setProperty('--_max-inline-size', val)
+                this.render()
+                break
+            }
         }
     }
     open(book) {
@@ -650,7 +680,10 @@ export class Paginator extends HTMLElement {
             if (detail.type !== 'text/css') return
             const w = innerWidth
             const h = innerHeight
-            detail.data = Promise.resolve(detail.data).then(data => data
+            // data may legitimately be a non-string (the loader's circular-
+            // reference guard passes raw blobs through); only transform strings.
+            detail.data = Promise.resolve(detail.data).then(data => typeof data === 'string'
+                ? data
                 // unprefix as most of the props are (only) supported unprefixed
                 .replace(/(?<=[{\s;])-epub-/gi, '')
                 // replace vw and vh as they cause problems with layout
@@ -660,7 +693,8 @@ export class Paginator extends HTMLElement {
                 .replace(/page-break-(after|before|inside)\s*:/gi, (_, x) =>
                     `-webkit-column-break-${x}:`)
                 .replace(/break-(after|before|inside)\s*:\s*(avoid-)?page/gi, (_, x, y) =>
-                    `break-${x}: ${y ?? ''}column`))
+                    `break-${x}: ${y ?? ''}column`)
+                : data)
         })
     }
     #createView() {
@@ -752,7 +786,7 @@ export class Paginator extends HTMLElement {
         return { height, width, margin, gap, columnWidth }
     }
     render() {
-        if (!this.#view) return
+        if (!this.isConnected || !this.#view || !this.#view.document?.documentElement) return
         this.#view.render(this.#beforeRender({
             vertical: this.#vertical,
             rtl: this.#rtl,
@@ -1118,9 +1152,16 @@ export class Paginator extends HTMLElement {
     focusView() {
         this.#view.document.defaultView.focus()
     }
+    connectedCallback() {
+        this.#observer.observe(this.#container)
+    }
+    disconnectedCallback() {
+        this.#observer.disconnect()
+    }
     destroy() {
-        this.#observer.unobserve(this)
-        this.#view.destroy()
+        this.#observer.unobserve(this.#container)
+        this.#observer.disconnect()
+        this.#view?.destroy?.()
         this.#view = null
         this.sections[this.#index]?.unload?.()
         this.#mediaQuery.removeEventListener('change', this.#mediaQueryListener)

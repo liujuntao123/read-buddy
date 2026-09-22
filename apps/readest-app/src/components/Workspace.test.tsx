@@ -10,6 +10,8 @@ const sidebarState = () => useAISidebarStore.getState();
 
 beforeEach(() => {
   useAISidebarStore.setState({ expanded: false, width: 400, activeTab: 'summary' });
+  // The library store pushes ?book=<hash> on open; keep tests isolated.
+  window.history.replaceState({}, '', '/');
 });
 
 const expand = () => fireEvent.click(screen.getByRole('button', { name: '切换 AI 侧边栏' }));
@@ -17,7 +19,7 @@ const expand = () => fireEvent.click(screen.getByRole('button', { name: '切换 
 describe('Workspace split-screen shell', () => {
   it('renders the header and the empty bookshelf before any book is opened', () => {
     render(<Workspace />);
-    expect(screen.getByText('未加载书籍')).toBeTruthy();
+    expect(screen.getAllByText('我的书架').length).toBeGreaterThan(0);
     expect(screen.getByTestId('bookshelf')).toBeTruthy();
     // Ticket 06: startup no longer auto-loads the demo book; the reader pane
     // only appears once a library book is opened.
@@ -59,7 +61,7 @@ describe('Workspace split-screen shell', () => {
     render(<Workspace />);
     expand();
     expect(screen.getByTestId('summary-tab-panel')).toBeTruthy();
-    fireEvent.click(screen.getByRole('tab', { name: '对话' }));
+    fireEvent.click(screen.getByRole('tab', { name: '伴读' }));
     expect(screen.getByTestId('chat-tab-panel')).toBeTruthy();
     expect(screen.queryByTestId('summary-tab-panel')).toBeNull();
     expect(sidebarState().activeTab).toBe('chat');
@@ -136,11 +138,23 @@ describe('Workspace split-screen shell', () => {
     await waitFor(() => expect(screen.getByTestId('reader-pane')).toBeTruthy());
     const hash = useReaderStore.getState().bookHash;
 
-    fireEvent.click(screen.getByRole('button', { name: '打开书架' }));
+    // Expand sidebar while reading
+    act(() => {
+      useAISidebarStore.setState({ expanded: true });
+    });
+    expect(useAISidebarStore.getState().expanded).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: '返回书架' }));
 
     expect(screen.getByTestId('bookshelf')).toBeTruthy();
     expect(screen.queryByTestId('reader-pane')).toBeNull();
-    expect(useReaderStore.getState().bookHash).toBe(hash); // AI sidebar keeps its context
+    // Breadcrumbs switched to shelf!
+    expect(screen.getAllByText('我的书架').length).toBeGreaterThan(0);
+    // Auxiliary sidebar collapsed on returning to shelf!
+    expect(useAISidebarStore.getState().expanded).toBe(false);
+    expect(useReaderStore.getState().bookHash).toBe(hash);
+    // "继续阅读" button is available
+    expect(screen.getByRole('button', { name: '继续阅读' })).toBeTruthy();
   });
 
   it('renders engine books through the Foliate pane instead of the scroll reader', async () => {
@@ -161,12 +175,14 @@ describe('Workspace split-screen shell', () => {
       goToFraction: async () => {},
       onRelocate: () => () => {},
       onLoad: () => () => {},
-      getSectionText: async () => '',
-      getCachedSectionHtml: () => '',
-      getCachedSectionText: () => '',
-      getSectionTitle: () => '第一章',
-      sectionCount: 1,
+      getSpineText: async () => '',
+      getCachedSpineHtml: () => '',
+      getCachedSpineText: () => '',
+      getSpineTitle: () => '第一章',
+      spineCount: 1,
       tocItems: () => [],
+      tocEntries: () => [],
+      getSpineAnchors: () => [],
       currentLocation: () => null,
       close: () => {},
     } as unknown as FoliateEngineHandle;

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { BookSegmentationRepository } from '@/services/db/repositories';
 import { ReadestPlusDatabase } from '@/services/db/database';
 import { DEMO_MONOLITHIC_TXT, DEMO_UNSTRUCTURED_TXT } from '@/services/reader/demoBook';
-import { CHAPTER_HEADING_PATTERN } from '@/types/ai';
+import { NODE_HEADING_PATTERN } from '@/types/ai';
 import { setSegmentationRepository, useSegmentationStore } from './segmentationStore';
 
 let db: ReadestPlusDatabase;
@@ -28,15 +28,28 @@ beforeEach(() => {
 });
 
 describe('scanAndPrompt', () => {
-  it('shows the banner (pending) when regex detection succeeds, without persisting yet', async () => {
+  it('auto-applies the layered regex segmentation (reading-agent pipeline)', async () => {
     await useSegmentationStore.getState().scanAndPrompt('book-mono', DEMO_MONOLITHIC_TXT);
 
     const state = useSegmentationStore.getState();
-    expect(state.banner).toEqual({ visible: true, detectedCount: 5 });
-    expect(state.applyDecision).toBe('pending');
-    expect(state.segmentation).toBeNull();
-    expect(state.scanContext).toEqual({ bookHash: 'book-mono', fullText: DEMO_MONOLITHIC_TXT });
-    await expect(repo.load('book-mono')).resolves.toBeUndefined();
+    expect(state.banner.visible).toBe(false);
+    expect(state.applyDecision).toBe('applied');
+    expect(state.scanContext).toBeNull();
+    expect(state.segmentation?.strategy).toBe('regex');
+    expect(state.segmentation?.virtualSections.map((s) => s.title)).toEqual([
+      '第一章 风起之地1',
+      '第二章 风起之地2',
+      '第三章 风起之地3',
+      '第四章 风起之地4',
+      '第五章 风起之地5',
+    ]);
+
+    const saved = await repo.load('book-mono');
+    expect(saved?.strategy).toBe('regex');
+    expect(saved?.virtualSections[0]!.charOffset).toBe(0);
+    // Offsets tile the text in ascending order.
+    const offsets = saved?.virtualSections.map((s) => s.charOffset) ?? [];
+    expect([...offsets].sort((a, b) => a - b)).toEqual(offsets);
   });
 
   it('skips the prompt and persists fixed-length sections when no headings exist', async () => {
@@ -86,7 +99,7 @@ describe('applyRegex', () => {
 
     const saved = await repo.load('book-apply');
     expect(saved?.strategy).toBe('regex');
-    expect(saved?.regexPattern).toBe(CHAPTER_HEADING_PATTERN.source);
+    expect(saved?.regexPattern).toBe(NODE_HEADING_PATTERN.source);
     expect(saved?.virtualSections.map((s) => s.title)).toEqual([
       '第一章 风起之地1',
       '第二章 风起之地2',

@@ -15,9 +15,10 @@ const resetStores = () => {
   useReaderStore.setState({
     bookHash: '',
     bookTitle: '',
-    sectionIndex: 0,
-    chapterTitle: '',
-    sectionCount: 0,
+    spineIndex: 0,
+    anchor: undefined,
+    nodeTitle: '',
+    spineCount: 0,
   });
   useSegmentationStore.setState({
     segmentation: null,
@@ -38,6 +39,8 @@ beforeEach(() => {
   store = createLibraryStore({ db });
   resetStores();
   window.localStorage.clear();
+  // ?book= state must not leak between tests (the store pushes it on open).
+  window.history.replaceState({}, '', '/');
 });
 
 afterEach(async () => {
@@ -70,13 +73,16 @@ describe('createLibraryStore', () => {
     expect(state.importing).toBe(false);
   });
 
-  it('prompts segmentation for a txt with detectable chapter headings', async () => {
+  it('auto-applies the layered segmentation for a txt with detectable chapter headings', async () => {
     await store.getState().importFiles([txtFile()]);
 
     const segmentation = useSegmentationStore.getState();
-    expect(segmentation.banner.visible).toBe(true);
-    expect(segmentation.banner.detectedCount).toBe(5);
-    expect(useReaderStore.getState().sectionCount).toBe(1); // before the user decides
+    // Reading-agent pipeline: no interactive banner, chapters ready at once.
+    expect(segmentation.banner.visible).toBe(false);
+    expect(segmentation.applyDecision).toBe('applied');
+    expect(segmentation.segmentation?.strategy).toBe('regex');
+    expect(segmentation.segmentation?.virtualSections.length).toBe(5);
+    expect(useReaderStore.getState().spineCount).toBe(5);
   });
 
   it('reuses a persisted segmentation as virtual chapters without re-prompting', async () => {
@@ -91,7 +97,7 @@ describe('createLibraryStore', () => {
 
     expect(useSegmentationStore.getState().banner.visible).toBe(false);
     expect(useSegmentationStore.getState().segmentation?.strategy).toBe('regex');
-    expect(useReaderStore.getState().sectionCount).toBe(5);
+    expect(useReaderStore.getState().spineCount).toBe(5);
     expect(store.getState().view).toBe('reader');
   });
 
@@ -109,43 +115,44 @@ describe('createLibraryStore', () => {
     expect(await db.books.get(hash)).toBeUndefined();
   });
 
-  it('saves the current section as reading progress', async () => {
+  it('saves the current node as reading progress', async () => {
     await store.getState().importFiles([txtFile()]);
     const hash = store.getState().books[0]!.hash;
     await useSegmentationStore.getState().applyRegex(hash, DEMO_MONOLITHIC_TXT);
     await store.getState().open(hash);
 
-    useReaderStore.getState().setSection(3, '第四章 风起之地4');
+    useReaderStore.getState().setPosition(3, '第四章 风起之地4');
     await store.getState().saveProgress();
 
-    expect((await db.books.get(hash))?.lastSectionIndex).toBe(3);
+    expect((await db.books.get(hash))?.lastNodeIndex).toBe(3);
     expect(JSON.parse(window.localStorage.getItem('readest-plus:last-book')!)).toEqual({
       hash,
-      sectionIndex: 3,
+      nodeIndex: 3,
     });
   });
 
-  it('init restores the last opened book at its saved section', async () => {
+  it('init restores the last opened book at its saved node', async () => {
     await store.getState().importFiles([txtFile()]);
     const hash = store.getState().books[0]!.hash;
     await useSegmentationStore.getState().applyRegex(hash, DEMO_MONOLITHIC_TXT);
-    await db.books.update(hash, { lastSectionIndex: 3 });
+    await db.books.update(hash, { lastNodeIndex: 3 });
     resetStores(); // simulate an app restart
     store = createLibraryStore({ db });
 
-    window.localStorage.setItem('readest-plus:last-book', JSON.stringify({ hash, sectionIndex: 3 }));
+    window.localStorage.setItem('readest-plus:last-book', JSON.stringify({ hash, nodeIndex: 3 }));
     await store.getState().init();
 
     expect(store.getState().view).toBe('reader');
     expect(store.getState().currentHash).toBe(hash);
-    expect(useReaderStore.getState().sectionCount).toBe(5);
-    expect(useReaderStore.getState().sectionIndex).toBe(3);
-    expect(useReaderStore.getState().chapterTitle).toBe('第四章 风起之地4');
+    expect(useReaderStore.getState().spineCount).toBe(5);
+    expect(useReaderStore.getState().spineIndex).toBe(3);
+    expect(useReaderStore.getState().nodeTitle).toBe('第四章 风起之地4');
   });
 
   it('init falls back to the shelf when no book was opened before', async () => {
     await store.getState().importFiles([txtFile()]);
     window.localStorage.clear();
+    window.history.replaceState({}, '', '/'); // refresh with a bookless URL
     resetStores();
     store = createLibraryStore({ db });
 
@@ -156,6 +163,63 @@ describe('createLibraryStore', () => {
     expect(useReaderStore.getState().bookHash).toBe('');
   });
 
+  it('open mirrors the selected book into the ?book= URL param', async () => {
+    await store.getState().importFiles([txtFile()]);
+    const hash = store.getState().currentHash!;
+
+    expect(new URLSearchParams(window.location.search).get('book')).toBe(hash);
+
+    store.getState().closeToShelf();
+    expect(new URLSearchParams(window.location.search).get('book')).toBeNull();
+
+    await store.getState().open(hash);
+    expect(new URLSearchParams(window.location.search).get('book')).toBe(hash);
+  });
+
+  it('init restores the book encoded in the URL (refresh keeps the reader)', async () => {
+    await store.getState().importFiles([txtFile()]);
+    const hash = store.getState().books[0]!.hash;
+    await useSegmentationStore.getState().applyRegex(hash, DEMO_MONOLITHIC_TXT);
+    await db.books.update(hash, { lastNodeIndex: 2 });
+
+    // Simulate a refresh on the reader: URL still carries ?book=<hash>, and
+    // the URL wins over any stale localStorage pointer.
+    window.localStorage.setItem('readest-plus:last-book', JSON.stringify({ hash: 'other', nodeIndex: 0 }));
+    resetStores();
+    store = createLibraryStore({ db });
+    await store.getState().init();
+
+    expect(store.getState().view).toBe('reader');
+    expect(store.getState().currentHash).toBe(hash);
+    expect(useReaderStore.getState().spineIndex).toBe(2); // persisted node
+  });
+
+  it('closeToShelf drops the last-book pointer so a refresh stays on the shelf', async () => {
+    await store.getState().importFiles([txtFile()]);
+    expect(window.localStorage.getItem('readest-plus:last-book')).toBeTruthy();
+
+    store.getState().closeToShelf();
+    expect(window.localStorage.getItem('readest-plus:last-book')).toBeNull();
+
+    resetStores();
+    store = createLibraryStore({ db });
+    await store.getState().init();
+    expect(store.getState().view).toBe('shelf');
+  });
+
+  it('resumeReading re-enters the kept-open book and restores the ?book= URL', async () => {
+    await store.getState().importFiles([txtFile()]);
+    const hash = store.getState().currentHash!;
+    store.getState().closeToShelf();
+    expect(new URLSearchParams(window.location.search).get('book')).toBeNull();
+
+    store.getState().resumeReading();
+
+    expect(store.getState().view).toBe('reader');
+    expect(store.getState().currentHash).toBe(hash);
+    expect(new URLSearchParams(window.location.search).get('book')).toBe(hash);
+  });
+
   it('open reports a missing book instead of throwing', async () => {
     await store.getState().open('no-such-hash');
     expect(store.getState().error).toBe('书籍不存在或已被删除');
@@ -164,7 +228,7 @@ describe('createLibraryStore', () => {
 
   // ── Ticket 07: Foliate engine books ─────────────────────────────────────
 
-  const makeEngine = (opts: { sectionCount?: number; cfi?: string } = {}) => {
+  const makeEngine = (opts: { spineCount?: number; cfi?: string; cover?: string } = {}) => {
     let current = opts.cfi ?? null;
     return {
       openIn: vi.fn(async () => {}),
@@ -176,13 +240,14 @@ describe('createLibraryStore', () => {
       goToFraction: vi.fn(async () => {}),
       onRelocate: vi.fn(() => () => {}),
       onLoad: vi.fn(() => () => {}),
-      getSectionText: vi.fn(async () => ''),
-      getCachedSectionHtml: vi.fn(() => ''),
-      getCachedSectionText: vi.fn(() => ''),
-      getSectionTitle: vi.fn((index: number) => `第 ${index + 1} 章`),
-      sectionCount: opts.sectionCount ?? 3,
+      getSpineText: vi.fn(async () => ''),
+      getCachedSpineHtml: vi.fn(() => ''),
+      getCachedSpineText: vi.fn(() => ''),
+      getSpineTitle: vi.fn((index: number) => `第 ${index + 1} 章`),
+      spineCount: opts.spineCount ?? 3,
       tocItems: vi.fn(() => []),
       currentLocation: vi.fn(() => (current ? { index: 1, fraction: 0.5, cfi: current } : null)),
+      getCover: opts.cover ? vi.fn(async () => opts.cover) : undefined,
       close: vi.fn(() => {
         current = null;
       }),
@@ -197,6 +262,8 @@ describe('createLibraryStore', () => {
     createLibraryStore({
       db,
       createEngine: () => engine as unknown as FoliateEngineHandle,
+      // Keep unit tests hermetic: never import the vendored foliate view.
+      extractCover: async () => undefined,
     });
 
   const mobiFile = (): File => new File([new Uint8Array([1, 2, 3, 4])], '冰与火之诗.mobi');
@@ -216,9 +283,9 @@ describe('createLibraryStore', () => {
     expect(state.engines[hash]).toBe(engine);
 
     expect(useReaderStore.getState().bookHash).toBe(hash);
-    expect(useReaderStore.getState().sectionCount).toBe(3); // engine spine
-    expect(useReaderStore.getState().chapterTitle).toBe('第 1 章');
-    expect(getOpenedBook(hash)?.sectionCount).toBe(3);
+    expect(useReaderStore.getState().spineCount).toBe(3); // engine spine
+    expect(useReaderStore.getState().nodeTitle).toBe('第 1 章');
+    expect(getOpenedBook(hash)?.spineCount).toBe(3);
     expect(state.resumeCfi).toBeNull(); // never read before
     expect(state.consumeResumeCfi()).toBeNull();
   });
@@ -231,25 +298,41 @@ describe('createLibraryStore', () => {
     const hash = store.getState().currentHash!;
 
     engine.__setCfi('epubcfi(/6/8!/2/2)');
-    useReaderStore.getState().setSection(1, '第 2 章');
+    useReaderStore.getState().setPosition(1, '第 2 章');
     await store.getState().saveProgress();
 
-    expect((await db.books.get(hash))?.lastSectionIndex).toBe(1);
+    expect((await db.books.get(hash))?.lastNodeIndex).toBe(1);
     expect((await db.books.get(hash))?.lastCfi).toBe('epubcfi(/6/8!/2/2)');
 
     // Re-open (fresh store, same fake engine) resumes from the stored CFI.
     resetStores();
     store = engineStore(engine);
     await store.getState().open(hash);
-    expect(useReaderStore.getState().sectionIndex).toBe(1);
-    expect(useReaderStore.getState().chapterTitle).toBe('第 2 章');
+    expect(useReaderStore.getState().spineIndex).toBe(1);
+    expect(useReaderStore.getState().nodeTitle).toBe('第 2 章');
     expect(store.getState().resumeCfi).toBe('epubcfi(/6/8!/2/2)');
     expect(store.getState().consumeResumeCfi()).toBe('epubcfi(/6/8!/2/2)');
     expect(store.getState().consumeResumeCfi()).toBeNull(); // one-shot
   });
 
-  it('closes the previous engine when opening or deleting another book', async () => {
-    const engineA = makeEngine();
+  it('syncs a lazily extracted cover into the shelf list without a restart', async () => {
+    const cover = 'data:image/jpeg;base64,QUJD';
+    const engine = makeEngine({ cover });
+    store = engineStore(engine);
+    resetStores();
+    await store.getState().importFiles([mobiFile()]);
+    const hash = store.getState().currentHash!;
+    expect(store.getState().books[0]!.cover).toBeUndefined(); // not at import
+
+    // openBook's lazy engine.getCover() path resolves after open; wait for
+    // the store to fold the extracted cover into the shelf list.
+    await vi.waitFor(() => {
+      expect(store.getState().books.find((b) => b.hash === hash)?.cover).toBe(cover);
+    });
+    expect((await db.books.get(hash))?.cover).toBe(cover); // persisted too
+  });
+
+  it('closes the previous engine when opening or deleting another book', async () => {    const engineA = makeEngine();
     store = engineStore(engineA);
     resetStores();
     await store.getState().importFiles([mobiFile()]);

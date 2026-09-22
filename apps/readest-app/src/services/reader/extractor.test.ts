@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { DEMO_BOOK } from './demoBook';
-import { extractChapterText, extractPlainTextForPrompt } from './extractor';
+import { extractNodeText, extractPlainTextForPrompt } from './extractor';
 
-describe('extractChapterText', () => {
+describe('extractNodeText', () => {
   it('strips style/img nodes and keeps paragraphs newline-separated', () => {
-    const { title, text } = extractChapterText(DEMO_BOOK.sections[0]!.html);
+    const { title, text } = extractNodeText(DEMO_BOOK.sections[0]!.html);
 
     expect(title).toBe('第一章 迷雾之城');
     expect(text).not.toContain('color: red');
@@ -21,7 +21,7 @@ describe('extractChapterText', () => {
   });
 
   it('normalizes the long demo chapter and reports a matching charCount', () => {
-    const { title, text, charCount } = extractChapterText(DEMO_BOOK.sections[2]!.html);
+    const { title, text, charCount } = extractNodeText(DEMO_BOOK.sections[2]!.html);
 
     expect(title).toBe('第三章 长夜漫漫');
     expect(text).toContain('长夜第1节');
@@ -31,7 +31,7 @@ describe('extractChapterText', () => {
   });
 
   it('returns an empty title when no h1~h6 exists', () => {
-    const { title } = extractChapterText('<p>只有正文段落。</p>');
+    const { title } = extractNodeText('<p>只有正文段落。</p>');
     expect(title).toBe('');
   });
 
@@ -44,13 +44,13 @@ describe('extractChapterText', () => {
       '<svg><text>矢量图形文字</text></svg>',
       '<p>正文。</p>',
     ].join('');
-    const { text } = extractChapterText(html);
+    const { text } = extractNodeText(html);
     expect(text.split('\n')).toEqual(['标题', '正文。']);
   });
 
   it('joins list items and blockquotes as separate lines', () => {
     const html = '<h3>列表章</h3><ul><li>其一</li><li>其二</li></ul><blockquote>引文一句</blockquote>';
-    expect(extractChapterText(html).text.split('\n')).toEqual([
+    expect(extractNodeText(html).text.split('\n')).toEqual([
       '列表章',
       '其一',
       '其二',

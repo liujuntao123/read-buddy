@@ -77,7 +77,7 @@ describe('SelectionToolbar', () => {
     const toolbar = screen.getByTestId('selection-toolbar') as HTMLElement;
     expect(toolbar.style.top).toBe(`${300 - TOOLBAR_HEIGHT - TOOLBAR_GAP}px`);
     expect(toolbar.style.left).toBe(`${200 + 80 / 2}px`);
-    expect(toolbar.className).toContain('-translate-x-1/2');
+    expect(toolbar.style.transform).toBe('translateX(-50%)');
   });
 
   it('flips below the selection when it is too close to the viewport top', () => {

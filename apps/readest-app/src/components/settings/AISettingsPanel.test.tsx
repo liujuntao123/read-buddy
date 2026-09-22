@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import AISettingsPanel from './AISettingsPanel';
 import { useAISettingsStore } from '@/store/aiSettingsStore';
@@ -26,6 +26,12 @@ beforeEach(() => {
   testConnectionMock.mockReset();
 });
 
+/** Pick an option from the provider Selector popover. */
+const chooseProvider = async (label: string | RegExp) => {
+  fireEvent.click(within(screen.getByTestId('provider-select')).getByRole('combobox'));
+  fireEvent.click(await screen.findByRole('option', { name: label }));
+};
+
 describe('AISettingsPanel', () => {
   it('renders nothing when closed', () => {
     const { container } = render(<AISettingsPanel open={false} onClose={vi.fn()} />);
@@ -41,27 +47,30 @@ describe('AISettingsPanel', () => {
     expect(input('api-key-input').type).toBe('password');
   });
 
-  it('prefills the base URL preset when the provider changes', () => {
+  it('prefills the base URL preset when the provider changes', async () => {
     render(<AISettingsPanel open onClose={vi.fn()} />);
-    const provider = screen.getByTestId('provider-select') as HTMLSelectElement;
-    fireEvent.change(provider, { target: { value: 'ollama' } });
+    await chooseProvider('Ollama（本地运行）');
     expect(input('base-url-input').value).toBe('http://localhost:11434/v1');
-    fireEvent.change(provider, { target: { value: 'deepseek' } });
+    await chooseProvider('DeepSeek 官方 API');
     expect(input('base-url-input').value).toBe('https://api.deepseek.com/v1');
-    fireEvent.change(provider, { target: { value: 'claude' } });
+    await chooseProvider('Claude（OpenAI 兼容代理）');
     expect(input('base-url-input').value).toBe('https://api.openai.com/v1');
-    fireEvent.change(provider, { target: { value: 'openai-compatible' } });
+    await chooseProvider('OpenAI 兼容接口 (通用)');
     expect(input('base-url-input').value).toBe('https://api.openai.com/v1');
   });
 
-  it('persists valid settings to IndexedDB on save (read back via an independent db instance)', async () => {
-    render(<AISettingsPanel open onClose={vi.fn()} />);
+  it('persists valid settings to IndexedDB on save and displays success toast feedback', async () => {
+    const onClose = vi.fn();
+    render(<AISettingsPanel open onClose={onClose} />);
     fireEvent.change(input('base-url-input'), { target: { value: 'https://api.example.com/v1' } });
     fireEvent.change(input('model-input'), { target: { value: 'my-model' } });
     fireEvent.change(input('api-key-input'), { target: { value: 'sk-panel' } });
-    fireEvent.change(input('temperature-input'), { target: { value: '0.2' } });
     fireEvent.change(input('max-turns-input'), { target: { value: '15' } });
+    fireEvent.blur(input('max-turns-input')); // NumberInput commits on blur
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    expect(await screen.findByText('设置已成功保存')).toBeTruthy();
+    expect(screen.getByTestId('ai-settings-toast').getAttribute('data-tone')).toBe('success');
 
     const repository = new AISettingsRepository(new ReadestPlusDatabase());
     await waitFor(async () => {
@@ -69,7 +78,6 @@ describe('AISettingsPanel', () => {
         baseUrl: 'https://api.example.com/v1',
         model: 'my-model',
         apiKey: 'sk-panel',
-        temperature: 0.2,
         maxTurnsPerTopic: 15,
       });
     });
@@ -92,7 +100,7 @@ describe('AISettingsPanel', () => {
     render(<AISettingsPanel open onClose={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: /测试连接/ }));
     expect(await screen.findByText('连接成功：模型服务可用')).toBeTruthy();
-    expect(screen.getByTestId('ai-settings-toast').className).toContain('alert-success');
+    expect(screen.getByTestId('ai-settings-toast').getAttribute('data-tone')).toBe('success');
   });
 
   it('shows a red toast for a failed connection test and supports manual dismissal', async () => {
@@ -100,9 +108,9 @@ describe('AISettingsPanel', () => {
     render(<AISettingsPanel open onClose={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: /测试连接/ }));
     expect(await screen.findByText('API Key 无效或未授权')).toBeTruthy();
-    expect(screen.getByTestId('ai-settings-toast').className).toContain('alert-error');
+    expect(screen.getByTestId('ai-settings-toast').getAttribute('data-tone')).toBe('error');
     fireEvent.click(screen.getByRole('button', { name: '关闭提示' }));
-    expect(screen.queryByTestId('ai-settings-toast')).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId('ai-settings-toast')).toBeNull());
   });
 
   it('auto-dismisses the toast after 3 seconds', async () => {

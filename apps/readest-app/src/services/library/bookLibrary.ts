@@ -6,13 +6,14 @@
  *   content hash (SHA-256 truncated to 16 hex chars) is the book identity
  *   reused by summaries / conversations / segmentation.
  * - `openBook` re-parses the stored bytes and registers the parsed content
- *   so the AI features (chapterSource) pick the real book up automatically.
+ *   so the AI features (nodeSource) pick the real book up automatically.
  */
 import type { BookFormat, LibraryBook } from '@/types/library';
 import { getDatabase, type ReadestPlusDatabase } from '@/services/db/database';
 import { clearOpenedBook, registerOpenedBook, type OpenedBookContent } from './contentRegistry';
 import { parseEpub } from './epubParser';
 import { parseTxt } from './txtParser';
+import { extractCover } from './coverExtract';
 import { createFoliateEngine, engineToContent, type FoliateEngineHandle } from './foliateEngine';
 
 /** Book row without the raw bytes — the shape list views / stores should hold. */
@@ -26,6 +27,8 @@ export interface LibraryDeps {
    * view module; production uses the real lazy foliate engine.
    */
   createEngine?: typeof createFoliateEngine;
+  /** Foliate cover extraction seam (tests inject a stub). */
+  extractCover?: (file: File) => Promise<string | undefined>;
 }
 
 export type ImportResult =
@@ -94,10 +97,21 @@ export async function importBookFile(file: File, deps: LibraryDeps = {}): Promis
 
   let title = stripExtension(file.name);
   let author: string | undefined;
+  let cover: string | undefined;
   if (format === 'epub') {
     const parsed = await parseEpub(data, hash);
     title = parsed.title;
     author = parsed.author;
+    cover = parsed.cover;
+  }
+
+  // Foliate cover extraction (original readest approach): covers every engine
+  // format — MOBI/FB2/CBZ get their first-shot cover here, and EPUBs whose
+  // cover is only reachable through `<guide>` (or other zip-heuristic gaps)
+  // are rescued. Failures never break the import.
+  if (!cover && isEngineFormat(format)) {
+    const fileForEngine = new File([data], file.name, { type: file.type || 'application/octet-stream' });
+    cover = await (deps.extractCover ?? extractCover)(fileForEngine);
   }
 
   const now = Date.now();
@@ -105,6 +119,7 @@ export async function importBookFile(file: File, deps: LibraryDeps = {}): Promis
     hash,
     title,
     author,
+    cover,
     format,
     size: data.byteLength,
     importedAt: now,
@@ -126,8 +141,15 @@ export async function importBookFile(file: File, deps: LibraryDeps = {}): Promis
  * engine — `prepare()` loads the book (no DOM rendering yet) so the spine /
  * TOC are readable, and the returned handle is what the reader pane renders.
  * TXT books keep the parseTxt path with the monolithic segmentation flow.
+ *
+ * Rows imported before cover extraction existed get their cover filled
+ * lazily here: when the engine yields one, `onCoverExtracted` fires (after
+ * the row was persisted) so callers can refresh their in-memory lists.
  */
-export async function openBook(book: LibraryBook, deps: LibraryDeps = {}): Promise<OpenedBook> {
+export async function openBook(
+  book: LibraryBook,
+  deps: LibraryDeps & { onCoverExtracted?: (cover: string) => void } = {},
+): Promise<OpenedBook> {
   if (isEngineFormat(book.format)) {
     const createEngine = deps.createEngine ?? createFoliateEngine;
     // foliate identifies formats by magic number, but CBZ/FBZ need the
@@ -143,6 +165,18 @@ export async function openBook(book: LibraryBook, deps: LibraryDeps = {}): Promi
     }
     const content = engineToContent(engine, book.hash);
     registerOpenedBook(content);
+    if (!book.cover && engine.getCover) {
+      void engine
+        .getCover()
+        .then((extracted) => {
+          if (!extracted) return;
+          book.cover = extracted;
+          return dbOf(deps)
+            .books.update(book.hash, { cover: extracted })
+            .then(() => deps.onCoverExtracted?.(extracted));
+        })
+        .catch(() => undefined);
+    }
     return { ...content, engine };
   }
 
@@ -150,10 +184,10 @@ export async function openBook(book: LibraryBook, deps: LibraryDeps = {}): Promi
     const parsed = parseTxt(book.data, book.hash, book.title);
     const content: OpenedBookContent = {
       bookHash: book.hash,
-      sectionCount: parsed.sectionCount,
-      getSectionTitle: parsed.getSectionTitle,
-      getSectionHtml: parsed.getSectionHtml,
-      getSectionText: parsed.getSectionText,
+      spineCount: parsed.spineCount,
+      getSpineTitle: parsed.getSpineTitle,
+      getSpineHtml: parsed.getSpineHtml,
+      getSpineText: parsed.getSpineText,
       getMonolithicText: () => parsed.getMonolithicText(),
     };
     registerOpenedBook(content);
@@ -186,7 +220,7 @@ export async function removeBook(hash: string, deps: LibraryDeps = {}): Promise<
  */
 export async function saveProgress(
   hash: string,
-  sectionIndex: number,
+  nodeIndex: number,
   options: LibraryDeps & { cfi?: string } = {},
 ): Promise<void> {
   const db = dbOf(options);
@@ -194,7 +228,7 @@ export async function saveProgress(
   if (!book) return;
   await db.books.put({
     ...book,
-    lastSectionIndex: sectionIndex,
+    lastNodeIndex: nodeIndex,
     lastCfi: options.cfi ?? book.lastCfi,
     updatedAt: Date.now(),
   });

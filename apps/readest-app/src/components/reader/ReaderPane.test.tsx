@@ -57,12 +57,17 @@ describe('ReaderPane selection toolbar integration', () => {
     expect(screen.getByRole('button', { name: '提炼' })).toBeTruthy();
   });
 
-  it('ignores selections made outside the article (chapter title header)', () => {
+  it('ignores selections made outside the article (header chapter title)', () => {
     render(<ReaderPane sections={DEMO_BOOK.sections} />);
-    const title = document.querySelector('[data-testid="reader-pane"] span.truncate');
-    selectContents(title?.firstChild ?? null);
+    // Chapter navigation lives in the unified HeaderBar: text outside the
+    // article (e.g. the app header) must never summon the reader toolbar.
+    const outside = document.createElement('div');
+    outside.textContent = '第一章 迷雾之城';
+    document.body.appendChild(outside);
+    selectContents(outside.firstChild);
     fireEvent.mouseUp(article());
     expect(screen.queryByTestId('selection-toolbar')).toBeNull();
+    outside.remove();
   });
 
   it('追问 expands the sidebar, activates the chat tab and fills the quote draft', () => {
@@ -141,10 +146,12 @@ describe('ReaderPane selection toolbar integration', () => {
     expect(window.getSelection()?.toString()).toBe('');
   });
 
-  it('still renders the chapter navigation and segmentation banner wiring', () => {
+  it('renders the article and segmentation banner wiring', () => {
     render(<ReaderPane sections={DEMO_BOOK.sections} />);
-    expect(screen.getByText('上一章')).toBeTruthy();
-    expect(screen.getByText('下一章')).toBeTruthy();
+    expect(screen.getByTestId('reader-article')).toBeTruthy();
     expect(screen.getByTestId('reader-pane')).toBeTruthy();
+    // The pane is chrome-free: chapter navigation belongs to the HeaderBar.
+    expect(screen.queryByText('上一章')).toBeNull();
+    expect(screen.queryByText('下一章')).toBeNull();
   });
 });

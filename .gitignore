@@ -8,3 +8,9 @@ coverage/
 src-tauri/gen/
 apps/readest-app/src-tauri/target/
 apps/readest-app/src-tauri/gen/
+
+# 本地临时产物：调试截图、验证输出与临时配图（不入库）
+.scratch/shots/
+.scratch/test-results.json
+initial.png
+ux-shelf.png

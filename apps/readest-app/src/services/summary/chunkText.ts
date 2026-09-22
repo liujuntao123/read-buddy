@@ -29,7 +29,7 @@ const clampTarget = (targetChunkChars: number): number =>
  *   grown (never past 8,000) so blocks stay balanced, e.g. 15,000 chars → two
  *   7,750-char blocks instead of 7,000 + 7,000 + 2,000.
  */
-export function chunkChapterText(
+export function chunkNodeText(
   text: string,
   targetChunkChars: number = DEFAULT_SUMMARY_CHUNK_CHARS,
   overlap: number = SUMMARY_CHUNK_OVERLAP,

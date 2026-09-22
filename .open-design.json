@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "designSystem": {
+    "slug": "shadcn",
+    "path": "design-systems/shadcn"
+  },
+  "skill": {
+    "slug": "minimalist-skill",
+    "path": "skills/minimalist-skill",
+    "kind": "skill",
+    "mode": "prototype"
+  },
+  "boundAt": "2026-09-21T09:40:00Z"
+}

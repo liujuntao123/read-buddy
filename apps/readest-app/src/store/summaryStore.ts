@@ -1,7 +1,7 @@
 /**
  * Summary store (ticket 03, ADR 0004: strictly manual trigger).
  *
- * Per-chapter UI state keyed by `${bookHash}:${sectionIndex}`:
+ * Per-chapter UI state keyed by `${bookHash}:${nodeIndex}`:
  * - `openChapter` only checks the local cache — it NEVER starts a model call;
  * - `generate` is the only entry into the pipeline and is always user-fired
  *   (the ⚡ button or 🔄 regenerate); `force=true` bypasses the cache;
@@ -13,16 +13,19 @@
  * `getSummaryStore()` (swappable in tests via `setSummaryStore`).
  */
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import type { AISettings, ChapterSummary } from '@/types/ai';
-import { ChapterSummaryRepository } from '@/services/db/repositories';
+import type { AISettings, NodeSummary } from '@/types/ai';
+import type { NodeKind } from '@/types/readingAgent';
+import { NodeSummaryRepository } from '@/services/db/repositories';
 import {
-  createChapterSummarizer,
+  createNodeSummarizer,
   isAbortError,
-  type ChapterSummarizer,
+  type NodeSummarizer,
   type SummarizeInput,
   type SummarizerStage,
 } from '@/services/summary/summarizer';
-import { resolveCurrentChapterText } from '@/services/summary/chapterSource';
+import { resolveCurrentNodeText } from '@/services/summary/nodeSource';
+import { getAgentBookContext } from '@/services/agent/agentContext';
+import { nodeKindLabel } from '@/services/bookNodes';
 import { useAISettingsStore } from '@/store/aiSettingsStore';
 import { useReaderStore } from '@/store/readerStore';
 
@@ -35,11 +38,13 @@ export type SummaryPhase =
   | 'aborted'
   | 'error';
 
-export interface SummaryChapterContext {
+export interface SummaryNodeContext {
   bookHash: string;
-  sectionIndex: number;
+  nodeIndex: number;
   bookTitle: string;
-  chapterTitle: string;
+  nodeTitle: string;
+  /** 本次总结视角的节点层级（最小节点：有节就是节）。 */
+  kind: NodeKind;
   text: string;
   charCount: number;
 }
@@ -48,20 +53,22 @@ export interface SummaryState {
   phase: SummaryPhase;
   /** Streamed (or cached) three-part summary text. */
   content: string;
-  cachedSummary: ChapterSummary | null;
-  chapterTitle: string;
+  cachedSummary: NodeSummary | null;
+  nodeTitle: string;
+  /** 当前视角的节点层级，用于阶段文案（「正在合成整节脉络…」）。 */
+  kind: NodeKind;
   charCount: number;
-  /** e.g. `正在分块提炼 (1/2)...` / `正在合成整章脉络...`. */
+  /** e.g. `正在分块提炼 (1/2)...` / `正在合成整节脉络...`. */
   stageLabel: string;
   error: string | null;
-  /** `${bookHash}:${sectionIndex}` of the chapter this state belongs to. */
+  /** `${bookHash}:${nodeIndex}` of the node this state belongs to. */
   activeKey: string;
   /** AbortController of the in-flight generation, if any. */
   controller: AbortController | null;
-  openChapter: (
+  openNode: (
     bookHash: string,
-    sectionIndex: number,
-    chapterTitle: string,
+    nodeIndex: number,
+    nodeTitle: string,
     charCount: number,
   ) => Promise<void>;
   generate: (force?: boolean) => Promise<void>;
@@ -71,35 +78,48 @@ export interface SummaryState {
 export type SummaryStore = UseBoundStore<StoreApi<SummaryState>>;
 
 export interface SummaryStoreDeps {
-  summarizerFactory: (settings: AISettings) => ChapterSummarizer;
-  repository: ChapterSummaryRepository;
-  /** Chapter resolver seam; defaults to readerStore + chapterSource. */
-  resolveChapter?: () => SummaryChapterContext;
+  summarizerFactory: (settings: AISettings) => NodeSummarizer;
+  repository: NodeSummaryRepository;
+  /** Node resolver seam; defaults to readerStore + nodeSource. */
+  resolveNode?: () => SummaryNodeContext;
 }
 
-export const summaryChapterKey = (bookHash: string, sectionIndex: number): string =>
-  `${bookHash}:${sectionIndex}`;
+export const summaryNodeKey = (bookHash: string, nodeIndex: number): string =>
+  `${bookHash}:${nodeIndex}`;
 
 export const MISSING_SETTINGS_ERROR = '请先在侧栏右上角 ⚙ 完成 AI Provider 配置';
 
-const stageLabelFor = (stage: SummarizerStage): string => {
+const stageLabelFor = (stage: SummarizerStage, kind: NodeKind): string => {
   if (stage === 'mapping') return '正在分块提炼...';
-  if (stage === 'reducing') return '正在合成整章脉络...';
+  if (stage === 'reducing') return `正在合成整${nodeKindLabel(kind)}脉络...`;
   return '';
 };
 
-/** Chapter context for the section currently open in the reader. */
-export const resolveCurrentChapterContext = (): SummaryChapterContext => {
-  const { bookHash, bookTitle, sectionIndex, chapterTitle } = useReaderStore.getState();
-  const { title, text, charCount } = resolveCurrentChapterText();
+/** 当前阅读位置的节点上下文（最小节点 = 总结视角）。 */
+export const resolveCurrentNodeContext = (): SummaryNodeContext => {
+  const { bookHash, bookTitle, spineIndex, nodeTitle } = useReaderStore.getState();
+  const { title, text, charCount, kind } = resolveCurrentNodeText();
   return {
     bookHash,
+    // 物理段序号是缓存键的兜底；建好索引时由节点模型给出节点序号。
+    nodeIndex: resolveNodeIndexForCache(spineIndex),
     bookTitle,
-    sectionIndex,
-    chapterTitle: chapterTitle || title,
+    nodeTitle: nodeTitle || title,
+    kind,
     text,
     charCount,
   };
+};
+
+/**
+ * 缓存键里用的节点序号：优先取节点模型解析出的节点序号（目录比正文文件更细
+ * 时物理段序号会与节点序号错位），没有索引时退回物理段序号。
+ */
+const resolveNodeIndexForCache = (spineIndex: number): number => {
+  const { bookHash, anchor } = useReaderStore.getState();
+  const context = bookHash ? getAgentBookContext(bookHash) : undefined;
+  const node = context?.resolveNodeAt(spineIndex, anchor);
+  return node ? node.nodeIndex : spineIndex;
 };
 
 /**
@@ -107,23 +127,23 @@ export const resolveCurrentChapterContext = (): SummaryChapterContext => {
  * on first generation so importing this module (and every component test)
  * stays light and offline.
  */
-const createRealSummarizer = async (settings: AISettings): Promise<ChapterSummarizer> => {
+const createRealSummarizer = async (settings: AISettings): Promise<NodeSummarizer> => {
   const { createAiSdkStreamFn } = await import('@/services/ai/streamClient');
-  return createChapterSummarizer({
+  return createNodeSummarizer({
     stream: createAiSdkStreamFn(),
     settings,
-    repository: new ChapterSummaryRepository(),
+    repository: new NodeSummaryRepository(),
   });
 };
 
 export function createSummaryStore({
   summarizerFactory,
   repository,
-  resolveChapter = resolveCurrentChapterContext,
+  resolveNode = resolveCurrentNodeContext,
 }: SummaryStoreDeps): SummaryStore {
   /**
-   * Generation run token: bumped by `openChapter` and every new `generate`,
-   * so events from a stale run (chapter switched mid-flight) are dropped.
+   * Generation run token: bumped by `openNode` and every new `generate`,
+   * so events from a stale run (node switched mid-flight) are dropped.
    */
   let runToken = 0;
 
@@ -131,7 +151,8 @@ export function createSummaryStore({
     phase: 'idle',
     content: '',
     cachedSummary: null,
-    chapterTitle: '',
+    nodeTitle: '',
+    kind: 'chapter',
     charCount: 0,
     stageLabel: '',
     error: null,
@@ -139,23 +160,23 @@ export function createSummaryStore({
     controller: null,
 
     // Strictly manual trigger (ADR 0004): cache check only, never generates.
-    openChapter: async (bookHash, sectionIndex, chapterTitle, charCount) => {
+    openNode: async (bookHash, nodeIndex, nodeTitle, charCount) => {
       runToken += 1;
       get().controller?.abort();
-      const key = summaryChapterKey(bookHash, sectionIndex);
+      const key = summaryNodeKey(bookHash, nodeIndex);
       set({
         phase: 'checking-cache',
         activeKey: key,
         content: '',
         cachedSummary: null,
-        chapterTitle,
+        nodeTitle,
         charCount,
         stageLabel: '',
         error: null,
         controller: null,
       });
 
-      const cached = await repository.get(bookHash, sectionIndex);
+      const cached = await repository.get(bookHash, nodeIndex);
       if (get().activeKey !== key) return; // user already moved on
       if (cached) {
         set({ phase: 'cached', content: cached.summaryContent, cachedSummary: cached });
@@ -174,11 +195,11 @@ export function createSummaryStore({
         return;
       }
 
-      const chapter = resolveChapter();
-      const key = summaryChapterKey(chapter.bookHash, chapter.sectionIndex);
+      const node = resolveNode();
+      const key = summaryNodeKey(node.bookHash, node.nodeIndex);
 
       if (!force) {
-        const cached = await repository.get(chapter.bookHash, chapter.sectionIndex);
+        const cached = await repository.get(node.bookHash, node.nodeIndex);
         if (token !== runToken) return;
         if (cached) {
           set({ phase: 'cached', content: cached.summaryContent, cachedSummary: cached });
@@ -193,8 +214,9 @@ export function createSummaryStore({
         content: '',
         error: null,
         stageLabel: '',
-        chapterTitle: chapter.chapterTitle,
-        charCount: chapter.charCount,
+        nodeTitle: node.nodeTitle,
+        kind: node.kind,
+        charCount: node.charCount,
         cachedSummary: null,
         controller,
       });
@@ -203,7 +225,7 @@ export function createSummaryStore({
         if (token !== runToken) return;
         switch (event.type) {
           case 'stage':
-            set({ stageLabel: stageLabelFor(event.stage) });
+            set({ stageLabel: stageLabelFor(event.stage, node.kind) });
             return;
           case 'progress':
             set({ stageLabel: `正在分块提炼 (${event.index}/${event.total})...` });
@@ -219,18 +241,19 @@ export function createSummaryStore({
       try {
         const summarizer = summarizerFactory(settings);
         const summary = await summarizer.summarize({
-          bookHash: chapter.bookHash,
-          sectionIndex: chapter.sectionIndex,
-          chapterTitle: chapter.chapterTitle,
-          bookTitle: chapter.bookTitle,
-          text: chapter.text,
+          bookHash: node.bookHash,
+          nodeIndex: node.nodeIndex,
+          nodeTitle: node.nodeTitle,
+          nodeKind: node.kind,
+          bookTitle: node.bookTitle,
+          text: node.text,
           signal: controller.signal,
           onEvent: summarize,
         });
         if (token !== runToken) return;
 
         set({ phase: 'done', content: summary.summaryContent, stageLabel: '' });
-        const stored = await repository.get(chapter.bookHash, chapter.sectionIndex);
+        const stored = await repository.get(node.bookHash, node.nodeIndex);
         if (token !== runToken) return;
         set({ phase: 'cached', cachedSummary: stored ?? summary });
       } catch (error) {
@@ -258,13 +281,13 @@ export function createSummaryStore({
 
 /**
  * App-wide singleton. Uses the real AI SDK stream (lazily imported) and the
- * Dexie-backed ChapterSummaryRepository.
+ * Dexie-backed NodeSummaryRepository.
  */
 export const useSummaryStore: SummaryStore = createSummaryStore({
   summarizerFactory: (settings) => ({
     summarize: (input) => createRealSummarizer(settings).then((s) => s.summarize(input)),
   }),
-  repository: new ChapterSummaryRepository(),
+  repository: new NodeSummaryRepository(),
 });
 
 let activeStore: SummaryStore = useSummaryStore;

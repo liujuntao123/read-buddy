@@ -1,19 +1,26 @@
 'use client';
 
 import { useEffect, useMemo, useState, type DragEvent } from 'react';
+import { HStack, StackItem, VStack } from '@astryxdesign/core/Stack';
+import { Text } from '@astryxdesign/core/Text';
 import { useReaderStore } from '@/store/readerStore';
 import { useAISettingsStore } from '@/store/aiSettingsStore';
 import { useChatStore } from '@/store/chatStore';
 import { useSegmentationStore } from '@/store/segmentationStore';
 import { useLibraryStore } from '@/store/libraryStore';
+import { useBookIndexStore } from '@/store/bookIndexStore';
 import { getOpenedBook } from '@/services/library/contentRegistry';
 import { DEMO_BOOK, type DemoSection } from '@/services/reader/demoBook';
 import ReaderPane from '@/components/reader/ReaderPane';
 import FoliatePane from '@/components/reader/FoliatePane';
+import ReaderDock from '@/components/reader/ReaderDock';
 import HeaderBar from '@/components/HeaderBar';
 import AISidebar from '@/components/sidebar/AISidebar';
 import Bookshelf from '@/components/library/Bookshelf';
 import { initDesktopFileOpen } from '@/services/desktop/desktopBridge';
+
+/** Book files accepted by drag-and-drop import. */
+const IMPORT_PATTERN = /\.(epub|mobi|azw3?|prc|fb2|fbz|cbz|txt)$/i;
 
 /**
  * Client shell for the split-screen reading workspace (design doc 3):
@@ -27,7 +34,7 @@ import { initDesktopFileOpen } from '@/services/desktop/desktopBridge';
  */
 export default function Workspace() {
   const bookHash = useReaderStore((s) => s.bookHash);
-  const sectionIndex = useReaderStore((s) => s.sectionIndex);
+  const spineIndex = useReaderStore((s) => s.spineIndex);
   const loadAISettings = useAISettingsStore((s) => s.load);
   const openChatBook = useChatStore((s) => s.openBook);
 
@@ -55,23 +62,58 @@ export default function Workspace() {
     void initDesktopFileOpen();
   }, []);
 
+  // Handle browser Back / Forward buttons via URL (?book=<hash>)
+  useEffect(() => {
+    const onPopState = () => {
+      const book = new URLSearchParams(window.location.search).get('book');
+      if (book) {
+        const store = useLibraryStore.getState();
+        if (store.currentHash !== book || store.view !== 'reader') {
+          void store.open(book);
+        }
+      } else {
+        const store = useLibraryStore.getState();
+        if (store.view !== 'shelf') {
+          store.closeToShelf();
+        }
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
   // Restore the AI provider settings persisted in IndexedDB (ticket 01).
   useEffect(() => {
     void loadAISettings();
   }, [loadAISettings]);
 
   // Bind the companion chat to the current book (ticket 04): resume the
-  // latest open topic whenever the book or active section changes.
+  // latest open topic whenever the book or active position changes.
   useEffect(() => {
     if (!bookHash) return;
-    void openChatBook(bookHash, sectionIndex);
-  }, [bookHash, sectionIndex, openChatBook]);
+    void openChatBook(bookHash, spineIndex);
+  }, [bookHash, spineIndex, openChatBook]);
+
+  // Reading-agent pipeline (doc §4.1): on book open, segment + index the
+  // whole book (chapter nodes → panorama → micro-briefs) in the background.
+  // Keyed on bookHash ONLY — page turns must not restart the pipeline; they
+  // just boost the freshly opened chapter to Priority 0 in the brief queue.
+  const ensureBookIndexed = useBookIndexStore((s) => s.ensureIndexed);
+  const setCurrentIndexedSection = useBookIndexStore((s) => s.setCurrentSection);
+  useEffect(() => {
+    if (!bookHash) return;
+    void ensureBookIndexed(bookHash, { currentSectionIndex: spineIndex });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- bookHash only; spineIndex is the initial boost seed
+  }, [bookHash, ensureBookIndexed]);
+  useEffect(() => {
+    setCurrentIndexedSection(spineIndex);
+  }, [spineIndex, setCurrentIndexedSection]);
 
   // Persist reading progress whenever the active section changes (ticket 06).
   useEffect(() => {
     if (view !== 'reader' || !currentHash) return;
     void saveLibraryProgress();
-  }, [sectionIndex, view, currentHash, saveLibraryProgress]);
+  }, [spineIndex, view, currentHash, saveLibraryProgress]);
 
   // When a segmented book mounts, ReaderPane's segmentation wiring jumps to
   // the first virtual section (its demo-flow effect). Child effects run
@@ -80,12 +122,12 @@ export default function Workspace() {
   useEffect(() => {
     if (view !== 'reader' || !currentHash) return;
     if (!segmentation || segmentation.bookHash !== currentHash) return;
-    const target = libraryBooks.find((book) => book.hash === currentHash)?.lastSectionIndex ?? 0;
+    const target = libraryBooks.find((book) => book.hash === currentHash)?.lastNodeIndex ?? 0;
     if (target <= 0) return;
     const section = segmentation.virtualSections[target];
     if (!section) return;
     const reader = useReaderStore.getState();
-    if (reader.sectionIndex !== target) reader.setSection(target, section.title);
+    if (reader.spineIndex !== target) reader.setPosition(target, section.title);
   }, [view, currentHash, segmentation, libraryBooks]);
 
   const opened = bookHash ? getOpenedBook(bookHash) : undefined;
@@ -95,11 +137,11 @@ export default function Workspace() {
   // rendered — the DemoSection interface is satisfied structurally.
   const sections = useMemo<DemoSection[]>(() => {
     if (!opened) return DEMO_BOOK.sections;
-    return Array.from({ length: opened.sectionCount }, (_, i) => ({
+    return Array.from({ length: opened.spineCount }, (_, i) => ({
       index: i,
-      title: opened.getSectionTitle(i),
+      title: opened.getSpineTitle(i),
       get html() {
-        return opened.getSectionHtml(i);
+        return opened.getSpineHtml(i);
       },
     }));
   }, [opened]);
@@ -118,39 +160,70 @@ export default function Workspace() {
     event.preventDefault();
     setDragOver(false);
     const files = Array.from(event.dataTransfer?.files ?? []).filter((file) =>
-      /\.(epub|mobi|azw3?|prc|fb2|fbz|cbz|txt)$/i.test(file.name),
+      IMPORT_PATTERN.test(file.name),
     );
     if (files.length > 0) void importFiles(files);
   };
 
   return (
-    <div
-      className="flex h-screen w-screen flex-col overflow-hidden bg-base-200"
+    <VStack
+      height="100%"
+      style={{ position: 'relative', overflow: 'hidden' }}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
       <HeaderBar />
-      <main className="relative flex min-h-0 flex-1">
-        {view === 'shelf' ? (
-          <Bookshelf />
-        ) : currentEngine ? (
-          // Ticket 07: paginated engine rendering replaces the scroll branch
-          // for epub/mobi/fb2/cbz books; TXT/demo keep ReaderPane.
-          <FoliatePane engine={currentEngine} />
-        ) : (
-          <ReaderPane sections={sections} monolithicText={monolithicText} />
-        )}
+      <HStack gap={0} height="100%" style={{ minHeight: 0 }}>
+        <StackItem size="fill" style={{ minHeight: 0, position: 'relative' }}>
+          {view === 'shelf' ? (
+            <Bookshelf />
+          ) : (
+            <>
+              {currentEngine ? (
+                <FoliatePane engine={currentEngine} />
+              ) : (
+                <ReaderPane sections={sections} monolithicText={monolithicText} />
+              )}
+              {/* Hover-revealed reading controls at the pane's bottom-right. */}
+              <ReaderDock />
+            </>
+          )}
+        </StackItem>
         <AISidebar />
-        {dragOver && (
-          <div
-            data-testid="drop-import-overlay"
-            className="pointer-events-none absolute inset-4 z-50 flex items-center justify-center rounded-lg border-4 border-dashed border-primary bg-base-200/80 text-lg font-medium text-primary"
-          >
+      </HStack>
+      {dragOver && (
+        <DropImportHint>
+          <Text weight="medium" color="accent">
             松开以导入书籍（.epub / .mobi / .fb2 / .cbz / .txt）
-          </div>
-        )}
-      </main>
-    </div>
+          </Text>
+        </DropImportHint>
+      )}
+    </VStack>
+  );
+}
+
+/**
+ * Drag-hover import hint. Absolutely positioned above the workspace so the
+ * content below stays interactive-free while a drag is in progress.
+ */
+function DropImportHint({ children }: { children: React.ReactNode }) {
+  return (
+    <VStack
+      data-testid="drop-import-overlay"
+      vAlign="center"
+      hAlign="center"
+      style={{
+        position: 'absolute',
+        inset: 'var(--spacing-4)',
+        zIndex: 50,
+        borderRadius: 'var(--radius-container)',
+        border: '2px dashed var(--color-accent)',
+        background: 'var(--color-background-body)',
+        pointerEvents: 'none',
+      }}
+    >
+      {children}
+    </VStack>
   );
 }

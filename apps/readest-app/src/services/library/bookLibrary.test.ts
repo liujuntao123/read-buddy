@@ -101,9 +101,18 @@ describe('computeBookHash', () => {
 });
 
 describe('importBookFile', () => {
+  // Hermetic default (built lazily: `db` is only assigned in beforeAll).
+  // Never let imports reach the vendored foliate view.
+  const noCover = (): { db: ReadestPlusDatabase; extractCover: () => Promise<undefined> } => ({
+    get db() {
+      return db;
+    },
+    extractCover: async () => undefined,
+  });
+
   it('imports an epub, stores its raw bytes and reads them back', async () => {
     const bytes = await buildEpubBytes();
-    const result = await importBookFile(new File([bytes], '随便叫什么.epub'), { db });
+    const result = await importBookFile(new File([bytes], '随便叫什么.epub'), noCover());
 
     expect(result.status).toBe('ok');
     if (result.status !== 'ok') return;
@@ -118,7 +127,7 @@ describe('importBookFile', () => {
 
   it('rejects a second import of identical content as a duplicate', async () => {
     const bytes = await buildEpubBytes();
-    const result = await importBookFile(new File([bytes], '迷雾之城-副本.epub'), { db });
+    const result = await importBookFile(new File([bytes], '迷雾之城-副本.epub'), noCover());
     expect(result.status).toBe('duplicate');
     if (result.status === 'duplicate') {
       expect(result.message).toContain('迷雾之城');
@@ -127,7 +136,7 @@ describe('importBookFile', () => {
 
   it('imports a mobi without parsing, keeping the file name for the engine', async () => {
     const bytes = new Uint8Array([0, 1, 2, 3]);
-    const result = await importBookFile(new File([bytes], '冰与火之诗.azw3'), { db });
+    const result = await importBookFile(new File([bytes], '冰与火之诗.azw3'), noCover());
     expect(result.status).toBe('ok');
     if (result.status !== 'ok') return;
     expect(result.book.format).toBe('mobi');
@@ -136,13 +145,60 @@ describe('importBookFile', () => {
     expect(result.book.fileName).toBe('冰与火之诗.azw3'); // CBZ/FBZ detection needs it
   });
 
+  it('extracts covers for engine formats through the foliate seam at import', async () => {
+    // The mobi zip heuristic has no cover path — the foliate seam (original
+    // readest approach) supplies it.
+    const extractCover = vi.fn(async (_file: File) => 'data:image/jpeg;base64,Q09WRVI=');
+    const result = await importBookFile(
+      new File([new Uint8Array([1, 2, 3, 4])], '画集.mobi'),
+      { db, extractCover },
+    );
+    expect(result.status).toBe('ok');
+    expect(extractCover).toHaveBeenCalledTimes(1);
+    expect(extractCover.mock.calls[0]![0]).toBeInstanceOf(File);
+    expect(extractCover.mock.calls[0]![0].name).toBe('画集.mobi');
+    if (result.status === 'ok') expect(result.book.cover).toBe('data:image/jpeg;base64,Q09WRVI=');
+  });
+
+  it('keeps the epub zip cover and skips the foliate seam when it already found one', async () => {
+    const zip = new JSZip();
+    zip.file('mimetype', 'application/epub+zip');
+    zip.file(
+      'META-INF/container.xml',
+      '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
+    );
+    zip.file(
+      'content.opf',
+      '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0">' +
+        '<metadata><dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">封面书</dc:title></metadata>' +
+        '<manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/>' +
+        '<item id="cover" href="cover.png" media-type="image/png" properties="cover-image"/></manifest>' +
+        '<spine><itemref idref="c"/></spine></package>',
+    );
+    zip.file('c.xhtml', '<html><body><p>正文</p></body></html>');
+    zip.file('cover.png', new Uint8Array([0x89, 0x50, 0x4e, 0x47])); // png magic is enough
+    const bytes = await zip.generateAsync({ type: 'arraybuffer' });
+
+    const extractCover = vi.fn(async (_file: File) => 'data:image/jpeg;base64,Tk9QRUQ=');
+    const result = await importBookFile(new File([bytes], '封面书.epub'), {
+      db,
+      extractCover,
+    });
+
+    expect(result.status).toBe('ok');
+    expect(extractCover).not.toHaveBeenCalled(); // zip cover wins, no foliate parse
+    if (result.status === 'ok') {
+      expect(result.book.cover).toMatch(/^data:image\/png;base64,/);
+    }
+  });
+
   it('answers unsupported formats with the friendly copy', async () => {
-    const result = await importBookFile(new File([new Uint8Array([1])], 'novel.pdf'), { db });
+    const result = await importBookFile(new File([new Uint8Array([1])], 'novel.pdf'), noCover());
     expect(result.status).toBe('unsupported');
     if (result.status === 'unsupported') {
       expect(result.message).toContain('暂不支持该格式（待 Foliate 引擎接入）');
     }
-    expect(await db.books.count()).toBe(2); // the epub + the mobi from before
+    expect(await db.books.count()).toBe(4); // epub + mobi + cover-mobi + png-cover epub
   });
 });
 
@@ -151,7 +207,7 @@ const makeFakeEngine = (): FoliateEngineHandle & {
   prepare: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   openedWith: File | null;
-  getSectionTitle: (index: number) => string;
+  getSpineTitle: (index: number) => string;
 } => {
   const handle = {
     openedWith: null as File | null,
@@ -164,11 +220,11 @@ const makeFakeEngine = (): FoliateEngineHandle & {
     goToFraction: vi.fn(async () => {}),
     onRelocate: vi.fn(() => () => {}),
     onLoad: vi.fn(() => () => {}),
-    getSectionText: vi.fn(async () => '灯火在雾中摇曳。'),
-    getCachedSectionHtml: vi.fn(() => '<p>灯火在雾中摇曳。</p>'),
-    getCachedSectionText: vi.fn(() => '灯火在雾中摇曳。'),
-    getSectionTitle: vi.fn((index: number) => `第 ${index + 1} 章`),
-    sectionCount: 3,
+    getSpineText: vi.fn(async () => '灯火在雾中摇曳。'),
+    getCachedSpineHtml: vi.fn(() => '<p>灯火在雾中摇曳。</p>'),
+    getCachedSpineText: vi.fn(() => '灯火在雾中摇曳。'),
+    getSpineTitle: vi.fn((index: number) => `第 ${index + 1} 章`),
+    spineCount: 3,
     tocItems: vi.fn(() => [{ label: '第 1 章', href: 'ch1.xhtml' }]),
     currentLocation: vi.fn(() => null),
     close: vi.fn(),
@@ -176,7 +232,7 @@ const makeFakeEngine = (): FoliateEngineHandle & {
     prepare: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
     openedWith: File | null;
-    getSectionTitle: (index: number) => string;
+    getSpineTitle: (index: number) => string;
   };
   return handle;
 };
@@ -184,7 +240,10 @@ const makeFakeEngine = (): FoliateEngineHandle & {
 describe('openBook / readLibrary / removeBook / saveProgress', () => {
   it('opens engine books through the injected engine factory', async () => {
     const bytes = await buildEpubBytes('（第二版）');
-    const imported = await importBookFile(new File([bytes], '迷雾之城.epub'), { db });
+    const imported = await importBookFile(new File([bytes], '迷雾之城.epub'), {
+      db,
+      extractCover: async () => undefined,
+    });
     if (imported.status !== 'ok') throw new Error('epub import failed');
 
     const engine = makeFakeEngine();
@@ -202,15 +261,18 @@ describe('openBook / readLibrary / removeBook / saveProgress', () => {
     expect(engine.prepare).toHaveBeenCalledTimes(1);
 
     // Registry content comes from the engine; the handle travels with it.
-    expect(opened.sectionCount).toBe(3);
-    expect(opened.getSectionTitle(0)).toBe('第 1 章');
+    expect(opened.spineCount).toBe(3);
+    expect(opened.getSpineTitle(0)).toBe('第 1 章');
     expect(opened.engine).toBe(engine);
-    expect(getOpenedBook(imported.book.hash)?.sectionCount).toBe(3);
-    expect(getOpenedBook(imported.book.hash)?.getSectionHtml(0)).toContain('灯火在雾中摇曳');
+    expect(getOpenedBook(imported.book.hash)?.spineCount).toBe(3);
+    expect(getOpenedBook(imported.book.hash)?.getSpineHtml(0)).toContain('灯火在雾中摇曳');
   });
 
   it('closes the engine when preparing fails', async () => {
-    const imported = await importBookFile(new File([new Uint8Array([9])], '坏书.mobi'), { db });
+    const imported = await importBookFile(new File([new Uint8Array([9])], '坏书.mobi'), {
+      db,
+      extractCover: async () => undefined,
+    });
     if (imported.status !== 'ok') throw new Error('mobi import failed');
 
     const engine = makeFakeEngine();
@@ -222,6 +284,24 @@ describe('openBook / readLibrary / removeBook / saveProgress', () => {
     expect(getOpenedBook(imported.book.hash)).toBeUndefined();
   });
 
+  it('fills a missing cover lazily on open and notifies the caller', async () => {
+    const imported = await importBookFile(new File([new Uint8Array([7])], '无封面书.mobi'), {
+      db,
+      extractCover: async () => undefined,
+    });
+    if (imported.status !== 'ok') throw new Error('mobi import failed');
+
+    const engine = makeFakeEngine();
+    (engine as { getCover?: () => Promise<string | undefined> }).getCover = async () =>
+      'data:image/png;base64,TEFaWQ==';
+    const onCoverExtracted = vi.fn();
+
+    await openBook(imported.book, { db, createEngine: () => engine, onCoverExtracted });
+
+    await vi.waitFor(() => expect(onCoverExtracted).toHaveBeenCalledWith('data:image/png;base64,TEFaWQ=='));
+    expect((await db.books.get(imported.book.hash))?.cover).toBe('data:image/png;base64,TEFaWQ==');
+  });
+
   it('registers txt content with its monolithic text', async () => {
     const text = '第一章 风起之地\n\n正文内容第一段。';
     const imported = await importBookFile(new File([new TextEncoder().encode(text)], '风起之地.txt'), {
@@ -230,9 +310,9 @@ describe('openBook / readLibrary / removeBook / saveProgress', () => {
     if (imported.status !== 'ok') throw new Error('txt import failed');
 
     const opened = await openBook(imported.book, { db });
-    expect(opened.sectionCount).toBe(1);
+    expect(opened.spineCount).toBe(1);
     expect(opened.getMonolithicText?.()).toBe(text);
-    expect(getOpenedBook(imported.book.hash)?.getSectionText(0)).toContain('正文内容第一段');
+    expect(getOpenedBook(imported.book.hash)?.getSpineText(0)).toContain('正文内容第一段');
   });
 
   it('lists shelf metadata without raw bytes, persists progress and deletes cleanly', async () => {
@@ -242,7 +322,7 @@ describe('openBook / readLibrary / removeBook / saveProgress', () => {
 
     const target = list[0]!;
     await saveProgress(target.hash, 1, { db });
-    expect((await db.books.get(target.hash))?.lastSectionIndex).toBe(1);
+    expect((await db.books.get(target.hash))?.lastNodeIndex).toBe(1);
 
     // Ticket 07: engine progress also persists the CFI, and a save without
     // one keeps the previously stored CFI (TXT path never clears it).
@@ -250,7 +330,7 @@ describe('openBook / readLibrary / removeBook / saveProgress', () => {
     expect((await db.books.get(target.hash))?.lastCfi).toBe('epubcfi(/6/8!/2/2)');
     await saveProgress(target.hash, 1, { db });
     expect((await db.books.get(target.hash))?.lastCfi).toBe('epubcfi(/6/8!/2/2)');
-    expect((await db.books.get(target.hash))?.lastSectionIndex).toBe(1);
+    expect((await db.books.get(target.hash))?.lastNodeIndex).toBe(1);
     await removeBook(target.hash, { db });
     expect(await db.books.get(target.hash)).toBeUndefined();
     expect(getOpenedBook(target.hash)).toBeUndefined();

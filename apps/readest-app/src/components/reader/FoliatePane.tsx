@@ -1,15 +1,39 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Banner } from '@astryxdesign/core/Banner';
+import { VStack } from '@astryxdesign/core/Stack';
+import { Text } from '@astryxdesign/core/Text';
 import { useReaderStore } from '@/store/readerStore';
 import { useLibraryStore } from '@/store/libraryStore';
 import type { EngineLocation, FoliateEngineHandle } from '@/services/library/foliateEngine';
+import { getAgentBookContext } from '@/services/agent/agentContext';
+import { subscribeLocate } from '@/services/reader/readerLink';
+import { highlightSnippet } from '@/services/reader/highlight';
+import { useReadingTheme } from '@/theme/readingTheme';
+import {
+  typographyCss,
+  toEngineLayout,
+  useReaderSettingsStore,
+} from '@/store/readerSettingsStore';
 import { useQuickActions } from '@/hooks/useQuickActions';
 import { useIframeSelection, type IframeSelectionReader } from '@/hooks/useIframeSelection';
 import SelectionToolbar from './SelectionToolbar';
 
 /** Relocate-driven progress saves are throttled (page turns are frequent). */
 const PROGRESS_SAVE_THROTTLE_MS = 1500;
+
+/**
+ * 目录 href 的段内锚点（`"ch1.xhtml#sigil_toc_id_1"` → `"sigil_toc_id_1"`）：
+ * 阅读位置记录的目录锚点，没有 `#`（或 `#` 后为空）时为 undefined。
+ */
+function anchorOfHref(href: string | undefined): string | undefined {
+  if (!href) return undefined;
+  const hashAt = href.indexOf('#');
+  if (hashAt < 0) return undefined;
+  const anchor = href.slice(hashAt + 1);
+  return anchor.length > 0 ? anchor : undefined;
+}
 
 export interface FoliatePaneProps {
   /** Engine of the opened book (store-owned lifecycle; null renders a hint). */
@@ -27,34 +51,53 @@ export interface FoliatePaneProps {
  * section ordinal, CFI progress) and reuses the shared selection toolbar
  * (ADR 0007) over the chapter iframe's document.
  *
- * The engine's lifecycle belongs to the library store — unmounting the pane
- * only detaches the DOM and listeners; switching or deleting the book closes
- * the engine there.
+ * All reading controls (chapter nav, TOC, page mode, typography) live in the
+ * unified HeaderBar; this pane only applies them. Page mode comes from
+ * `readerSettingsStore` (single source of truth):
+ * - 单页 = single-column infinite scroll (`flow=scrolled`, native wheel);
+ * - 双页 = paginated two-column book spread with keyboard/wheel page turns.
  */
 export default function FoliatePane({ engine, readSelection }: FoliatePaneProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const chapterTitle = useReaderStore((s) => s.chapterTitle);
-  const [tocPos, setTocPos] = useState(-1);
   const [openError, setOpenError] = useState<string | null>(null);
   const { selection, attach, close, reset } = useIframeSelection(readSelection);
   const runQuickAction = useQuickActions();
   const lastSaveRef = useRef(0);
+  /** Quote awaiting highlight once the located chapter's iframe loads. */
+  const pendingHighlightRef = useRef<string | null>(null);
+  /** Most recently loaded chapter document (same-section highlight path). */
+  const latestDocRef = useRef<Document | null>(null);
 
-  const tocItems = useMemo(() => (engine ? engine.tocItems() : []), [engine]);
-  const tocItemsRef = useRef(tocItems);
-  tocItemsRef.current = tocItems;
+  const readingTheme = useReadingTheme();
 
-  /** Apply a relocation: reading context + chapter-nav position + progress. */
+  const typography = useReaderSettingsStore((s) => s.typography);
+  const layoutSettings = useReaderSettingsStore((s) => s.layout);
+  const pageMode = useReaderSettingsStore((s) => s.layout.pageMode);
+  const isScrolled = pageMode === 'single';
+
+  /** Apply typography changes live (font size / family / spacing). */
+  useEffect(() => {
+    engine?.setTypography?.(typographyCss(typography));
+  }, [engine, typography]);
+
+  /** Apply layout changes live (page mode / width / margins). */
+  useEffect(() => {
+    engine?.setLayout?.(toEngineLayout(layoutSettings));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- layoutSettings identity carries the values
+  }, [engine, layoutSettings]);
+
+  /** Reading-theme synchronization (light / sepia / dark). */
+  useEffect(() => {
+    engine?.setTheme?.(readingTheme);
+  }, [engine, readingTheme]);
+
+  /** Apply a relocation: reading context (physical position + title + anchor)
+   *  plus a throttled progress save. */
   const applyLocation = (location: EngineLocation): void => {
-    const title = location.tocItemLabel ?? engine?.getSectionTitle(location.index) ?? '';
-    useReaderStore.getState().setSection(location.index, title);
-    setTocPos((current) => {
-      if (location.tocItemHref) {
-        const found = tocItemsRef.current.findIndex((item) => item.href === location.tocItemHref);
-        if (found >= 0) return found;
-      }
-      return current;
-    });
+    const title = location.tocItemLabel ?? engine?.getSpineTitle(location.index) ?? '';
+    useReaderStore
+      .getState()
+      .setPosition(location.index, title, anchorOfHref(location.tocItemHref));
     const now = Date.now();
     if (now - lastSaveRef.current >= PROGRESS_SAVE_THROTTLE_MS) {
       lastSaveRef.current = now;
@@ -77,8 +120,75 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
   // Chapter loads → wire the selection capture onto the fresh iframe doc.
   useEffect(() => {
     if (!engine) return;
-    return engine.onLoad(({ doc }) => attach(doc));
+    return engine.onLoad(({ doc }) => {
+      latestDocRef.current = doc;
+      attach(doc);
+      // Apply an agent-located highlight onto the freshly painted chapter.
+      const pending = pendingHighlightRef.current;
+      if (pending) {
+        pendingHighlightRef.current = null;
+        window.setTimeout(() => {
+          highlightSnippet(doc.body, pending);
+        }, 60);
+      }
+    });
   }, [engine, attach]);
+
+  // Agent → reader jump (reading-agent doc §5.3 locate_in_reader): the request
+  // names a book node, so the node model resolves the destination first — its
+  // href (目录锚点 included) or physical spine. Only when the book has no
+  // context / no such node do we fall back to scanning every spine by text.
+  // Either way the breathing highlight is queued for the load event below (or
+  // applied straight onto the already-loaded document when the section does
+  // not change).
+  useEffect(() => {
+    if (!engine) return;
+    return subscribeLocate((request) => {
+      const { bookHash } = useReaderStore.getState();
+      if (request.bookHash !== bookHash) return;
+      void (async () => {
+        const highlightHereAndNow = (): boolean => {
+          if (!latestDocRef.current) return false;
+          highlightSnippet(latestDocRef.current.body, request.quoteSnippet);
+          return true;
+        };
+
+        // Path 1: the node model (authoritative — 章/节 with 目录锚点).
+        const node = getAgentBookContext(request.bookHash)?.getNode(request.nodeIndex);
+        if (node) {
+          const target = node.href ?? node.spineIndex ?? request.nodeIndex;
+          const current = engine.currentLocation();
+          if (current && node.spineIndex !== undefined && current.index === node.spineIndex) {
+            // Same physical section: no fresh load event will fire.
+            if (node.href) await engine.goTo(target);
+            if (highlightHereAndNow()) return;
+          }
+          // Queue BEFORE navigating: the load event may fire mid-goTo.
+          pendingHighlightRef.current = request.quoteSnippet;
+          await engine.goTo(target);
+          return;
+        }
+
+        // Path 2 (fallback): no node model — scan the spine texts.
+        for (let index = 0; index < engine.spineCount; index++) {
+          const text = await engine.getSpineText(index);
+          if (text && text.includes(request.quoteSnippet)) {
+            const current = engine.currentLocation();
+            if (current && current.index === index && latestDocRef.current) {
+              // Same section: no fresh load event will fire — highlight now.
+              highlightSnippet(latestDocRef.current.body, request.quoteSnippet);
+              return;
+            }
+            // Queue BEFORE navigating: the load event may fire mid-goTo.
+            pendingHighlightRef.current = request.quoteSnippet;
+            await engine.goTo(index);
+            return;
+          }
+        }
+      })();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- engine identity is the only dependency
+  }, [engine]);
 
   // Mount / engine switch: attach the view element and consume the pending
   // resume CFI exactly once (first open of a previously read book).
@@ -88,8 +198,6 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
     let disposed = false;
     setOpenError(null);
     const run = async () => {
-      // Drop anything left by a previous engine; the engine itself stays
-      // alive (store-owned), its element simply re-attaches.
       container.replaceChildren();
       try {
         await engine.openIn(container);
@@ -107,9 +215,10 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
     };
   }, [engine]);
 
-  // Keyboard: ←/→ page turns (foliate next/prev are page turns, not
-  // chapters); Escape retracts the selection toolbar. Skips inputs so the
-  // chat composer keeps its caret behaviour.
+  // Keyboard navigation: PageDown/Space/ArrowRight/ArrowDown → next page;
+  // PageUp/Shift+Space/ArrowLeft/ArrowUp → prev page; Escape → close selection toolbar.
+  // Bound to both window and the chapter iframe document. In scrolled mode
+  // next/prev scroll the continuous column (the paginator handles it).
   useEffect(() => {
     if (!engine) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -120,96 +229,130 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
       ) {
         return;
       }
-      if (event.key === 'ArrowRight') void engine.next();
-      else if (event.key === 'ArrowLeft') void engine.prev();
-      else if (event.key === 'Escape') close();
+      if (
+        event.key === 'ArrowRight' ||
+        event.key === 'ArrowDown' ||
+        event.key === 'PageDown' ||
+        (event.key === ' ' && !event.shiftKey)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        void engine.next();
+      } else if (
+        event.key === 'ArrowLeft' ||
+        event.key === 'ArrowUp' ||
+        event.key === 'PageUp' ||
+        (event.key === ' ' && event.shiftKey)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        void engine.prev();
+      } else if (event.key === 'Escape') {
+        event.stopPropagation();
+        close();
+      }
     };
+
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+
+    const unbindLoad = engine.onLoad(({ doc }) => {
+      doc.addEventListener('keydown', onKeyDown);
+    });
+
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      unbindLoad();
+    };
   }, [engine, close]);
+
+  // Mouse wheel page turns — paginated (双页) mode only. In single-page
+  // (scrolled) mode the paginator's own container scrolls natively, so the
+  // wheel must not be intercepted.
+  useEffect(() => {
+    if (!engine || isScrolled) return;
+
+    let accumulatedDelta = 0;
+    let lastTurnTime = 0;
+    const WHEEL_THRESHOLD = 50;
+    const COOLDOWN_MS = 250;
+
+    const onWheel = (event: WheelEvent) => {
+      if (event.ctrlKey) return; // allow pinch zoom
+      event.preventDefault();
+
+      const now = Date.now();
+      if (now - lastTurnTime < COOLDOWN_MS) {
+        accumulatedDelta = 0;
+        return;
+      }
+
+      const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+      accumulatedDelta += delta;
+
+      if (Math.abs(accumulatedDelta) >= WHEEL_THRESHOLD) {
+        if (accumulatedDelta > 0) {
+          void engine.next();
+        } else {
+          void engine.prev();
+        }
+        accumulatedDelta = 0;
+        lastTurnTime = now;
+      }
+    };
+
+    const container = containerRef.current;
+    if (container) {
+      container.addEventListener('wheel', onWheel, { passive: false });
+    }
+
+    const boundDocs = new Set<Document>();
+    const bindDoc = ({ doc }: { doc: Document }) => {
+      boundDocs.add(doc);
+      doc.addEventListener('wheel', onWheel, { passive: false });
+    };
+
+    const unbindLoad = engine.onLoad(bindDoc);
+
+    return () => {
+      if (container) {
+        container.removeEventListener('wheel', onWheel);
+      }
+      for (const doc of boundDocs) {
+        try {
+          doc.removeEventListener('wheel', onWheel);
+        } catch {
+          /* ignore */
+        }
+      }
+      unbindLoad();
+    };
+  }, [engine, isScrolled]);
 
   if (!engine) {
     return (
-      <section
-        className="flex min-w-0 flex-1 items-center justify-center p-8 text-base-content/60"
+      <VStack
         aria-label="阅读视窗"
         data-testid="foliate-pane"
+        height="100%"
+        vAlign="center"
+        hAlign="center"
+        padding={8}
       >
-        未加载引擎书籍
-      </section>
+        <Text color="secondary">未加载引擎书籍</Text>
+      </VStack>
     );
   }
 
-  const prevToc = tocPos > 0 ? tocItems[tocPos - 1] : undefined;
-  const nextToc = tocPos >= 0 && tocPos < tocItems.length - 1 ? tocItems[tocPos + 1] : undefined;
-
-  const goChapter = (href: string): void => {
-    void engine.goTo(href);
-  };
-
   return (
-    <section className="flex min-w-0 flex-1 flex-col" aria-label="阅读视窗" data-testid="foliate-pane">
-      <div className="flex items-center justify-between gap-2 border-b border-base-300 bg-base-100 px-4 py-2">
-        <span
-          className="truncate text-sm font-medium text-base-content/80"
-          data-testid="foliate-chapter-title"
-        >
-          {chapterTitle || '…'}
-        </span>
-        <div className="flex shrink-0 items-center gap-2">
-          <span className="hidden text-xs text-base-content/50 md:inline">（←/→ 翻页）</span>
-          {tocItems.length > 0 && (
-            <div className="dropdown dropdown-end">
-              <div
-                tabIndex={0}
-                role="button"
-                className="btn btn-xs btn-outline"
-                data-testid="foliate-toc-button"
-              >
-                目录
-              </div>
-              <ul
-                tabIndex={0}
-                data-testid="foliate-toc-list"
-                className="menu dropdown-content z-30 max-h-72 w-60 overflow-auto rounded-box border border-base-300 bg-base-100 p-2 text-sm shadow-lg"
-              >
-                {tocItems.map((item, i) => (
-                  <li key={`${item.href}-${i}`}>
-                    <button
-                      type="button"
-                      className={i === tocPos ? 'active' : undefined}
-                      onClick={() => goChapter(item.href)}
-                    >
-                      <span className="block truncate">{item.label}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          <button
-            type="button"
-            className="btn btn-xs"
-            disabled={!prevToc}
-            onClick={() => prevToc && goChapter(prevToc.href)}
-          >
-            上一章
-          </button>
-          <button
-            type="button"
-            className="btn btn-xs"
-            disabled={!nextToc}
-            onClick={() => nextToc && goChapter(nextToc.href)}
-          >
-            下一章
-          </button>
-        </div>
-      </div>
-
+    <VStack
+      aria-label="阅读视窗"
+      data-testid="foliate-pane"
+      height="100%"
+      gap={0}
+      style={{ background: 'var(--color-background-surface)' }}
+    >
       {openError && (
-        <div role="alert" className="alert alert-error mx-4 mt-2 py-2 text-sm">
-          {openError}
-        </div>
+        <Banner status="error" container="section" title={openError} />
       )}
 
       {/* The Foliate web component renders here; unmount clears the DOM but
@@ -217,7 +360,7 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
       <div
         ref={containerRef}
         data-testid="foliate-container"
-        className="min-h-0 flex-1 overflow-hidden"
+        style={{ flex: 1, minHeight: 0, overflow: 'hidden', background: 'var(--color-background-surface)' }}
       />
 
       <SelectionToolbar
@@ -225,6 +368,6 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
         onAction={(action, text) => runQuickAction(action, text, reset)}
         onClose={close}
       />
-    </section>
+    </VStack>
   );
 }

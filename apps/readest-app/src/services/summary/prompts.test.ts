@@ -1,17 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CAUSALITY_RULE,
   MAP_SYSTEM_PROMPT,
   SUMMARY_HEADING_CORE,
   SUMMARY_HEADING_OUTLINE,
   SUMMARY_HEADING_TERMS,
   SUMMARY_SYSTEM_PROMPT,
+  THREE_PART_RULE,
   THREE_PART_TEMPLATE,
   buildMapPrompt,
   buildReducePrompt,
   buildSinglePassPrompt,
 } from './prompts';
 
-const INPUT = { bookTitle: '迷雾之城（演示书）', chapterTitle: '第二章 图书馆的密语' };
+const INPUT = {
+  bookTitle: '迷雾之城（演示书）',
+  nodeTitle: '第二章 图书馆的密语',
+  nodeKind: 'chapter' as const,
+  text: '',
+};
 
 describe('THREE_PART_TEMPLATE', () => {
   it('contains exactly the three mandated section headings in order', () => {
@@ -24,6 +31,47 @@ describe('THREE_PART_TEMPLATE', () => {
   it('specifies the numbered outline list and the term list shapes', () => {
     expect(THREE_PART_TEMPLATE).toContain('1. **[阶段/论点一]**：');
     expect(THREE_PART_TEMPLATE).toContain('- **[概念/术语名]**：');
+  });
+
+  it('demands the full causal arc per point (来龙去脉, no fragmentary listing)', () => {
+    expect(THREE_PART_TEMPLATE).toContain('来龙去脉');
+    expect(THREE_PART_TEMPLATE).toContain('禁止只罗列孤立事实');
+    expect(THREE_PART_TEMPLATE).toContain('前因、经过与后续影响');
+  });
+});
+
+describe('CAUSALITY_RULE injection', () => {
+  it('rides along with every three-part rule usage', () => {
+    expect(THREE_PART_RULE).toContain(CAUSALITY_RULE);
+    expect(THREE_PART_RULE).toContain('片面性、片段性');
+    expect(buildSinglePassPrompt(INPUT)).toContain(CAUSALITY_RULE);
+  });
+});
+
+describe('node level wording', () => {
+  it('names the viewpoint with the node model level word, never a blanket 「章节」', () => {
+    const asChapter = buildSinglePassPrompt({ ...INPUT, text: '正文' });
+    const asSection = buildSinglePassPrompt({
+      ...INPUT,
+      nodeKind: 'section',
+      nodeTitle: '§1 伦理学这个名称',
+      text: '正文',
+    });
+
+    expect(asChapter).toContain('的章「第二章 图书馆的密语」');
+    expect(asSection).toContain('的节「§1 伦理学这个名称」');
+    expect(asSection).toContain('【节全文】');
+    expect(asChapter).not.toContain('章节');
+    expect(asSection).not.toContain('章节');
+  });
+
+  it('uses the same level word in the map and reduce prompts', () => {
+    expect(buildMapPrompt({ ...INPUT, nodeKind: 'section', chunk: '片段', index: 1, total: 2 })).toContain(
+      '超长节「第二章 图书馆的密语」',
+    );
+    expect(
+      buildReducePrompt({ ...INPUT, nodeKind: 'section', subSummaries: ['要点'] }),
+    ).toContain('整节总结');
   });
 });
 
@@ -59,6 +107,7 @@ describe('buildMapPrompt', () => {
     expect(prompt).toContain('第 1/2 个片段');
     expect(prompt).toContain(chunk);
     expect(prompt).toContain('不需要三段式结构');
+    expect(prompt).toContain('交代前因与后果');
     expect(prompt).not.toContain(SUMMARY_HEADING_CORE);
     expect(prompt).not.toContain(SUMMARY_HEADING_TERMS);
   });

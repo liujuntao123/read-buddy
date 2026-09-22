@@ -7,19 +7,20 @@
  *   only `progress` i/N), then one streaming reduce call whose output is the
  *   final three-part summary and the only source of `delta` events.
  *
- * The finished ChapterSummary is persisted through the injected repository
+ * The finished NodeSummary is persisted through the injected repository
  * and returned. Aborts never persist; model errors propagate unchanged so the
  * UI can offer a retry.
  */
 import {
   SUMMARY_SINGLE_PASS_MAX_CHARS,
-  chapterSummaryId,
+  nodeSummaryId,
   type AISettings,
-  type ChapterSummary,
+  type NodeSummary,
 } from '@/types/ai';
+import type { NodeKind } from '@/types/readingAgent';
 import type { StreamTextFn } from '@/services/ai/streamClient';
-import type { ChapterSummaryRepository } from '@/services/db/repositories';
-import { chunkChapterText } from './chunkText';
+import type { NodeSummaryRepository } from '@/services/db/repositories';
+import { chunkNodeText } from './chunkText';
 import {
   MAP_SYSTEM_PROMPT,
   SUMMARY_SYSTEM_PROMPT,
@@ -34,26 +35,28 @@ export type SummarizerEvent =
   | { type: 'stage'; stage: SummarizerStage }
   | { type: 'progress'; stage: 'mapping'; index: number; total: number }
   | { type: 'delta'; text: string }
-  | { type: 'done'; summary: ChapterSummary };
+  | { type: 'done'; summary: NodeSummary };
 
 export interface SummarizeInput {
   bookHash: string;
-  sectionIndex: number;
-  chapterTitle: string;
+  nodeIndex: number;
+  nodeTitle: string;
+  /** 视角节点的层级：节 / 章 / 段（最小节点）。 */
+  nodeKind: NodeKind;
   bookTitle: string;
   text: string;
   signal: AbortSignal;
   onEvent: (event: SummarizerEvent) => void;
 }
 
-export interface ChapterSummarizer {
-  summarize(input: SummarizeInput): Promise<ChapterSummary>;
+export interface NodeSummarizer {
+  summarize(input: SummarizeInput): Promise<NodeSummary>;
 }
 
-export interface ChapterSummarizerDeps {
+export interface NodeSummarizerDeps {
   stream: StreamTextFn;
   settings: AISettings;
-  repository: ChapterSummaryRepository;
+  repository: NodeSummaryRepository;
 }
 
 /** True for AbortError-shaped errors (DOMException or plain Error). */
@@ -68,11 +71,11 @@ const throwIfAborted = (signal: AbortSignal): void => {
   if (signal.aborted) throw abortError();
 };
 
-export function createChapterSummarizer({
+export function createNodeSummarizer({
   stream,
   settings,
   repository,
-}: ChapterSummarizerDeps): ChapterSummarizer {
+}: NodeSummarizerDeps): NodeSummarizer {
   /** Consume one streaming call; every delta is forwarded to `onDelta`. */
   const consume = async (
     prompt: string,
@@ -94,30 +97,31 @@ export function createChapterSummarizer({
   return {
     async summarize({
       bookHash,
-      sectionIndex,
-      chapterTitle,
+      nodeIndex,
+      nodeTitle,
+      nodeKind,
       bookTitle,
       text,
       signal,
       onEvent,
-    }: SummarizeInput): Promise<ChapterSummary> {
+    }: SummarizeInput): Promise<NodeSummary> {
       try {
         throwIfAborted(signal);
 
-        let pipeline: ChapterSummary['pipeline'];
+        let pipeline: NodeSummary['pipeline'];
         let content: string;
 
         if (text.length <= SUMMARY_SINGLE_PASS_MAX_CHARS) {
           onEvent({ type: 'stage', stage: 'single' });
           pipeline = 'single';
           content = await consume(
-            buildSinglePassPrompt({ bookTitle, chapterTitle, text }),
+            buildSinglePassPrompt({ bookTitle, nodeTitle, nodeKind, text }),
             SUMMARY_SYSTEM_PROMPT,
             signal,
             (chunk) => onEvent({ type: 'delta', text: chunk }),
           );
         } else {
-          const chunks = chunkChapterText(text);
+          const chunks = chunkNodeText(text);
           onEvent({ type: 'stage', stage: 'mapping' });
           const subSummaries: string[] = [];
           for (const [index, chunk] of chunks.entries()) {
@@ -126,7 +130,14 @@ export function createChapterSummarizer({
             // Map phase: accumulate silently — only the reduce output streams.
             subSummaries.push(
               await consume(
-                buildMapPrompt({ bookTitle, chapterTitle, chunk, index: index + 1, total: chunks.length }),
+                buildMapPrompt({
+                  bookTitle,
+                  nodeTitle,
+                  nodeKind,
+                  chunk,
+                  index: index + 1,
+                  total: chunks.length,
+                }),
                 MAP_SYSTEM_PROMPT,
                 signal,
               ),
@@ -136,7 +147,7 @@ export function createChapterSummarizer({
           onEvent({ type: 'stage', stage: 'reducing' });
           pipeline = 'map-reduce';
           content = await consume(
-            buildReducePrompt({ bookTitle, chapterTitle, subSummaries }),
+            buildReducePrompt({ bookTitle, nodeTitle, nodeKind, subSummaries }),
             SUMMARY_SYSTEM_PROMPT,
             signal,
             (chunk) => onEvent({ type: 'delta', text: chunk }),
@@ -145,11 +156,11 @@ export function createChapterSummarizer({
 
         throwIfAborted(signal);
         const now = Date.now();
-        const summary: ChapterSummary = {
-          id: chapterSummaryId(bookHash, sectionIndex),
+        const summary: NodeSummary = {
+          id: nodeSummaryId(bookHash, nodeIndex),
           bookHash,
-          sectionIndex,
-          chapterTitle,
+          nodeIndex,
+          nodeTitle,
           modelUsed: settings.model,
           summaryContent: content,
           pipeline,

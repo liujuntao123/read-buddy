@@ -2,80 +2,50 @@
 
 import { useEffect, useState } from 'react';
 import { BookOpen, Moon, Sun } from 'lucide-react';
+import { SegmentedControl, SegmentedControlItem } from '@astryxdesign/core/SegmentedControl';
+import { applyTheme, readStoredTheme, type ReadingTheme } from '@/theme/readingTheme';
 
-export const THEME_STORAGE_KEY = 'readest-plus:theme';
-export type AppTheme = 'light' | 'sepia' | 'dark';
-
-const THEMES: ReadonlyArray<{ value: AppTheme; label: string; Icon: typeof Sun }> = [
+const THEMES: ReadonlyArray<{ value: ReadingTheme; label: string; Icon: typeof Sun }> = [
   { value: 'light', label: '日间模式', Icon: Sun },
   { value: 'sepia', label: '护眼模式', Icon: BookOpen },
   { value: 'dark', label: '夜间模式', Icon: Moon },
 ];
 
-const isAppTheme = (value: unknown): value is AppTheme =>
-  value === 'light' || value === 'sepia' || value === 'dark';
-
-/** Persisted theme, defaulting to `light` (layout.tsx's initial value). */
-export function readStoredTheme(): AppTheme {
-  try {
-    const stored =
-      typeof window === 'undefined' ? null : window.localStorage.getItem(THEME_STORAGE_KEY);
-    return isAppTheme(stored) ? stored : 'light';
-  } catch {
-    return 'light';
-  }
-}
-
-/** Apply to <html data-theme> and persist; both drive the daisyUI themes. */
-export function applyTheme(theme: AppTheme): void {
-  if (typeof document !== 'undefined') {
-    document.documentElement.setAttribute('data-theme', theme);
-  }
-  try {
-    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
-  } catch {
-    // Storage may be unavailable (private mode); the attribute still applies.
-  }
-}
-
 /**
- * Day / sepia / night theme switch (design doc 3.1). Semantic daisyUI classes
- * downstream pick the palette up automatically via html[data-theme].
+ * 日间 / 护眼 / 夜间 segmented switch. Selection persists through
+ * `applyTheme`, which notifies the app-root theme provider and the reader
+ * engine; the html `data-theme` attribute itself is owned by the provider.
  */
 export default function ThemeToggle() {
-  const [theme, setTheme] = useState<AppTheme>('light');
+  const [theme, setTheme] = useState<ReadingTheme>('light');
 
   useEffect(() => {
-    const stored = readStoredTheme();
-    setTheme(stored);
-    document.documentElement.setAttribute('data-theme', stored);
+    setTheme(readStoredTheme());
   }, []);
 
-  const switchTo = (next: AppTheme) => {
-    setTheme(next);
-    applyTheme(next);
+  const switchTo = (next: string) => {
+    const reading = next as ReadingTheme;
+    setTheme(reading);
+    applyTheme(reading);
   };
 
   return (
-    <div
+    <SegmentedControl
       data-testid="theme-toggle"
-      role="group"
-      aria-label="主题切换"
-      className="flex items-center gap-0.5"
+      label="主题切换"
+      value={theme}
+      onChange={switchTo}
+      size="sm"
     >
       {THEMES.map(({ value, label, Icon }) => (
-        <button
+        <SegmentedControlItem
           key={value}
-          type="button"
-          className={`btn btn-ghost btn-xs btn-square ${theme === value ? 'btn-active' : ''}`}
-          aria-label={label}
-          aria-pressed={theme === value}
-          title={label}
-          onClick={() => switchTo(value)}
-        >
-          <Icon className="size-4" aria-hidden="true" />
-        </button>
+          value={value}
+          label={label}
+          isLabelHidden
+          icon={<Icon size={14} aria-hidden />}
+        />
       ))}
-    </div>
+    </SegmentedControl>
   );
 }

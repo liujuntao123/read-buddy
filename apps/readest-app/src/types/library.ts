@@ -13,13 +13,19 @@ export interface LibraryBook {
   hash: string;
   title: string;
   author?: string;
+  /** Base64 data URL for the book's cover image thumbnail. */
+  cover?: string;
   format: BookFormat;
   /** Original file size in bytes. */
   size: number;
   importedAt: number;
   updatedAt: number;
-  /** Last read section ordinal, restored on re-open. */
-  lastSectionIndex?: number;
+  /**
+   * Last read node ordinal (physical spine ordinal for engine books, virtual
+   * node ordinal for TXT), restored on re-open. Optional so pre-node-model
+   * rows stay compatible.
+   */
+  lastNodeIndex?: number;
   /**
    * Last read position CFI (Foliate engine books), restored on re-open.
    * Optional so pre-ticket-07 rows (and TXT books) stay compatible.

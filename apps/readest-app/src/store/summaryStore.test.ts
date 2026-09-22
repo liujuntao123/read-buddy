@@ -1,19 +1,19 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import type { ChapterSummaryRepository } from '@/services/db/repositories';
+import type { NodeSummaryRepository } from '@/services/db/repositories';
 import {
   MISSING_SETTINGS_ERROR,
   createSummaryStore,
-  summaryChapterKey,
-  type SummaryChapterContext,
+  summaryNodeKey,
+  type SummaryNodeContext,
   type SummaryStore,
 } from './summaryStore';
 import {
   isAbortError,
-  type ChapterSummarizer,
+  type NodeSummarizer,
   type SummarizeInput,
 } from '@/services/summary/summarizer';
 import { useAISettingsStore } from '@/store/aiSettingsStore';
-import { chapterSummaryId, DEFAULT_AI_SETTINGS, type AISettings, type ChapterSummary } from '@/types/ai';
+import { nodeSummaryId, DEFAULT_AI_SETTINGS, type AISettings, type NodeSummary } from '@/types/ai';
 
 const VALID_SETTINGS: AISettings = {
   ...DEFAULT_AI_SETTINGS,
@@ -22,47 +22,48 @@ const VALID_SETTINGS: AISettings = {
   model: 'deepseek-chat',
 };
 
-const CHAPTER: SummaryChapterContext = {
+const CHAPTER: SummaryNodeContext = {
   bookHash: 'book-x',
-  sectionIndex: 2,
+  nodeIndex: 2,
   bookTitle: '迷雾之城（演示书）',
-  chapterTitle: '第三章 长夜漫漫',
+  nodeTitle: '第三章 长夜漫漫',
+  kind: 'chapter',
   text: '夜'.repeat(9_000),
   charCount: 9_000,
 };
 
-const makeRepository = (seed: ChapterSummary[] = []): Pick<Harness, 'repository' | 'put' | 'get'> => {
+const makeRepository = (seed: NodeSummary[] = []): Pick<Harness, 'repository' | 'put' | 'get'> => {
   const table = new Map(seed.map((summary) => [summary.id, summary]));
-  const get = vi.fn(async (bookHash: string, sectionIndex: number) =>
-    table.get(chapterSummaryId(bookHash, sectionIndex)),
+  const get = vi.fn(async (bookHash: string, nodeIndex: number) =>
+    table.get(nodeSummaryId(bookHash, nodeIndex)),
   );
-  const put = vi.fn(async (summary: ChapterSummary) => {
+  const put = vi.fn(async (summary: NodeSummary) => {
     table.set(summary.id, summary);
   });
-  const repository = { get, put } as unknown as ChapterSummaryRepository;
+  const repository = { get, put } as unknown as NodeSummaryRepository;
   return { repository, get, put };
 };
 interface Harness {
   store: SummaryStore;
-  factory: Mock<(settings: AISettings) => ChapterSummarizer>;
-  repository: ChapterSummaryRepository;
-  put: Mock<(summary: ChapterSummary) => Promise<void>>;
-  get: Mock<(bookHash: string, sectionIndex: number) => Promise<ChapterSummary | undefined>>;
+  factory: Mock<(settings: AISettings) => NodeSummarizer>;
+  repository: NodeSummaryRepository;
+  put: Mock<(summary: NodeSummary) => Promise<void>>;
+  get: Mock<(bookHash: string, nodeIndex: number) => Promise<NodeSummary | undefined>>;
 }
 /** Fake summarizer mimicking the real one: streams events, persists, returns. */
 const makeSummarizer = (
-  behavior: (input: SummarizeInput) => Promise<ChapterSummary> | void,
-): ChapterSummarizer => ({
-  summarize: vi.fn(async (input: SummarizeInput): Promise<ChapterSummary> => {
+  behavior: (input: SummarizeInput) => Promise<NodeSummary> | void,
+): NodeSummarizer => ({
+  summarize: vi.fn(async (input: SummarizeInput): Promise<NodeSummary> => {
     const override = await behavior(input);
     if (override) return override;
-    const summary: ChapterSummary = {
-      id: chapterSummaryId(input.bookHash, input.sectionIndex),
+    const summary: NodeSummary = {
+      id: nodeSummaryId(input.bookHash, input.nodeIndex),
       bookHash: input.bookHash,
-      sectionIndex: input.sectionIndex,
-      chapterTitle: input.chapterTitle,
+      nodeIndex: input.nodeIndex,
+      nodeTitle: input.nodeTitle,
       modelUsed: 'deepseek-chat',
-      summaryContent: '### 📌 章节核心要义\n新生成的总结',
+      summaryContent: '### 📌 核心要义\n新生成的总结',
       pipeline: 'single',
       createdAt: 1,
       updatedAt: 2,
@@ -74,7 +75,7 @@ const makeSummarizer = (
   }),
 });
 
-const makeHarness = (seed: ChapterSummary[] = []): Harness => {
+const makeHarness = (seed: NodeSummary[] = []): Harness => {
   const { repository, get, put } = makeRepository(seed);
   const factory = vi.fn(() =>
     makeSummarizer(async () => {
@@ -83,9 +84,9 @@ const makeHarness = (seed: ChapterSummary[] = []): Harness => {
     }),
   );
   const store = createSummaryStore({
-    summarizerFactory: factory as unknown as (settings: AISettings) => ChapterSummarizer,
+    summarizerFactory: factory as unknown as (settings: AISettings) => NodeSummarizer,
     repository,
-    resolveChapter: () => ({ ...CHAPTER }),
+    resolveNode: () => ({ ...CHAPTER }),
   });
   return { store, factory, repository, put, get };
 };
@@ -94,13 +95,13 @@ beforeEach(() => {
   useAISettingsStore.setState({ settings: { ...VALID_SETTINGS }, status: 'ready', toast: null });
 });
 
-describe('openChapter (strictly manual, cache-first)', () => {
+describe('openNode (strictly manual, cache-first)', () => {
   it('shows a cached summary immediately without ever building a summarizer', async () => {
-    const cached: ChapterSummary = {
-      id: chapterSummaryId(CHAPTER.bookHash, CHAPTER.sectionIndex),
+    const cached: NodeSummary = {
+      id: nodeSummaryId(CHAPTER.bookHash, CHAPTER.nodeIndex),
       bookHash: CHAPTER.bookHash,
-      sectionIndex: CHAPTER.sectionIndex,
-      chapterTitle: CHAPTER.chapterTitle,
+      nodeIndex: CHAPTER.nodeIndex,
+      nodeTitle: CHAPTER.nodeTitle,
       modelUsed: 'deepseek-chat',
       summaryContent: '### 📌 旧的缓存总结',
       pipeline: 'single',
@@ -109,27 +110,27 @@ describe('openChapter (strictly manual, cache-first)', () => {
     };
     const harness = makeHarness([cached]);
 
-    await harness.store.getState().openChapter(CHAPTER.bookHash, CHAPTER.sectionIndex, CHAPTER.chapterTitle, 9_000);
+    await harness.store.getState().openNode(CHAPTER.bookHash, CHAPTER.nodeIndex, CHAPTER.nodeTitle, 9_000);
 
     const state = harness.store.getState();
     expect(state.phase).toBe('cached');
     expect(state.content).toBe('### 📌 旧的缓存总结');
     expect(state.cachedSummary).toEqual(cached);
-    expect(state.activeKey).toBe(summaryChapterKey(CHAPTER.bookHash, CHAPTER.sectionIndex));
+    expect(state.activeKey).toBe(summaryNodeKey(CHAPTER.bookHash, CHAPTER.nodeIndex));
     expect(harness.factory).not.toHaveBeenCalled(); // zero model calls
-    expect(harness.get).toHaveBeenCalledWith(CHAPTER.bookHash, CHAPTER.sectionIndex);
+    expect(harness.get).toHaveBeenCalledWith(CHAPTER.bookHash, CHAPTER.nodeIndex);
   });
 
   it('lands on idle with a clean slate when nothing is cached', async () => {
     const harness = makeHarness();
-    await harness.store.getState().openChapter('book-y', 0, '第一章', 123);
+    await harness.store.getState().openNode('book-y', 0, '第一章', 123);
 
     const state = harness.store.getState();
     expect(state.phase).toBe('idle');
     expect(state.content).toBe('');
     expect(state.cachedSummary).toBeNull();
     expect(state.charCount).toBe(123);
-    expect(state.chapterTitle).toBe('第一章');
+    expect(state.nodeTitle).toBe('第一章');
   });
 
   it('switching chapters resets previous content and aborts an in-flight run', async () => {
@@ -139,7 +140,7 @@ describe('openChapter (strictly manual, cache-first)', () => {
     controller.signal.addEventListener('abort', aborted);
     harness.store.setState({ phase: 'generating', content: '部分内容', controller });
 
-    await harness.store.getState().openChapter('book-z', 1, '第二章', 456);
+    await harness.store.getState().openNode('book-z', 1, '第二章', 456);
 
     expect(aborted).toHaveBeenCalled();
     const state = harness.store.getState();
@@ -157,7 +158,7 @@ describe('generate', () => {
       if (phases[phases.length - 1] !== state.phase) phases.push(state.phase);
     });
 
-    await harness.store.getState().openChapter(CHAPTER.bookHash, CHAPTER.sectionIndex, CHAPTER.chapterTitle, 9_000);
+    await harness.store.getState().openNode(CHAPTER.bookHash, CHAPTER.nodeIndex, CHAPTER.nodeTitle, 9_000);
     expect(harness.store.getState().phase).toBe('idle');
 
     const received: string[] = [];
@@ -168,11 +169,11 @@ describe('generate', () => {
           input.onEvent({ type: 'delta', text: piece });
           received.push(piece);
         }
-        const summary: ChapterSummary = {
-          id: chapterSummaryId(input.bookHash, input.sectionIndex),
+        const summary: NodeSummary = {
+          id: nodeSummaryId(input.bookHash, input.nodeIndex),
           bookHash: input.bookHash,
-          sectionIndex: input.sectionIndex,
-          chapterTitle: input.chapterTitle,
+          nodeIndex: input.nodeIndex,
+          nodeTitle: input.nodeTitle,
           modelUsed: input.bookHash === CHAPTER.bookHash ? 'deepseek-chat' : 'other',
           summaryContent: '### 📌 新的总结',
           pipeline: 'single',
@@ -197,15 +198,15 @@ describe('generate', () => {
     unsubscribe();
   });
 
-  it('does not regenerate when a cache appears between openChapter and the click', async () => {
+  it('does not regenerate when a cache appears between openNode and the click', async () => {
     const harness = makeHarness();
-    await harness.store.getState().openChapter(CHAPTER.bookHash, CHAPTER.sectionIndex, CHAPTER.chapterTitle, 9_000);
+    await harness.store.getState().openNode(CHAPTER.bookHash, CHAPTER.nodeIndex, CHAPTER.nodeTitle, 9_000);
 
-    const cached: ChapterSummary = {
-      id: chapterSummaryId(CHAPTER.bookHash, CHAPTER.sectionIndex),
+    const cached: NodeSummary = {
+      id: nodeSummaryId(CHAPTER.bookHash, CHAPTER.nodeIndex),
       bookHash: CHAPTER.bookHash,
-      sectionIndex: CHAPTER.sectionIndex,
-      chapterTitle: CHAPTER.chapterTitle,
+      nodeIndex: CHAPTER.nodeIndex,
+      nodeTitle: CHAPTER.nodeTitle,
       modelUsed: 'deepseek-chat',
       summaryContent: '### 📌 迟到的缓存',
       pipeline: 'single',
@@ -222,11 +223,11 @@ describe('generate', () => {
   });
 
   it('force=true skips the cache, regenerates and overwrites the stored summary', async () => {
-    const old: ChapterSummary = {
-      id: chapterSummaryId(CHAPTER.bookHash, CHAPTER.sectionIndex),
+    const old: NodeSummary = {
+      id: nodeSummaryId(CHAPTER.bookHash, CHAPTER.nodeIndex),
       bookHash: CHAPTER.bookHash,
-      sectionIndex: CHAPTER.sectionIndex,
-      chapterTitle: CHAPTER.chapterTitle,
+      nodeIndex: CHAPTER.nodeIndex,
+      nodeTitle: CHAPTER.nodeTitle,
       modelUsed: 'old-model',
       summaryContent: '### 📌 旧总结',
       pipeline: 'single',
@@ -234,7 +235,7 @@ describe('generate', () => {
       updatedAt: 1,
     };
     const harness = makeHarness([old]);
-    await harness.store.getState().openChapter(CHAPTER.bookHash, CHAPTER.sectionIndex, CHAPTER.chapterTitle, 9_000);
+    await harness.store.getState().openNode(CHAPTER.bookHash, CHAPTER.nodeIndex, CHAPTER.nodeTitle, 9_000);
     expect(harness.store.getState().phase).toBe('cached');
     expect(harness.store.getState().cachedSummary?.modelUsed).toBe('old-model');
 
@@ -242,11 +243,11 @@ describe('generate', () => {
       makeSummarizer(async (input) => {
         input.onEvent({ type: 'stage', stage: 'single' });
         input.onEvent({ type: 'delta', text: '### 📌 重写后的总结' });
-        const summary: ChapterSummary = {
-          id: chapterSummaryId(input.bookHash, input.sectionIndex),
+        const summary: NodeSummary = {
+          id: nodeSummaryId(input.bookHash, input.nodeIndex),
           bookHash: input.bookHash,
-          sectionIndex: input.sectionIndex,
-          chapterTitle: input.chapterTitle,
+          nodeIndex: input.nodeIndex,
+          nodeTitle: input.nodeTitle,
           modelUsed: 'deepseek-chat',
           summaryContent: '### 📌 重写后的总结',
           pipeline: 'single',
@@ -265,17 +266,17 @@ describe('generate', () => {
     expect(state.phase).toBe('cached');
     expect(state.content).toBe('### 📌 重写后的总结');
     expect(state.cachedSummary?.modelUsed).toBe('deepseek-chat');
-    expect(await harness.repository.get(CHAPTER.bookHash, CHAPTER.sectionIndex)).toMatchObject({
+    expect(await harness.repository.get(CHAPTER.bookHash, CHAPTER.nodeIndex)).toMatchObject({
       summaryContent: '### 📌 重写后的总结',
     });
   });
 
   it('stop() aborts: phase aborted, partial content kept, nothing persisted', async () => {
     const harness = makeHarness();
-    await harness.store.getState().openChapter(CHAPTER.bookHash, CHAPTER.sectionIndex, CHAPTER.chapterTitle, 9_000);
+    await harness.store.getState().openNode(CHAPTER.bookHash, CHAPTER.nodeIndex, CHAPTER.nodeTitle, 9_000);
 
     harness.factory.mockImplementation(() => ({
-      summarize: async (input: SummarizeInput): Promise<ChapterSummary> => {
+      summarize: async (input: SummarizeInput): Promise<NodeSummary> => {
         input.onEvent({ type: 'stage', stage: 'single' });
         input.onEvent({ type: 'delta', text: '### 📌 已流出的部分' });
         // Simulate the user pressing stop mid-stream: the stream aborts.
@@ -297,7 +298,7 @@ describe('generate', () => {
 
   it('surfaces model failures as phase error with the message', async () => {
     const harness = makeHarness();
-    await harness.store.getState().openChapter(CHAPTER.bookHash, CHAPTER.sectionIndex, CHAPTER.chapterTitle, 9_000);
+    await harness.store.getState().openNode(CHAPTER.bookHash, CHAPTER.nodeIndex, CHAPTER.nodeTitle, 9_000);
 
     harness.factory.mockImplementation(() => ({
       summarize: async () => {
@@ -316,7 +317,7 @@ describe('generate', () => {
   it('rejects generation with a hint when AI settings are unconfigured', async () => {
     useAISettingsStore.setState({ settings: { ...DEFAULT_AI_SETTINGS } }); // empty apiKey, non-ollama
     const harness = makeHarness();
-    await harness.store.getState().openChapter(CHAPTER.bookHash, CHAPTER.sectionIndex, CHAPTER.chapterTitle, 9_000);
+    await harness.store.getState().openNode(CHAPTER.bookHash, CHAPTER.nodeIndex, CHAPTER.nodeTitle, 9_000);
 
     await harness.store.getState().generate();
 
@@ -331,16 +332,16 @@ describe('generate', () => {
       settings: { ...DEFAULT_AI_SETTINGS, provider: 'ollama', apiKey: '', model: 'llama3' },
     });
     const harness = makeHarness();
-    await harness.store.getState().openChapter(CHAPTER.bookHash, CHAPTER.sectionIndex, CHAPTER.chapterTitle, 9_000);
+    await harness.store.getState().openNode(CHAPTER.bookHash, CHAPTER.nodeIndex, CHAPTER.nodeTitle, 9_000);
 
     harness.factory.mockImplementation(() =>
       makeSummarizer(async (input) => {
         input.onEvent({ type: 'delta', text: '本地模型总结' });
         return {
-          id: chapterSummaryId(input.bookHash, input.sectionIndex),
+          id: nodeSummaryId(input.bookHash, input.nodeIndex),
           bookHash: input.bookHash,
-          sectionIndex: input.sectionIndex,
-          chapterTitle: input.chapterTitle,
+          nodeIndex: input.nodeIndex,
+          nodeTitle: input.nodeTitle,
           modelUsed: 'llama3',
           summaryContent: '本地模型总结',
           pipeline: 'single',
@@ -357,7 +358,7 @@ describe('generate', () => {
 
   it('maps map-reduce progress events onto stageLabel', async () => {
     const harness = makeHarness();
-    await harness.store.getState().openChapter(CHAPTER.bookHash, CHAPTER.sectionIndex, CHAPTER.chapterTitle, 15_000);
+    await harness.store.getState().openNode(CHAPTER.bookHash, CHAPTER.nodeIndex, CHAPTER.nodeTitle, 15_000);
 
     const labels: string[] = [];
     const unsubscribe = harness.store.subscribe((state) => labels.push(state.stageLabel));
@@ -369,11 +370,11 @@ describe('generate', () => {
         input.onEvent({ type: 'progress', stage: 'mapping', index: 2, total: 2 });
         input.onEvent({ type: 'stage', stage: 'reducing' });
         input.onEvent({ type: 'delta', text: '### 📌 整章总结' });
-        const summary: ChapterSummary = {
-          id: chapterSummaryId(input.bookHash, input.sectionIndex),
+        const summary: NodeSummary = {
+          id: nodeSummaryId(input.bookHash, input.nodeIndex),
           bookHash: input.bookHash,
-          sectionIndex: input.sectionIndex,
-          chapterTitle: input.chapterTitle,
+          nodeIndex: input.nodeIndex,
+          nodeTitle: input.nodeTitle,
           modelUsed: 'deepseek-chat',
           summaryContent: '### 📌 整章总结',
           pipeline: 'map-reduce',

@@ -1,11 +1,18 @@
 import type {
   AISettings,
   BookSegmentation,
-  ChapterSummary,
+  NodeSummary,
   Conversation,
   Message,
 } from '@/types/ai';
-import { DEFAULT_AI_SETTINGS, chapterSummaryId } from '@/types/ai';
+import { DEFAULT_AI_SETTINGS, nodeSummaryId } from '@/types/ai';
+import type {
+  AgentTurnTraceRecord,
+  BookPanoramaRecord,
+  BookNodeRecord,
+  ReadingEntityRecord,
+} from '@/types/readingAgent';
+import { bookNodeId } from '@/types/readingAgent';
 import { AI_SETTINGS_KEY, getDatabase, ReadestPlusDatabase, type AISettingsRow } from './database';
 
 /**
@@ -42,23 +49,23 @@ export class BookSegmentationRepository {
   }
 }
 
-export class ChapterSummaryRepository {
+export class NodeSummaryRepository {
   constructor(private readonly db: ReadestPlusDatabase = getDatabase()) {}
 
-  async get(bookHash: string, sectionIndex: number): Promise<ChapterSummary | undefined> {
-    return this.db.chapterSummaries.get(chapterSummaryId(bookHash, sectionIndex));
+  async get(bookHash: string, nodeIndex: number): Promise<NodeSummary | undefined> {
+    return this.db.node_summaries.get(nodeSummaryId(bookHash, nodeIndex));
   }
 
-  async put(summary: ChapterSummary): Promise<void> {
-    await this.db.chapterSummaries.put(summary);
+  async put(summary: NodeSummary): Promise<void> {
+    await this.db.node_summaries.put(summary);
   }
 
-  async remove(bookHash: string, sectionIndex: number): Promise<void> {
-    await this.db.chapterSummaries.delete(chapterSummaryId(bookHash, sectionIndex));
+  async remove(bookHash: string, nodeIndex: number): Promise<void> {
+    await this.db.node_summaries.delete(nodeSummaryId(bookHash, nodeIndex));
   }
 
-  async listByBook(bookHash: string): Promise<ChapterSummary[]> {
-    return this.db.chapterSummaries.where('bookHash').equals(bookHash).toArray();
+  async listByBook(bookHash: string): Promise<NodeSummary[]> {
+    return this.db.node_summaries.where('bookHash').equals(bookHash).toArray();
   }
 }
 
@@ -96,5 +103,90 @@ export class ConversationRepository {
     return (
       await this.db.messages.where('conversationId').equals(conversationId).toArray()
     ).sort((a, b) => a.createdAt - b.createdAt);
+  }
+}
+
+/**
+ * Chapter node persistence (reading-agent design doc §6.1): the unified
+ * global-offset chapter map plus the import-time micro-briefs. Rows are
+ * written by the segmentation pass and updated chapter-by-chapter by the
+ * brief scheduler, so partial updates use `put` on the computed primary key.
+ */
+export class BookNodeRepository {
+  constructor(private readonly db: ReadestPlusDatabase = getDatabase()) {}
+
+  async listByBook(bookHash: string): Promise<BookNodeRecord[]> {
+    const rows = await this.db.book_nodes.where('bookHash').equals(bookHash).toArray();
+    return rows.sort((a, b) => a.nodeIndex - b.nodeIndex);
+  }
+
+  async bulkPut(nodes: BookNodeRecord[]): Promise<void> {
+    if (nodes.length === 0) return;
+    await this.db.book_nodes.bulkPut(nodes);
+  }
+
+  async put(node: BookNodeRecord): Promise<void> {
+    await this.db.book_nodes.put(node);
+  }
+
+  async get(bookHash: string, nodeIndex: number): Promise<BookNodeRecord | undefined> {
+    return this.db.book_nodes.get(bookNodeId(bookHash, nodeIndex));
+  }
+
+  async deleteByBook(bookHash: string): Promise<void> {
+    const rows = await this.db.book_nodes.where('bookHash').equals(bookHash).toArray();
+    await this.db.book_nodes.bulkDelete(rows.map((row) => row.nodeId));
+  }
+}
+
+/** Whole-book panorama portrait store (one row per book). */
+export class BookPanoramaRepository {
+  constructor(private readonly db: ReadestPlusDatabase = getDatabase()) {}
+
+  async get(bookHash: string): Promise<BookPanoramaRecord | undefined> {
+    return this.db.book_panoramas.get(bookHash);
+  }
+
+  async put(panorama: BookPanoramaRecord): Promise<void> {
+    await this.db.book_panoramas.put(panorama);
+  }
+
+  async delete(bookHash: string): Promise<void> {
+    await this.db.book_panoramas.delete(bookHash);
+  }
+}
+
+/** Entity glossary store (characters / locations / terms / clues). */
+export class ReadingEntityRepository {
+  constructor(private readonly db: ReadestPlusDatabase = getDatabase()) {}
+
+  async listByBook(bookHash: string): Promise<ReadingEntityRecord[]> {
+    return this.db.reading_entities.where('bookHash').equals(bookHash).toArray();
+  }
+
+  async bulkPut(entities: ReadingEntityRecord[]): Promise<void> {
+    if (entities.length === 0) return;
+    await this.db.reading_entities.bulkPut(entities);
+  }
+}
+
+/** Agent turn traces: persisted tool-call trails behind each assistant reply. */
+export class AgentTraceRepository {
+  constructor(private readonly db: ReadestPlusDatabase = getDatabase()) {}
+
+  async put(trace: AgentTurnTraceRecord): Promise<void> {
+    await this.db.agent_turn_traces.put(trace);
+  }
+
+  async listByMessage(messageId: string): Promise<AgentTurnTraceRecord[]> {
+    return this.db.agent_turn_traces.where('messageId').equals(messageId).toArray();
+  }
+
+  async listByConversation(conversationId: string): Promise<AgentTurnTraceRecord[]> {
+    const rows = await this.db.agent_turn_traces
+      .where('conversationId')
+      .equals(conversationId)
+      .toArray();
+    return rows.sort((a, b) => a.createdAt - b.createdAt);
   }
 }

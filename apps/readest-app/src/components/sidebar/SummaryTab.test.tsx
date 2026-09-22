@@ -5,22 +5,29 @@ import {
   createSummaryStore,
   setSummaryStore,
   useSummaryStore,
-  type SummaryChapterContext,
+  type SummaryNodeContext,
   type SummaryStore,
 } from '@/store/summaryStore';
-import type { ChapterSummarizer, SummarizeInput } from '@/services/summary/summarizer';
-import type { ChapterSummaryRepository } from '@/services/db/repositories';
+import type { NodeSummarizer, SummarizeInput } from '@/services/summary/summarizer';
+import type { NodeSummaryRepository } from '@/services/db/repositories';
 import { useAISettingsStore } from '@/store/aiSettingsStore';
 import { useReaderStore } from '@/store/readerStore';
 import { useSegmentationStore } from '@/store/segmentationStore';
+import {
+  clearAgentBookContext,
+  createAgentBookContext,
+  registerAgentBookContext,
+} from '@/services/agent/agentContext';
+import { bookNodeId, type BookNode } from '@/types/readingAgent';
 import { DEMO_BOOK } from '@/services/reader/demoBook';
-import { chapterSummaryId, DEFAULT_AI_SETTINGS, type ChapterSummary } from '@/types/ai';
+import { nodeSummaryId, DEFAULT_AI_SETTINGS, type NodeSummary } from '@/types/ai';
 
-const CHAPTER: SummaryChapterContext = {
+const CHAPTER: SummaryNodeContext = {
   bookHash: DEMO_BOOK.bookHash,
-  sectionIndex: 1,
+  nodeIndex: 1,
   bookTitle: DEMO_BOOK.title,
-  chapterTitle: '第二章 图书馆的密语',
+  nodeTitle: '第二章 图书馆的密语',
+  kind: 'chapter',
   text: '图书馆的木门在她身后合上时，穹顶上的星图亮了起来，一行行微光顺着书架流淌，像有人在低声读书。林晚握紧了信纸，想起父亲失踪前留下的最后一页手稿。',
   charCount: 71,
 };
@@ -31,17 +38,17 @@ interface Setup {
   put: ReturnType<typeof vi.fn>;
 }
 
-const setup = (seed: ChapterSummary[] = []): Setup => {
+const setup = (seed: NodeSummary[] = []): Setup => {
   const table = new Map(seed.map((summary) => [summary.id, summary]));
-  const put = vi.fn(async (summary: ChapterSummary) => {
+  const put = vi.fn(async (summary: NodeSummary) => {
     table.set(summary.id, summary);
   });
   const repository = {
-    get: async (bookHash: string, sectionIndex: number) => table.get(chapterSummaryId(bookHash, sectionIndex)),
+    get: async (bookHash: string, nodeIndex: number) => table.get(nodeSummaryId(bookHash, nodeIndex)),
     put,
-  } as unknown as ChapterSummaryRepository;
+  } as unknown as NodeSummaryRepository;
   const factory = vi.fn(
-    (): ChapterSummarizer => ({
+    (): NodeSummarizer => ({
       summarize: vi.fn(async () => {
         throw new Error('factory not configured for this test');
       }),
@@ -50,7 +57,7 @@ const setup = (seed: ChapterSummary[] = []): Setup => {
   const store = createSummaryStore({
     summarizerFactory: factory,
     repository,
-    resolveChapter: () => ({ ...CHAPTER }),
+    resolveNode: () => ({ ...CHAPTER }),
   });
   setSummaryStore(store);
   return { store, factory, put };
@@ -60,9 +67,10 @@ beforeEach(() => {
   useReaderStore.setState({
     bookHash: DEMO_BOOK.bookHash,
     bookTitle: DEMO_BOOK.title,
-    sectionIndex: 1,
-    chapterTitle: DEMO_BOOK.sections[1].title,
-    sectionCount: DEMO_BOOK.sections.length,
+    spineIndex: 1,
+    anchor: undefined,
+    nodeTitle: DEMO_BOOK.sections[1].title,
+    spineCount: DEMO_BOOK.sections.length,
   });
   useSegmentationStore.setState({
     segmentation: null,
@@ -79,19 +87,82 @@ beforeEach(() => {
 
 afterEach(() => {
   setSummaryStore(useSummaryStore); // restore the app singleton
+  clearAgentBookContext(DEMO_BOOK.bookHash);
 });
 
 describe('SummaryTab', () => {
-  it('shows the empty-state card (title, char count, ⚡ button) and never auto-generates', async () => {
+  it('shows the hierarchical node-model scope (章 › 节 breadcrumb, no mechanical pills)', async () => {
+    const hierarchical: BookNode[] = [
+      {
+        nodeId: bookNodeId(DEMO_BOOK.bookHash, 0),
+        bookHash: DEMO_BOOK.bookHash,
+        nodeIndex: 0,
+        title: '第一卷 风云之始',
+        startOffset: 0,
+        endOffset: 50,
+        charCount: 50,
+        depth: 0,
+        spineIndex: 0,
+        indexStatus: 'ready',
+      },
+      {
+        nodeId: bookNodeId(DEMO_BOOK.bookHash, 1),
+        bookHash: DEMO_BOOK.bookHash,
+        nodeIndex: 1,
+        title: '第一章 图书馆的密语',
+        startOffset: 50,
+        endOffset: 150,
+        charCount: 100,
+        depth: 1,
+        parentNodeId: bookNodeId(DEMO_BOOK.bookHash, 0),
+        spineIndex: 1,
+        indexStatus: 'ready',
+      },
+    ];
+    registerAgentBookContext(
+      createAgentBookContext({ bookHash: DEMO_BOOK.bookHash, nodes: hierarchical, fullText: 'x'.repeat(150) }),
+    );
     const { factory } = setup();
     render(<SummaryTab />);
 
     await waitFor(() => {
       expect(screen.getByTestId('generate-summary')).toBeTruthy();
     });
-    expect(screen.getByTestId('summary-tab-panel')).toBeTruthy();
-    expect(screen.getByText('第二章 图书馆的密语')).toBeTruthy();
-    // demo chapter 2 extracted char count, resolved from the real chapterSource
+    // Level word pill: the node nested under a 卷 container is a 节.
+    expect(screen.getByTestId('summary-node-kind').textContent).toBe('节');
+    const panel = screen.getByTestId('summary-tab-panel');
+    // Line 1: the 章 ancestor breadcrumb › the current node title.
+    expect(panel.textContent).toContain('《第一卷 风云之始》 ›');
+    expect(panel.textContent).toContain('第一章 图书馆的密语');
+    // Line 2: level word + size facts, and nothing mechanical.
+    const facts = screen.getByTestId('summary-scope-row').textContent ?? '';
+    expect(facts).toContain('节');
+    expect(facts).toContain('约 100 字');
+    expect(facts).not.toContain('当前节点');
+    expect(panel.textContent).not.toContain('个节点');
+    expect(panel.textContent).not.toContain('隶属《');
+    // The viewpoint description names the leaf level and its 章 explicitly.
+    expect(panel.textContent).toContain('当前节《第一章 图书馆的密语》还没有总结');
+    expect(panel.textContent).toContain('⚡ 总结当前节');
+    expect(panel.textContent).toContain('（隶属章《第一卷 风云之始》）');
+    expect(factory).not.toHaveBeenCalled();
+  });
+
+  it('renders the flat single-level case as a 章 viewpoint (no breadcrumb)', async () => {
+    const { factory } = setup();
+    render(<SummaryTab />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('generate-summary')).toBeTruthy();
+    });
+    // With no node model the level falls back to the title: a 章, top of book.
+    expect(screen.getByTestId('summary-node-kind').textContent).toBe('章');
+    const panel = screen.getByTestId('summary-tab-panel');
+    expect(panel.textContent).toContain('第二章 图书馆的密语');
+    expect(panel.textContent).not.toContain('›');
+    expect(panel.textContent).toContain('⚡ 总结当前章');
+    expect(panel.textContent).toContain('（全书一级节点）');
+    // demo chapter 2 extracted char count, resolved from the real nodeSource
     const chapterTwoChars = screen.getByText(/约 \d+ 字/);
     expect(chapterTwoChars.textContent).toMatch(/约 \d{2,} 字/);
 
@@ -108,7 +179,7 @@ describe('SummaryTab', () => {
     });
 
     act(() => {
-      store.getState().openChapter(DEMO_BOOK.bookHash, 0, '扫描版第一章（纯图像）', 12);
+      store.getState().openNode(DEMO_BOOK.bookHash, 0, '扫描版第一章（纯图像）', 12);
     });
 
     expect(await screen.findByTestId('summary-empty-text-warning')).toBeTruthy();
@@ -125,11 +196,11 @@ describe('SummaryTab', () => {
       input.onEvent({ type: 'stage', stage: 'single' });
       input.onEvent({ type: 'delta', text: '### 📌 章节核心要义\n林晚进入图书馆。' });
       await gate;
-      const summary: ChapterSummary = {
-        id: chapterSummaryId(input.bookHash, input.sectionIndex),
+      const summary: NodeSummary = {
+        id: nodeSummaryId(input.bookHash, input.nodeIndex),
         bookHash: input.bookHash,
-        sectionIndex: input.sectionIndex,
-        chapterTitle: input.chapterTitle,
+        nodeIndex: input.nodeIndex,
+        nodeTitle: input.nodeTitle,
         modelUsed: 'deepseek-chat',
         summaryContent: '### 📌 章节核心要义\n林晚进入图书馆。',
         pipeline: 'single',
@@ -185,11 +256,11 @@ describe('SummaryTab', () => {
   });
 
   it('renders a cached summary with the model name and a working regenerate (force) button', async () => {
-    const cached: ChapterSummary = {
-      id: chapterSummaryId(CHAPTER.bookHash, CHAPTER.sectionIndex),
+    const cached: NodeSummary = {
+      id: nodeSummaryId(CHAPTER.bookHash, CHAPTER.nodeIndex),
       bookHash: CHAPTER.bookHash,
-      sectionIndex: CHAPTER.sectionIndex,
-      chapterTitle: CHAPTER.chapterTitle,
+      nodeIndex: CHAPTER.nodeIndex,
+      nodeTitle: CHAPTER.nodeTitle,
       modelUsed: 'deepseek-chat',
       summaryContent: '### 📌 章节核心要义\n cached-content-甲\n\n### 💡 核心概念与关键术语\n- **星图**：图书馆穹顶的照明谜题',
       pipeline: 'map-reduce',
@@ -200,11 +271,11 @@ describe('SummaryTab', () => {
       async (input) => {
         input.onEvent({ type: 'stage', stage: 'single' });
         input.onEvent({ type: 'delta', text: '### 📌 重写后的总结' });
-        const summary: ChapterSummary = {
-          id: chapterSummaryId(input.bookHash, input.sectionIndex),
+        const summary: NodeSummary = {
+          id: nodeSummaryId(input.bookHash, input.nodeIndex),
           bookHash: input.bookHash,
-          sectionIndex: input.sectionIndex,
-          chapterTitle: input.chapterTitle,
+          nodeIndex: input.nodeIndex,
+          nodeTitle: input.nodeTitle,
           modelUsed: 'deepseek-chat',
           summaryContent: '### 📌 重写后的总结',
           pipeline: 'single',
@@ -250,31 +321,31 @@ describe('SummaryTab', () => {
     expect(store.getState().phase).toBe('error');
   });
 
-  it('re-opens (cache check only) when the reader moves to another chapter', async () => {
+  it('re-opens (cache check only) when the reader moves to another node', async () => {
     const { factory, store } = setup();
-    const openChapter = vi.spyOn(store.getState(), 'openChapter');
+    const openNode = vi.spyOn(store.getState(), 'openNode');
 
     render(<SummaryTab />);
     await waitFor(() => screen.getByTestId('generate-summary'));
-    expect(openChapter).toHaveBeenCalledTimes(1);
+    expect(openNode).toHaveBeenCalledTimes(1);
 
     act(() => {
-      useReaderStore.getState().setSection(2, DEMO_BOOK.sections[2].title);
+      useReaderStore.getState().setPosition(2, DEMO_BOOK.sections[2].title);
     });
-    await waitFor(() => expect(openChapter).toHaveBeenCalledTimes(2));
-    expect(factory).not.toHaveBeenCalled(); // chapter switching never generates
-    expect(store.getState().chapterTitle).toBe('第三章 长夜漫漫');
+    await waitFor(() => expect(openNode).toHaveBeenCalledTimes(2));
+    expect(factory).not.toHaveBeenCalled(); // node switching never generates
+    expect(store.getState().nodeTitle).toBe('第三章 长夜漫漫');
   });
 });
 
 /** setup() + a factory behaviour, sharing one injected store. */
 function setupWithFactory(
-  behavior: (input: SummarizeInput) => Promise<ChapterSummary>,
-  seed: ChapterSummary[] = [],
+  behavior: (input: SummarizeInput) => Promise<NodeSummary>,
+  seed: NodeSummary[] = [],
 ): { store: SummaryStore; factory: ReturnType<typeof vi.fn>; put: ReturnType<typeof vi.fn> } {
   const base = setup(seed);
   base.factory.mockImplementation(
-    (): ChapterSummarizer => ({
+    (): NodeSummarizer => ({
       summarize: async (input: SummarizeInput) => behavior(input),
     }),
   );

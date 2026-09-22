@@ -2,6 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import { Eye, EyeOff } from 'lucide-react';
+import { Banner } from '@astryxdesign/core/Banner';
+import { Button } from '@astryxdesign/core/Button';
+import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog';
+import { HStack, VStack } from '@astryxdesign/core/Stack';
+import { IconButton } from '@astryxdesign/core/IconButton';
+import { NumberInput } from '@astryxdesign/core/NumberInput';
+import { Selector } from '@astryxdesign/core/Selector';
+import { TextInput } from '@astryxdesign/core/TextInput';
 import { useAISettingsStore } from '@/store/aiSettingsStore';
 import { MAX_TURNS_PER_TOPIC, MIN_TURNS_PER_TOPIC, type AIProvider, type AISettings } from '@/types/ai';
 import type { AISettingsErrors } from '@/services/ai/validation';
@@ -15,6 +23,13 @@ const PROVIDER_BASE_URL_PRESETS: Record<AIProvider, string> = {
   ollama: 'http://localhost:11434/v1',
 };
 
+const PROVIDER_OPTIONS: Array<{ value: AIProvider; label: string }> = [
+  { value: 'openai-compatible', label: 'OpenAI 兼容接口 (通用)' },
+  { value: 'deepseek', label: 'DeepSeek 官方 API' },
+  { value: 'claude', label: 'Claude（OpenAI 兼容代理）' },
+  { value: 'ollama', label: 'Ollama（本地运行）' },
+];
+
 const TOAST_AUTO_DISMISS_MS = 3_000;
 
 interface AISettingsPanelProps {
@@ -25,7 +40,7 @@ interface AISettingsPanelProps {
 /**
  * AI Provider 配置中心 (design doc 4.1 / ADR 0008): OpenAI-compatible
  * endpoint + credentials + turn quota, persisted as plaintext in IndexedDB
- * and masked in the UI. Rendered as a daisyUI modal over the sidebar.
+ * and masked in the UI. Rendered as a modal dialog over the sidebar.
  */
 export default function AISettingsPanel({ open, onClose }: AISettingsPanelProps) {
   const settings = useAISettingsStore((s) => s.settings);
@@ -39,6 +54,7 @@ export default function AISettingsPanel({ open, onClose }: AISettingsPanelProps)
   const [errors, setErrors] = useState<AISettingsErrors>({});
   const [showKey, setShowKey] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   // Toast auto-dismisses after 3s (manual close button also available).
   useEffect(() => {
@@ -56,8 +72,18 @@ export default function AISettingsPanel({ open, onClose }: AISettingsPanelProps)
     setDraft((current) => ({ ...current, provider, baseUrl: PROVIDER_BASE_URL_PRESETS[provider] }));
 
   const handleSave = async () => {
-    const saveErrors = await save(draft);
-    setErrors(saveErrors);
+    setSaving(true);
+    try {
+      const saveErrors = await save(draft);
+      setErrors(saveErrors);
+      if (Object.keys(saveErrors).length === 0) {
+        window.setTimeout(() => {
+          onClose();
+        }, 1200);
+      }
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleTestConnection = async () => {
@@ -69,163 +95,120 @@ export default function AISettingsPanel({ open, onClose }: AISettingsPanelProps)
     }
   };
 
-  const fieldError = (field: keyof AISettingsErrors) =>
-    errors[field] ? <p className="mt-1 text-xs text-error">{errors[field]}</p> : null;
-
   return (
-    <div className="modal modal-open">
-      <div className="modal-box relative max-w-lg" data-testid="ai-settings-panel">
-        <h3 className="mb-4 text-lg font-bold">AI Provider 设置</h3>
+    <Dialog
+      isOpen
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+      // 'info' purpose: clicking the blank backdrop (or Escape) dismisses the
+      // dialog — drafts are cheap to re-enter and users expect click-away.
+      purpose="info"
+      width={480}
+      padding={0}
+    >
+      <VStack data-testid="ai-settings-panel" gap={4} padding={4}>
+        <DialogHeader title="AI Provider 设置" onOpenChange={(next) => !next && onClose()} />
 
-        <div className="grid gap-3">
-          <label className="form-control">
-            <div className="label pb-1">
-              <span className="label-text">Provider</span>
-            </div>
-            <select
-              className="select w-full"
-              data-testid="provider-select"
-              value={draft.provider}
-              onChange={(event) => changeProvider(event.target.value as AIProvider)}
-            >
-              <option value="openai-compatible">OpenAI 兼容</option>
-              <option value="deepseek">DeepSeek</option>
-              <option value="claude">Claude（OpenAI 代理）</option>
-              <option value="ollama">Ollama（本地）</option>
-            </select>
-            {fieldError('provider')}
-          </label>
+        <VStack gap={3}>
+          <Selector
+            label="服务提供商 (Provider)"
+            data-testid="provider-select"
+            options={PROVIDER_OPTIONS}
+            value={draft.provider}
+            onChange={(value) => changeProvider(value as AIProvider)}
+            status={errors.provider ? { type: 'error', message: errors.provider } : undefined}
+          />
 
-          <label className="form-control">
-            <div className="label pb-1">
-              <span className="label-text">Base URL</span>
-            </div>
-            <input
-              type="text"
-              className="input w-full"
-              data-testid="base-url-input"
-              placeholder="https://api.example.com/v1"
-              value={draft.baseUrl}
-              onChange={(event) => update('baseUrl', event.target.value)}
-            />
-            {fieldError('baseUrl')}
-          </label>
+          <TextInput
+            label="API Base URL"
+            data-testid="base-url-input"
+            placeholder="https://api.example.com/v1"
+            value={draft.baseUrl}
+            onChange={(baseUrl) => update('baseUrl', baseUrl)}
+            status={errors.baseUrl ? { type: 'error', message: errors.baseUrl } : undefined}
+          />
 
-          <label className="form-control">
-            <div className="label pb-1">
-              <span className="label-text">Model ID</span>
-            </div>
-            <input
-              type="text"
-              className="input w-full"
-              data-testid="model-input"
-              placeholder="deepseek-chat / gpt-4o-mini"
-              value={draft.model}
-              onChange={(event) => update('model', event.target.value)}
-            />
-            {fieldError('model')}
-          </label>
+          <TextInput
+            label="Model ID"
+            data-testid="model-input"
+            placeholder="deepseek-chat / gpt-4o-mini"
+            value={draft.model}
+            onChange={(model) => update('model', model)}
+            status={errors.model ? { type: 'error', message: errors.model } : undefined}
+          />
 
-          <div className="form-control">
-            <div className="label pb-1">
-              <span className="label-text">API Key{draft.provider === 'ollama' ? '（本地模型可留空）' : ''}</span>
-            </div>
-            <label className="input flex items-center gap-2">
-              <input
-                type={showKey ? 'text' : 'password'}
-                className="grow"
-                data-testid="api-key-input"
-                placeholder="sk-..."
-                autoComplete="off"
-                value={draft.apiKey}
-                onChange={(event) => update('apiKey', event.target.value)}
-              />
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs"
-                aria-label={showKey ? '隐藏 API Key' : '显示 API Key'}
+          <VStack gap={1}>
+            <HStack gap={1} vAlign="end">
+              <VStack style={{ flex: 1, minWidth: 0 }}>
+                <TextInput
+                  label={draft.provider === 'ollama' ? 'API Key（本地模型可留空）' : 'API Key'}
+                  data-testid="api-key-input"
+                  type={showKey ? 'text' : 'password'}
+                  placeholder="sk-..."
+                  autoComplete="off"
+                  value={draft.apiKey}
+                  onChange={(apiKey) => update('apiKey', apiKey)}
+                  status={errors.apiKey ? { type: 'error', message: errors.apiKey } : undefined}
+                />
+              </VStack>
+              <IconButton
+                label={showKey ? '隐藏 API Key' : '显示 API Key'}
+                variant="ghost"
+                size="sm"
+                icon={showKey ? <EyeOff size={14} aria-hidden /> : <Eye size={14} aria-hidden />}
                 onClick={() => setShowKey((visible) => !visible)}
-              >
-                {showKey ? <EyeOff className="size-4" aria-hidden="true" /> : <Eye className="size-4" aria-hidden="true" />}
-              </button>
-            </label>
-            {fieldError('apiKey')}
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <label className="form-control">
-              <div className="label pb-1">
-                <span className="label-text">Temperature（0 ~ 2）</span>
-              </div>
-              <input
-                type="number"
-                className="input w-full"
-                data-testid="temperature-input"
-                min={0}
-                max={2}
-                step={0.1}
-                value={Number.isFinite(draft.temperature) ? draft.temperature : ''}
-                onChange={(event) => update('temperature', event.target.valueAsNumber)}
               />
-              {fieldError('temperature')}
-            </label>
+            </HStack>
+          </VStack>
 
-            <label className="form-control">
-              <div className="label pb-1">
-                <span className="label-text">轮数配额（{MIN_TURNS_PER_TOPIC} ~ {MAX_TURNS_PER_TOPIC}）</span>
-              </div>
-              <input
-                type="number"
-                className="input w-full"
-                data-testid="max-turns-input"
-                min={MIN_TURNS_PER_TOPIC}
-                max={MAX_TURNS_PER_TOPIC}
-                step={1}
-                value={Number.isInteger(draft.maxTurnsPerTopic) ? draft.maxTurnsPerTopic : ''}
-                onChange={(event) => update('maxTurnsPerTopic', event.target.valueAsNumber)}
-              />
-              {fieldError('maxTurnsPerTopic')}
-            </label>
-          </div>
-        </div>
+          <NumberInput
+            label={`每话题轮数配额（${MIN_TURNS_PER_TOPIC} ~ ${MAX_TURNS_PER_TOPIC} 轮）`}
+            data-testid="max-turns-input"
+            min={MIN_TURNS_PER_TOPIC}
+            max={MAX_TURNS_PER_TOPIC}
+            step={1}
+            isIntegerOnly
+            value={Number.isInteger(draft.maxTurnsPerTopic) ? draft.maxTurnsPerTopic : null}
+            onChange={(maxTurnsPerTopic) => update('maxTurnsPerTopic', maxTurnsPerTopic)}
+            status={errors.maxTurnsPerTopic ? { type: 'error', message: errors.maxTurnsPerTopic } : undefined}
+          />
+        </VStack>
 
-        <div className="modal-action">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>
-            取消
-          </button>
-          <button
-            type="button"
-            className="btn btn-outline"
-            disabled={testing}
+        {/* Action buttons */}
+        <HStack justify="end" gap={2} style={{ borderTop: '1px solid var(--color-border)', paddingTop: 'var(--spacing-3)' }}>
+          <Button label="取消" variant="ghost" size="sm" onClick={onClose} />
+          <Button
+            label={testing ? '测试中…' : '测试连接'}
+            variant="secondary"
+            size="sm"
+            isDisabled={testing || saving}
             onClick={() => void handleTestConnection()}
-          >
-            {testing ? '测试中…' : '测试连接'}
-          </button>
-          <button type="button" className="btn btn-primary" onClick={() => void handleSave()}>
-            保存
-          </button>
-        </div>
+          />
+          <Button
+            label={saving ? '保存中…' : '保存'}
+            variant="primary"
+            size="sm"
+            isDisabled={saving}
+            onClick={() => void handleSave()}
+          />
+        </HStack>
 
+        {/* Toast */}
         {toast && (
-          <div className="toast toast-end toast-bottom">
-            <div
-              className={`alert py-2 ${toast.type === 'success' ? 'alert-success' : 'alert-error'}`}
-              data-testid="ai-settings-toast"
-            >
-              <span>{toast.text}</span>
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs"
-                aria-label="关闭提示"
-                onClick={clearToast}
-              >
-                ✕
-              </button>
-            </div>
-          </div>
+          <Banner
+            data-testid="ai-settings-toast"
+            data-tone={toast.type}
+            status={toast.type === 'success' ? 'success' : 'error'}
+            container="card"
+            collapsible={false}
+            title={toast.text}
+            isDismissable
+            dismissLabel="关闭提示"
+            onDismiss={clearToast}
+          />
         )}
-      </div>
-      <div className="modal-backdrop" onClick={onClose} />
-    </div>
+      </VStack>
+    </Dialog>
   );
 }

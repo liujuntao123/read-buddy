@@ -11,18 +11,44 @@ const historyMessage = (id: number, role: 'user' | 'assistant', content: string)
 });
 
 describe('buildSystemPrompt', () => {
-  it('embeds the exact companion role sentence with a 1-based chapter ordinal', () => {
-    const prompt = buildSystemPrompt({ bookTitle: '迷雾之城', chapterIndex: 2, chapterTitle: '长夜漫漫' });
+  it('names the current node level from the shared vocabulary', () => {
+    const prompt = buildSystemPrompt({
+      bookTitle: '迷雾之城',
+      nodeIndex: 2,
+      nodeTitle: '长夜漫漫',
+      nodeKind: 'chapter',
+    });
     expect(prompt).toContain(
-      '你是一位渊博、敏锐且富有启发性的伴读助手。当前用户正在阅读《迷雾之城》第 3 章《长夜漫漫》。',
+      '你是一位渊博、敏锐且富有启发性的伴读助手。当前用户正在阅读《迷雾之城》的章《长夜漫漫》。',
     );
-    expect(prompt).toContain('第 3 章');
+  });
+
+  it('renders a 节 viewpoint with the 节 level word', () => {
+    const prompt = buildSystemPrompt({
+      bookTitle: '迷雾之城',
+      nodeIndex: 5,
+      nodeTitle: '第三节 雾中钟楼',
+      nodeKind: 'section',
+    });
+    expect(prompt).toContain('当前用户正在阅读《迷雾之城》的节《第三节 雾中钟楼》。');
+    expect(prompt).toContain('请主要围绕当前节的内容展开解答与剖析。');
+  });
+
+  it('falls back to the neutral 节点 wording without a node kind', () => {
+    const prompt = buildSystemPrompt({ bookTitle: '迷雾之城', nodeIndex: 0, nodeTitle: '迷雾之城' });
+    expect(prompt).toContain('当前用户正在阅读《迷雾之城》的节点《迷雾之城》。');
+    expect(prompt).not.toContain('第 1 章');
   });
 
   it('embeds the exact anti-spoiler constraint sentence', () => {
-    const prompt = buildSystemPrompt({ bookTitle: '迷雾之城', chapterIndex: 0, chapterTitle: '迷雾之城' });
+    const prompt = buildSystemPrompt({
+      bookTitle: '迷雾之城',
+      nodeIndex: 0,
+      nodeTitle: '迷雾之城',
+      nodeKind: 'chunk',
+    });
     expect(prompt).toContain(
-      '请主要围绕当前章节的内容展开解答与剖析。除非用户明确要求透露后续情节，否则严禁主动剧透后续章节内容。',
+      '请主要围绕当前段的内容展开解答与剖析。除非用户明确要求透露后续情节，否则严禁主动剧透后续内容。',
     );
   });
 });

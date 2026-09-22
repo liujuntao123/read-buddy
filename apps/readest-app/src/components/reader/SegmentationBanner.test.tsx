@@ -47,8 +47,8 @@ describe('SegmentationBanner', () => {
     render(<SegmentationBanner />);
 
     expect(screen.getByTestId('segmentation-banner')).toBeDefined();
-    expect(screen.getByText('检测到本书无目录，已自动识别 5 个章节，是否应用？')).toBeDefined();
-    expect(screen.getByRole('button', { name: '应用虚拟章节' })).toBeDefined();
+    expect(screen.getByText('检测到本书无目录，已自动识别 5 个节点，是否应用？')).toBeDefined();
+    expect(screen.getByRole('button', { name: '应用识别出的节点' })).toBeDefined();
     expect(screen.getByRole('button', { name: '取消并使用定长分段' })).toBeDefined();
   });
 
@@ -56,7 +56,7 @@ describe('SegmentationBanner', () => {
     seedBanner(5);
     render(<SegmentationBanner />);
 
-    fireEvent.click(screen.getByRole('button', { name: '应用虚拟章节' }));
+    fireEvent.click(screen.getByRole('button', { name: '应用识别出的节点' }));
 
     await waitFor(() => expect(saved.length).toBe(1));
     const persisted = saved[0]!;

@@ -1,92 +1,53 @@
 'use client';
 
 /**
- * 章节总结 Tab (ticket 03, design doc 4.3, ADR 0004).
+ * 章节总结 Tab (ticket 03, design doc 4.3, ADR 0004 + user review).
  *
  * Strictly manual trigger: the component only opens the chapter (cache check)
  * when the reader moves; every model call comes from an explicit button
- * (⚡ 生成本章总结 / 🔄 重新生成) or its retry. The store is reached through
- * `getSummaryStore()` so tests can inject a factory-built store before mount.
+ * (⚡ 生成本章总结 / 🔄 重新生成) or its retry.
+ *
+ * Scope clarity (user review): the summary always targets the **minimal node**
+ * the reader currently has open (CONTEXT.md / ADR 0010) — the 节 of a 章/节
+ * book, the 章 of a single-level book. The header states where the reader is
+ * (章 › 节 breadcrumb + node title) and how big the viewpoint is (level word,
+ * char count, long-document note); the level word always comes from the node
+ * model (`nodeKindLabel`), never from a literal. Engine books whose section
+ * text warms asynchronously get a bounded retry before the "no extractable
+ * text" warning is shown.
  */
-import { useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { Banner } from '@astryxdesign/core/Banner';
+import { Button } from '@astryxdesign/core/Button';
+import { Card } from '@astryxdesign/core/Card';
+import { HStack, VStack } from '@astryxdesign/core/Stack';
+import { Spinner } from '@astryxdesign/core/Spinner';
+import { Text } from '@astryxdesign/core/Text';
+import { Token } from '@astryxdesign/core/Token';
 import { getSummaryStore } from '@/store/summaryStore';
 import { useReaderStore } from '@/store/readerStore';
-import { resolveCurrentChapterText } from '@/services/summary/chapterSource';
+import { getOpenedBook } from '@/services/library/contentRegistry';
+import { resolveCurrentNodeText } from '@/services/summary/nodeSource';
+import {
+  nodeKindLabel,
+  resolveCurrentNode,
+  resolveNodeHierarchy,
+  type NodeHierarchy,
+} from '@/services/bookNodes';
+import { SUMMARY_SINGLE_PASS_MAX_CHARS } from '@/types/ai';
+import MarkdownView from '@/components/common/MarkdownView';
 
-/** Minimal `**bold**` inline renderer — no markdown dependency. */
-function InlineText({ text }: { text: string }) {
-  const parts = text.split('**');
-  if (parts.length <= 1) return <>{text}</>;
-  return (
-    <>
-      {parts.map((part, index) =>
-        index % 2 === 1 ? (
-          <strong key={index}>{part}</strong>
-        ) : (
-          <span key={index}>{part}</span>
-        ),
-      )}
-    </>
-  );
-}
+/** How often the async text warm-up is re-checked before giving up. */
+const TEXT_RETRY_LIMIT = 4;
+const TEXT_RETRY_DELAY_MS = 700;
 
 /**
- * Line-based renderer for the three-part summary: `### ` headings become bold
- * h3 titles, `- ` and `1. ` lines become list items, everything else renders
- * as a pre-wrapped paragraph.
+ * Rich Markdown renderer for the three-part chapter summary.
  */
 export function SummaryBody({ content, streaming = false }: { content: string; streaming?: boolean }) {
-  const lines = content.split('\n');
   return (
-    <div className="space-y-1.5 text-sm leading-relaxed" data-testid="summary-body">
-      {lines.map((line, index) => {
-        const trimmed = line.trim();
-        const key = `${index}:${trimmed.slice(0, 12)}`;
-        if (trimmed === '') return null;
-
-        if (trimmed.startsWith('### ')) {
-          return (
-            <h3 key={key} className="mt-3 text-sm font-bold text-base-content">
-              <InlineText text={trimmed.slice(4)} />
-            </h3>
-          );
-        }
-        if (trimmed.startsWith('- ') || trimmed.startsWith('• ')) {
-          return (
-            <div key={key} className="flex gap-1.5 pl-2">
-              <span aria-hidden="true" className="select-none text-base-content/50">
-                •
-              </span>
-              <p className="min-w-0 flex-1 whitespace-pre-wrap break-words">
-                <InlineText text={trimmed.slice(2)} />
-              </p>
-            </div>
-          );
-        }
-        const ordered = /^(\d+)[.、)]\s+(.*)$/.exec(trimmed);
-        if (ordered) {
-          return (
-            <div key={key} className="flex gap-1.5 pl-2">
-              <span aria-hidden="true" className="select-none text-base-content/50">
-                {ordered[1]}.
-              </span>
-              <p className="min-w-0 flex-1 whitespace-pre-wrap break-words">
-                <InlineText text={ordered[2]} />
-              </p>
-            </div>
-          );
-        }
-        return (
-          <p key={key} className="whitespace-pre-wrap break-words">
-            <InlineText text={trimmed} />
-          </p>
-        );
-      })}
-      {streaming && (
-        <span aria-hidden="true" className="inline-block animate-pulse font-semibold">
-          ▍
-        </span>
-      )}
+    <div data-testid="summary-body" style={{ fontSize: 'var(--font-size-sm)' }}>
+      <MarkdownView content={content} streaming={streaming} />
     </div>
   );
 }
@@ -97,164 +58,289 @@ const formatTimestamp = (ms: number): string => {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
 
+/**
+ * Node-model scope header (CONTEXT.md / ADR 0010): the summary viewpoint is
+ * always the minimal node the reader has open. Two useful lines only —
+ * 1. where: the 章 breadcrumb (omitted when the node *is* a 章) › node title;
+ * 2. how big: the level word from the node model, the char count and the
+ *    long-document note. Position / membership pills said nothing actionable.
+ */
+function ScopeHeader({
+  hierarchy,
+  charCount,
+  titleFallback,
+}: {
+  hierarchy: NodeHierarchy;
+  charCount: number;
+  titleFallback: string;
+}) {
+  const title = hierarchy.title || titleFallback;
+  const { kind, parentTitle } = hierarchy;
+  return (
+    <VStack gap={2} style={{ minWidth: 0 }}>
+      <HStack gap={1} vAlign="center" wrap="wrap" style={{ minWidth: 0 }}>
+        {parentTitle && (
+          <Text type="supporting" color="secondary" maxLines={1} style={{ minWidth: 0 }}>
+            {`《${parentTitle}》 ›`}
+          </Text>
+        )}
+        <Text weight="semibold" maxLines={1} style={{ minWidth: 0, flex: 1 }}>
+          {title}
+        </Text>
+      </HStack>
+      <HStack gap={1} vAlign="center" wrap="wrap" data-testid="summary-scope-row">
+        <Token size="sm" label={nodeKindLabel(kind)} data-testid="summary-node-kind" />
+        {charCount > 0 && <Token size="sm" label={`约 ${charCount.toLocaleString()} 字`} />}
+        {charCount > SUMMARY_SINGLE_PASS_MAX_CHARS && <Token size="sm" label="长文 · 分块提炼后汇总" />}
+      </HStack>
+    </VStack>
+  );
+}
+
 export default function SummaryTab() {
   const useSummary = getSummaryStore();
   const phase = useSummary((s) => s.phase);
   const content = useSummary((s) => s.content);
   const cachedSummary = useSummary((s) => s.cachedSummary);
-  const chapterTitle = useSummary((s) => s.chapterTitle);
+  const nodeTitle = useSummary((s) => s.nodeTitle);
   const charCount = useSummary((s) => s.charCount);
   const stageLabel = useSummary((s) => s.stageLabel);
   const error = useSummary((s) => s.error);
-  const openChapter = useSummary((s) => s.openChapter);
+  const openNode = useSummary((s) => s.openNode);
   const generate = useSummary((s) => s.generate);
   const stop = useSummary((s) => s.stop);
 
   const bookHash = useReaderStore((s) => s.bookHash);
-  const sectionIndex = useReaderStore((s) => s.sectionIndex);
-  const readerChapterTitle = useReaderStore((s) => s.chapterTitle);
+  const spineIndex = useReaderStore((s) => s.spineIndex);
+  const anchor = useReaderStore((s) => s.anchor);
+  const readerNodeTitle = useReaderStore((s) => s.nodeTitle);
+
+  /**
+   * Node-model hierarchy of the current viewpoint (章 › 节 breadcrumb) plus the
+   * node ordinal used as the summary cache key. The ordinal resolution mirrors
+   * `summaryStore.resolveCurrentNodeContext()`: the node model wins over the
+   * physical spine ordinal, so the cache check and the generation address the
+   * exact same row.
+   */
+  const { hierarchy, activeNodeIndex } = useMemo(
+    // Recompute when the reader moves; brief / index updates don't affect it.
+    () => ({
+      hierarchy: resolveNodeHierarchy(),
+      activeNodeIndex: resolveCurrentNode()?.nodeIndex ?? spineIndex,
+    }),
+    [bookHash, spineIndex, anchor, readerNodeTitle],
+  );
+
+  /** Async text warm-up retry bookkeeping, keyed per section. */
+  const [textRetry, setTextRetry] = useState<{ key: string; attempts: number }>({
+    key: '',
+    attempts: 0,
+  });
+  const activeKey = `${bookHash}:${activeNodeIndex}`;
+  const openedBook = bookHash ? getOpenedBook(bookHash) : undefined;
+  const isEngineBook = Boolean(openedBook) && !openedBook!.getMonolithicText;
+  const retriesExhausted =
+    textRetry.key === activeKey && (!isEngineBook || textRetry.attempts >= TEXT_RETRY_LIMIT);
 
   // Cache check only — never auto-generates (ADR 0004).
   useEffect(() => {
     if (!bookHash) return;
-    const { title, charCount: resolved } = resolveCurrentChapterText();
-    void openChapter(bookHash, sectionIndex, readerChapterTitle || title, resolved);
-  }, [bookHash, sectionIndex, readerChapterTitle, openChapter]);
+    const { title, charCount: resolved } = resolveCurrentNodeText();
+    void openNode(bookHash, activeNodeIndex, readerNodeTitle || title, resolved);
+  }, [bookHash, activeNodeIndex, readerNodeTitle, openNode]);
+
+  // Engine books (EPUB/MOBI/…) warm their section text asynchronously: when
+  // the cache check lands with zero text, poll a few times before concluding
+  // there is nothing extractable (previously this flashed the misleading
+  // "图像或字数极少" warning the moment a chapter was entered). TXT / demo
+  // sources resolve synchronously, so they settle immediately.
+  useEffect(() => {
+    if (!bookHash) return;
+    if (textRetry.key !== activeKey) {
+      setTextRetry({ key: activeKey, attempts: 0 });
+      return;
+    }
+    if (!isEngineBook) {
+      if (textRetry.attempts !== TEXT_RETRY_LIMIT) setTextRetry({ key: activeKey, attempts: TEXT_RETRY_LIMIT });
+      return;
+    }
+    if (phase !== 'idle' || charCount !== 0) return;
+    if (textRetry.attempts >= TEXT_RETRY_LIMIT) return;
+    const attempt = textRetry.attempts + 1;
+    setTextRetry({ key: activeKey, attempts: attempt });
+    const timer = window.setTimeout(() => {
+      const { title, charCount: resolved } = resolveCurrentNodeText();
+      void openNode(bookHash, activeNodeIndex, readerNodeTitle || title, resolved);
+    }, TEXT_RETRY_DELAY_MS);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- textRetry is intentionally read once per render cycle
+  }, [phase, charCount, bookHash, activeNodeIndex, readerNodeTitle, openNode, textRetry.key]);
+
+  // Every level word below comes from the node model (CONTEXT.md 词表) — the
+  // component never spells 章 / 节 itself.
+  const scopeLevel = nodeKindLabel(hierarchy.kind);
+  const scopeTitle = hierarchy.title || nodeTitle || '…';
 
   if (!bookHash) {
     return (
-      <div
+      <VStack
         data-testid="summary-tab-panel"
-        className="rounded-box border border-dashed border-base-300 p-4 text-sm text-base-content/60"
+        padding={4}
+        style={{ border: '1px dashed var(--color-border)', borderRadius: 'var(--radius-container)' }}
       >
-        尚未打开书籍，先在阅读器中选择一本书吧。
-      </div>
+        <Text color="secondary">尚未打开书籍，先在阅读器中选择一本书吧。</Text>
+      </VStack>
     );
   }
 
   if (phase === 'checking-cache') {
     return (
-      <div
+      <HStack
         data-testid="summary-tab-panel"
-        className="flex items-center gap-2 rounded-box border border-base-300 p-4 text-sm text-base-content/60"
+        gap={2}
+        vAlign="center"
+        padding={4}
+        style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-container)' }}
       >
-        <span className="loading loading-spinner loading-sm" aria-hidden="true" />
-        正在检查本地总结缓存...
-      </div>
+        <Spinner size="sm" aria-label="检查缓存中" />
+        <Text color="secondary">正在检查本地总结缓存...</Text>
+      </HStack>
     );
   }
 
   if (phase === 'generating') {
     return (
-      <div data-testid="summary-tab-panel" className="card bg-base-100 shadow-sm">
-        <div className="card-body gap-3 p-4">
-          <div className="flex items-start justify-between gap-2">
-            <h3 className="truncate text-sm font-semibold">{chapterTitle || '当前章节'}</h3>
-            <button
-              type="button"
-              data-testid="stop-generation"
-              className="btn btn-outline btn-xs shrink-0"
-              onClick={stop}
-            >
-              ⏹ 停止生成
-            </button>
-          </div>
+      <Card data-testid="summary-tab-panel" padding={4}>
+        <VStack gap={3}>
+          <VStack gap={2} style={{ borderBottom: '1px solid var(--color-border)', paddingBottom: 'var(--spacing-2)' }}>
+            <HStack justify="between" vAlign="center" gap={2}>
+              <ScopeHeader hierarchy={hierarchy} charCount={charCount} titleFallback={nodeTitle} />
+              <Button
+                label="⏹ 停止生成"
+                variant="secondary"
+                size="sm"
+                data-testid="stop-generation"
+                onClick={stop}
+              />
+            </HStack>
+          </VStack>
           {stageLabel && (
-            <div role="status" data-testid="summary-stage-label" className="text-xs text-base-content/60">
-              {stageLabel}
-            </div>
+            <HStack gap={1} vAlign="center" role="status" data-testid="summary-stage-label">
+              <Spinner size="sm" aria-label="生成中" />
+              <Text type="supporting">{stageLabel}</Text>
+            </HStack>
           )}
           {content ? (
             <SummaryBody content={content} streaming />
           ) : (
-            <p className="text-xs text-base-content/50">模型正在阅读本章，稍等片刻...</p>
+            <Text type="supporting" color="secondary">
+              模型正在通读当前{scopeLevel}《{scopeTitle}》全文，稍等片刻...
+            </Text>
           )}
-        </div>
-      </div>
+        </VStack>
+      </Card>
     );
   }
 
   if (phase === 'idle' || phase === 'aborted') {
+    const nodeLabel = `当前${scopeLevel}《${scopeTitle}》`;
     return (
-      <div data-testid="summary-tab-panel" className="card border border-base-300 bg-base-100">
-        <div className="card-body gap-2 p-4">
-          <h3 className="card-title text-sm">{chapterTitle || '当前章节'}</h3>
-          <p className="text-xs text-base-content/60">
-            约 {charCount} 字 · 本章还没有总结
-          </p>
+      <Card data-testid="summary-tab-panel" padding={4}>
+        <VStack gap={2}>
+          <ScopeHeader hierarchy={hierarchy} charCount={charCount} titleFallback={nodeTitle} />
+          <Text type="supporting" color="secondary">
+            {charCount === 0 && !retriesExhausted
+              ? '正在提取当前节点的正文文本...'
+              : `${nodeLabel}还没有总结`}
+          </Text>
           {phase === 'aborted' && (
-            <p data-testid="summary-aborted-note" className="text-xs text-warning">
-              已停止生成，已产出的部分保留在下方，可随时重新发起。
-            </p>
+            <Banner
+              data-testid="summary-aborted-note"
+              status="warning"
+              container="card"
+              collapsible={false}
+              title="已停止生成，已产出的部分保留在下方，可随时重新发起。"
+            />
           )}
           {phase === 'aborted' && content ? <SummaryBody content={content} /> : null}
-          {charCount < 50 ? (
-            <p
+          {charCount < 50 && retriesExhausted ? (
+            <Banner
               data-testid="summary-empty-text-warning"
               role="status"
-              className="alert alert-warning py-2 text-xs"
-            >
-              当前章节正文为图像或字数极少，无法提取纯文本总结。
-            </p>
-          ) : (
-            <button
-              type="button"
-              data-testid="generate-summary"
-              className="btn btn-primary btn-sm mt-1 w-full"
-              onClick={() => void generate()}
-            >
-              ⚡ 生成本章总结
-            </button>
-          )}
-        </div>
-      </div>
+              status="warning"
+              container="card"
+              collapsible={false}
+              title="当前节点正文为图像或字数极少，无法提取纯文本总结。"
+            />
+          ) : charCount >= 50 ? (
+            <>
+              <Button
+                label={`⚡ 总结当前${scopeLevel}`}
+                variant="primary"
+                data-testid="generate-summary"
+                onClick={() => void generate()}
+              />
+              <Text type="supporting" color="secondary">
+                {`将以当前${scopeLevel}《${scopeTitle}》全文为总结视角${
+                  hierarchy.parentTitle
+                    ? `（隶属${nodeKindLabel('chapter')}《${hierarchy.parentTitle}》）`
+                    : '（全书一级节点）'
+                }；要点会讲清来龙去脉。`}
+              </Text>
+            </>
+          ) : null}
+        </VStack>
+      </Card>
     );
   }
 
   if (phase === 'error') {
     return (
-      <div data-testid="summary-tab-panel" role="alert" className="alert alert-error flex flex-col items-start gap-2 text-sm">
-        <div className="flex items-center gap-2">
-          <span aria-hidden="true">⚠️</span>
-          <span data-testid="summary-error-text">{error || '生成失败'}</span>
-        </div>
-        <button
-          type="button"
-          data-testid="retry-summary"
-          className="btn btn-sm"
-          onClick={() => void generate()}
-        >
-          重试
-        </button>
-        <p className="text-xs opacity-80">若持续失败，请去侧栏右上角 ⚙ 检查 AI Provider 配置。</p>
-      </div>
+      <Card data-testid="summary-tab-panel" variant="red" role="alert" padding={4}>
+        <VStack gap={2}>
+          <Text data-testid="summary-error-text">{error || '生成失败'}</Text>
+          <HStack gap={2} vAlign="center">
+            <Button
+              label="重试"
+              variant="secondary"
+              size="sm"
+              data-testid="retry-summary"
+              onClick={() => void generate()}
+            />
+            <Text type="supporting" color="secondary">
+              若持续失败，请去侧栏右上角 ⚙ 检查 AI Provider 配置。
+            </Text>
+          </HStack>
+        </VStack>
+      </Card>
     );
   }
 
   // phase === 'done' (transient) | 'cached'
   return (
-    <div data-testid="summary-tab-panel" className="card bg-base-100 shadow-sm">
-      <div className="card-body gap-2 p-4">
-        <div className="flex items-start justify-between gap-2">
-          <h3 className="truncate text-sm font-semibold">{chapterTitle || cachedSummary?.chapterTitle}</h3>
-          <button
-            type="button"
-            data-testid="regenerate-summary"
-            className="btn btn-ghost btn-xs shrink-0"
-            title="丢弃当前总结并重新生成"
-            onClick={() => void generate(true)}
-          >
-            🔄 重新生成
-          </button>
-        </div>
-        {cachedSummary && (
-          <p className="text-xs text-base-content/50">
-            模型 {cachedSummary.modelUsed} · 更新于 {formatTimestamp(cachedSummary.updatedAt)}
-            {cachedSummary.pipeline === 'map-reduce' ? ' · 长章节分块汇总' : ''}
-          </p>
-        )}
+    <Card data-testid="summary-tab-panel" padding={4}>
+      <VStack gap={2}>
+        <VStack gap={2} style={{ borderBottom: '1px solid var(--color-border)', paddingBottom: 'var(--spacing-2)' }}>
+          <HStack justify="between" vAlign="start" gap={2}>
+            <ScopeHeader hierarchy={hierarchy} charCount={charCount} titleFallback={nodeTitle || cachedSummary?.nodeTitle || ''} />
+            <Button
+              label="🔄 重新生成"
+              variant="ghost"
+              size="sm"
+              data-testid="regenerate-summary"
+              tooltip="丢弃当前总结并重新生成"
+              onClick={() => void generate(true)}
+            />
+          </HStack>
+          {cachedSummary && (
+            <Text type="supporting" maxLines={1}>
+              模型 {cachedSummary.modelUsed} · 更新于 {formatTimestamp(cachedSummary.updatedAt)}
+              {cachedSummary.pipeline === 'map-reduce' ? ' · 分块汇总' : ''}
+            </Text>
+          )}
+        </VStack>
         <SummaryBody content={content} />
-      </div>
-    </div>
+      </VStack>
+    </Card>
   );
 }

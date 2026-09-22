@@ -35,10 +35,9 @@ describe('AISidebar responsive drawer mode', () => {
     useAISidebarStore.setState({ expanded: true });
     render(<AISidebar />);
 
-    const sidebar = screen.getByTestId('ai-sidebar') as HTMLElement;
-    expect(sidebar.classList.contains('fixed')).toBe(false);
-    expect(sidebar.classList.contains('relative')).toBe(true);
-    expect(sidebar.style.width).toBe('400px');
+    const sidebar = screen.getByTestId('ai-sidebar');
+    expect(sidebar.getAttribute('data-mode')).toBe('inline');
+    expect((sidebar as HTMLElement).style.width).toBe('400px');
     expect(screen.getByTestId('sidebar-resize-handle')).toBeTruthy();
     expect(screen.queryByTestId('sidebar-overlay')).toBeNull();
   });
@@ -48,17 +47,13 @@ describe('AISidebar responsive drawer mode', () => {
     useAISidebarStore.setState({ expanded: true });
     render(<AISidebar />);
 
-    const sidebar = screen.getByTestId('ai-sidebar') as HTMLElement;
-    expect(sidebar.classList.contains('fixed')).toBe(true);
-    expect(sidebar.className).toContain('w-[86vw]');
-    expect(sidebar.className).toContain('max-w-[400px]');
-    expect(sidebar.className).toContain('transition-transform');
-    // Drawer is fixed-width: no inline width and no drag handle.
-    expect(sidebar.style.width).toBe('');
+    const sidebar = screen.getByTestId('ai-sidebar');
+    expect(sidebar.getAttribute('data-mode')).toBe('drawer');
+    // Drawer is fixed-width (86vw, capped at 400px) with no drag handle.
+    expect((sidebar as HTMLElement).style.width).toBe('86vw');
     expect(screen.queryByTestId('sidebar-resize-handle')).toBeNull();
 
     const overlay = screen.getByTestId('sidebar-overlay');
-    expect(overlay.className).toContain('bg-black/40');
     expect(overlay.getAttribute('aria-hidden')).toBe('true');
   });
 
@@ -83,12 +78,12 @@ describe('AISidebar responsive drawer mode', () => {
     mockMatchMedia(true);
     useAISidebarStore.setState({ expanded: true });
     const first = render(<AISidebar />);
-    expect(screen.getByTestId('ai-sidebar').classList.contains('fixed')).toBe(true);
+    expect(screen.getByTestId('ai-sidebar').getAttribute('data-mode')).toBe('drawer');
     first.unmount();
 
     mockMatchMedia(false);
     render(<AISidebar />);
-    expect(screen.getByTestId('ai-sidebar').classList.contains('fixed')).toBe(false);
+    expect(screen.getByTestId('ai-sidebar').getAttribute('data-mode')).toBe('inline');
     expect(screen.queryByTestId('sidebar-overlay')).toBeNull();
   });
 
@@ -97,13 +92,13 @@ describe('AISidebar responsive drawer mode', () => {
     render(<Workspace />);
 
     fireEvent.click(screen.getByRole('button', { name: '切换 AI 侧边栏' }));
-    expect(screen.getByTestId('ai-sidebar').classList.contains('fixed')).toBe(true);
+    expect(screen.getByTestId('ai-sidebar').getAttribute('data-mode')).toBe('drawer');
     expect(screen.getByTestId('sidebar-overlay')).toBeTruthy();
     // Ticket 06: startup lands on the bookshelf (flex-filled main pane, no
     // auto-loaded demo book any more); the reader fills the same slot once a
     // library book is opened.
     const mainPane = screen.getByTestId('bookshelf') as HTMLElement;
-    expect(mainPane.className).toContain('flex-1');
+    expect(mainPane.style.flex).toContain('1');
     expect(screen.queryByTestId('reader-pane')).toBeNull();
     // The theme switch from ticket 05 lives in the header beside the toggle.
     expect(screen.getByTestId('theme-toggle')).toBeTruthy();
@@ -114,7 +109,7 @@ describe('AISidebar responsive drawer mode', () => {
     render(<Workspace />);
 
     fireEvent.click(screen.getByRole('button', { name: '切换 AI 侧边栏' }));
-    expect(screen.getByTestId('ai-sidebar').classList.contains('fixed')).toBe(false);
+    expect(screen.getByTestId('ai-sidebar').getAttribute('data-mode')).toBe('inline');
     expect(screen.queryByTestId('sidebar-overlay')).toBeNull();
   });
 });

@@ -1,58 +1,63 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
-import ThemeToggle, { readStoredTheme, THEME_STORAGE_KEY } from './ThemeToggle';
+import ThemeToggle from './ThemeToggle';
+import { READING_THEME_CHANGE_EVENT, THEME_STORAGE_KEY, type ReadingTheme } from '@/theme/readingTheme';
+
+const radiobutton = (name: string) => screen.getByRole('radio', { name });
 
 beforeEach(() => {
   window.localStorage.clear();
-  document.documentElement.setAttribute('data-theme', 'light');
 });
 
 describe('ThemeToggle', () => {
-  it('renders the three theme buttons and defaults to 日间模式', () => {
+  it('renders the three theme options and defaults to 日间模式', () => {
     render(<ThemeToggle />);
-    expect(screen.getByRole('button', { name: '日间模式' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '护眼模式' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '夜间模式' })).toBeTruthy();
+    expect(screen.getByTestId('theme-toggle').getAttribute('role')).toBe('radiogroup');
+    expect(screen.getByRole('radio', { name: '日间模式' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: '护眼模式' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: '夜间模式' })).toBeTruthy();
 
-    const active = screen.getByRole('button', { name: '日间模式' });
-    expect(active.getAttribute('aria-pressed')).toBe('true');
-    expect(active.className).toContain('btn-active');
-    expect(screen.getByRole('button', { name: '护眼模式' }).getAttribute('aria-pressed')).toBe('false');
-    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(radiobutton('日间模式').getAttribute('aria-checked')).toBe('true');
+    expect(radiobutton('护眼模式').getAttribute('aria-checked')).toBe('false');
   });
 
-  it('switches to sepia, applies html[data-theme] and persists to localStorage', () => {
-    render(<ThemeToggle />);
-    fireEvent.click(screen.getByRole('button', { name: '护眼模式' }));
+  it('switches to sepia, broadcasts the change and persists to localStorage', () => {
+    const changes: ReadingTheme[] = [];
+    const onChange = (event: Event) => {
+      changes.push((event as CustomEvent<ReadingTheme>).detail);
+    };
+    window.addEventListener(READING_THEME_CHANGE_EVENT, onChange);
 
-    expect(document.documentElement.dataset.theme).toBe('sepia');
+    render(<ThemeToggle />);
+    fireEvent.click(radiobutton('护眼模式'));
+
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe('sepia');
-    expect(screen.getByRole('button', { name: '护眼模式' }).className).toContain('btn-active');
-    expect(screen.getByRole('button', { name: '日间模式' }).className).not.toContain('btn-active');
+    expect(changes).toEqual(['sepia']);
+    expect(radiobutton('护眼模式').getAttribute('aria-checked')).toBe('true');
+    expect(radiobutton('日间模式').getAttribute('aria-checked')).toBe('false');
+    window.removeEventListener(READING_THEME_CHANGE_EVENT, onChange);
   });
 
   it('switches to dark and back to light', () => {
     render(<ThemeToggle />);
-    fireEvent.click(screen.getByRole('button', { name: '夜间模式' }));
-    expect(document.documentElement.dataset.theme).toBe('dark');
+    fireEvent.click(radiobutton('夜间模式'));
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe('dark');
+    expect(radiobutton('夜间模式').getAttribute('aria-checked')).toBe('true');
 
-    fireEvent.click(screen.getByRole('button', { name: '日间模式' }));
-    expect(document.documentElement.dataset.theme).toBe('light');
+    fireEvent.click(radiobutton('日间模式'));
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe('light');
+    expect(radiobutton('日间模式').getAttribute('aria-checked')).toBe('true');
   });
 
   it('restores the persisted theme on a fresh mount', () => {
     window.localStorage.setItem(THEME_STORAGE_KEY, 'dark');
     render(<ThemeToggle />);
-    expect(document.documentElement.dataset.theme).toBe('dark');
-    expect(screen.getByRole('button', { name: '夜间模式' }).getAttribute('aria-pressed')).toBe('true');
+    expect(radiobutton('夜间模式').getAttribute('aria-checked')).toBe('true');
   });
 
   it('falls back to light for an unknown stored value', () => {
     window.localStorage.setItem(THEME_STORAGE_KEY, 'neon-pink');
-    expect(readStoredTheme()).toBe('light');
     render(<ThemeToggle />);
-    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(radiobutton('日间模式').getAttribute('aria-checked')).toBe('true');
   });
 });

@@ -1,7 +1,10 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { GripVertical, Settings, X } from 'lucide-react';
+import { GripVertical, MessageSquare, Settings2, Sparkles, X } from 'lucide-react';
+import { IconButton } from '@astryxdesign/core/IconButton';
+import { Tab, TabList } from '@astryxdesign/core/TabList';
+import { HStack, VStack } from '@astryxdesign/core/Stack';
 import { useAISidebarStore } from '@/store/aiSidebarStore';
 import { useViewportWidth } from '@/hooks/useViewportWidth';
 import AISettingsPanel from '@/components/settings/AISettingsPanel';
@@ -70,22 +73,34 @@ export default function AISidebar() {
   return (
     <>
       {isCompact && (
-        <div
+        <VStack
           data-testid="sidebar-overlay"
           aria-hidden="true"
-          className="fixed inset-0 z-30 bg-black/40"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 30,
+            background: 'var(--color-overlay)',
+          }}
           onClick={() => setExpanded(false)}
         />
       )}
       <aside
         data-testid="ai-sidebar"
         aria-label="AI 伴读侧边栏"
-        className={
-          isCompact
-            ? 'fixed inset-y-0 right-0 z-40 flex w-[86vw] max-w-[400px] flex-col border-l border-base-300 bg-base-100 shadow-2xl transition-transform duration-200'
-            : 'relative flex shrink-0 flex-col border-l border-base-300 bg-base-100'
-        }
-        style={isCompact ? undefined : { width: `${width}px` }}
+        data-mode={isCompact ? 'drawer' : 'inline'}
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          flexShrink: 0,
+          zIndex: isCompact ? 40 : undefined,
+          position: isCompact ? 'fixed' : 'relative',
+          ...(isCompact
+            ? { insetBlock: 0, insetInlineEnd: 0, width: '86vw', maxWidth: 400 }
+            : { width: `${width}px` }),
+          borderInlineStart: '1px solid var(--color-border)',
+          background: 'var(--color-background-surface)',
+        }}
       >
         {!isCompact && (
           <div
@@ -93,60 +108,78 @@ export default function AISidebar() {
             role="separator"
             aria-orientation="vertical"
             aria-label="拖拽调整侧栏宽度"
-            className="absolute inset-y-0 left-0 z-10 flex w-3 cursor-col-resize touch-none select-none items-center justify-center"
+            style={{
+              position: 'absolute',
+              insetBlock: 0,
+              insetInlineStart: 0,
+              zIndex: 10,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 12,
+              cursor: 'col-resize',
+              touchAction: 'none',
+              userSelect: 'none',
+            }}
             onPointerDown={beginDrag}
             onPointerMove={moveDrag}
             onPointerUp={endDrag}
             onPointerCancel={endDrag}
           >
-            <GripVertical className="size-3.5 text-base-content/40" aria-hidden="true" />
+            <GripVertical size={14} aria-hidden />
           </div>
         )}
 
-        <div className="flex items-center justify-between gap-2 border-b border-base-300 px-2 py-2 pl-5">
-          <div role="tablist" aria-label="AI 侧边栏视图" className="tabs tabs-box tabs-sm">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'summary'}
-              className={`tab ${activeTab === 'summary' ? 'tab-active' : ''}`}
-              onClick={() => setActiveTab('summary')}
-            >
-              总结
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'chat'}
-              className={`tab ${activeTab === 'chat' ? 'tab-active' : ''}`}
-              onClick={() => setActiveTab('chat')}
-            >
-              对话
-            </button>
-          </div>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              aria-label="AI 设置"
-              title="AI 设置"
+        <HStack
+          height={44}
+          vAlign="center"
+          justify="between"
+          gap={2}
+          style={{
+            paddingInline: 'var(--spacing-5) var(--spacing-3)',
+            borderBottom: '1px solid var(--color-border)',
+          }}
+        >
+          <TabList
+            role="tablist"
+            aria-label="AI 侧边栏视图"
+            value={activeTab}
+            onChange={(next) => setActiveTab(next as 'summary' | 'chat')}
+            size="sm"
+          >
+            <Tab value="summary" label="总结" panelId="ai-panel-summary" icon={<Sparkles size={12} aria-hidden />} />
+            <Tab value="chat" label="伴读" panelId="ai-panel-chat" icon={<MessageSquare size={12} aria-hidden />} />
+          </TabList>
+          <HStack gap={1} vAlign="center">
+            <IconButton
+              label="AI 设置"
+              variant="ghost"
+              size="sm"
+              tooltip="AI Provider 设置"
+              icon={<Settings2 size={14} aria-hidden />}
               onClick={() => setSettingsOpen(true)}
-            >
-              <Settings className="size-4" aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              aria-label="关闭 AI 侧边栏"
-              title="关闭 AI 侧边栏"
+            />
+            <IconButton
+              label="关闭 AI 侧边栏"
+              variant="ghost"
+              size="sm"
+              tooltip="关闭侧边栏"
+              icon={<X size={14} aria-hidden />}
               onClick={() => setExpanded(false)}
-            >
-              <X className="size-4" aria-hidden="true" />
-            </button>
-          </div>
-        </div>
+            />
+          </HStack>
+        </HStack>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        <div
+          id={`ai-panel-${activeTab}`}
+          role="tabpanel"
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: 'auto',
+            padding: 'var(--spacing-3)',
+          }}
+        >
           {activeTab === 'summary' ? <SummaryTab /> : <ChatTab />}
         </div>
 

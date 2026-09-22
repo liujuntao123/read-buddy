@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { StreamTextFn } from '@/services/ai/streamClient';
-import type { ChapterSummaryRepository } from '@/services/db/repositories';
-import { chapterSummaryId, type AISettings, type ChapterSummary } from '@/types/ai';
-import { createChapterSummarizer, type SummarizerEvent } from './summarizer';
+import type { NodeSummaryRepository } from '@/services/db/repositories';
+import { nodeSummaryId, type AISettings, type NodeSummary } from '@/types/ai';
+import { createNodeSummarizer, type SummarizerEvent } from './summarizer';
 
 const SETTINGS: AISettings = {
   provider: 'deepseek',
@@ -32,32 +32,33 @@ const makeStream = (scripts: string[][]): { stream: StreamTextFn; calls: Recorde
 };
 
 const makeRepository = () => {
-  const saved: ChapterSummary[] = [];
+  const saved: NodeSummary[] = [];
   const repository = {
-    get: async (): Promise<ChapterSummary | undefined> => undefined,
-    put: async (summary: ChapterSummary) => {
+    get: async (): Promise<NodeSummary | undefined> => undefined,
+    put: async (summary: NodeSummary) => {
       saved.push(summary);
     },
-  } as unknown as ChapterSummaryRepository;
+  } as unknown as NodeSummaryRepository;
   return { repository, saved };
 };
 
 const INPUT = (text: string, signal: AbortSignal, onEvent: (e: SummarizerEvent) => void) => ({
   bookHash: 'book',
-  sectionIndex: 0,
-  chapterTitle: '第一章 迷雾之城',
+  nodeIndex: 0,
+  nodeTitle: '第一章 迷雾之城',
+  nodeKind: 'chapter' as const,
   bookTitle: '迷雾之城（演示书）',
   text,
   signal,
   onEvent,
 });
 
-describe('createChapterSummarizer', () => {
+describe('createNodeSummarizer', () => {
   it('single-passes an 8,000-char chapter: one stream call, persisted, deltas join into the content', async () => {
     const script = ['### 📌 ', '章节核心要义', '\n正文行'];
     const { stream, calls } = makeStream([script]);
     const { repository, saved } = makeRepository();
-    const summarizer = createChapterSummarizer({ stream, settings: SETTINGS, repository });
+    const summarizer = createNodeSummarizer({ stream, settings: SETTINGS, repository });
 
     const events: SummarizerEvent[] = [];
     const controller = new AbortController();
@@ -73,7 +74,7 @@ describe('createChapterSummarizer', () => {
 
     expect(summary.pipeline).toBe('single');
     expect(summary.id).toBe('book:0');
-    expect(summary.chapterTitle).toBe('第一章 迷雾之城');
+    expect(summary.nodeTitle).toBe('第一章 迷雾之城');
     expect(summary.modelUsed).toBe('deepseek-chat');
     expect(summary.summaryContent).toBe('### 📌 章节核心要义\n正文行');
 
@@ -84,7 +85,7 @@ describe('createChapterSummarizer', () => {
 
     expect(saved).toHaveLength(1);
     expect(saved[0]).toEqual(summary);
-    expect(saved[0].id).toBe(chapterSummaryId('book', 0));
+    expect(saved[0].id).toBe(nodeSummaryId('book', 0));
   });
 
   it('map-reduces a 15,000-char chapter: 2 map + 1 reduce calls, progress (1,2)(2,2), deltas only from reduce', async () => {
@@ -94,7 +95,7 @@ describe('createChapterSummarizer', () => {
       ['### 📌 ', '整章核心要义'],
     ]);
     const { repository, saved } = makeRepository();
-    const summarizer = createChapterSummarizer({ stream, settings: SETTINGS, repository });
+    const summarizer = createNodeSummarizer({ stream, settings: SETTINGS, repository });
 
     const events: SummarizerEvent[] = [];
     const controller = new AbortController();
@@ -109,7 +110,7 @@ describe('createChapterSummarizer', () => {
     // Reduce sees both sub-summaries.
     expect(calls[2].prompt).toContain('守夜人发现星图移动。');
     expect(calls[2].prompt).toContain('林晚找到父亲手稿。');
-    expect(calls[2].prompt).toContain('### 📌 章节核心要义');
+    expect(calls[2].prompt).toContain('### 📌 核心要义');
     // Every call carries the abort signal.
     calls.forEach((call) => expect(call.signal).toBe(controller.signal));
 
@@ -148,7 +149,7 @@ describe('createChapterSummarizer', () => {
       throw new DOMException('Aborted', 'AbortError');
     };
     const { repository, saved } = makeRepository();
-    const summarizer = createChapterSummarizer({ stream, settings: SETTINGS, repository });
+    const summarizer = createNodeSummarizer({ stream, settings: SETTINGS, repository });
 
     const controller = new AbortController();
     await expect(
@@ -162,7 +163,7 @@ describe('createChapterSummarizer', () => {
   it('aborts between map calls when the user signals stop: no further model call, nothing persisted', async () => {
     const { stream, calls } = makeStream([['子摘要一'], ['子摘要二']]);
     const { repository, saved } = makeRepository();
-    const summarizer = createChapterSummarizer({ stream, settings: SETTINGS, repository });
+    const summarizer = createNodeSummarizer({ stream, settings: SETTINGS, repository });
 
     const controller = new AbortController();
     await expect(
@@ -180,7 +181,7 @@ describe('createChapterSummarizer', () => {
   it('refuses to start at all when the signal is already aborted', async () => {
     const { stream, calls } = makeStream([['never']]);
     const { repository, saved } = makeRepository();
-    const summarizer = createChapterSummarizer({ stream, settings: SETTINGS, repository });
+    const summarizer = createNodeSummarizer({ stream, settings: SETTINGS, repository });
 
     const controller = new AbortController();
     controller.abort();
@@ -196,7 +197,7 @@ describe('createChapterSummarizer', () => {
       throw new Error('boom: 401 unauthorized');
     };
     const { repository, saved } = makeRepository();
-    const summarizer = createChapterSummarizer({ stream, settings: SETTINGS, repository });
+    const summarizer = createNodeSummarizer({ stream, settings: SETTINGS, repository });
 
     const controller = new AbortController();
     await expect(

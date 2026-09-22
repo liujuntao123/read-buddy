@@ -58,9 +58,10 @@ describe('validateAISettings', () => {
       expect(validateAISettings({ ...valid(), temperature: 2.01 }).temperature).toBeTruthy();
     });
 
-    it('accepts the 0 and 2 boundaries', () => {
+    it('accepts the 0 and 2 boundaries and undefined', () => {
       expect(validateAISettings({ ...valid(), temperature: 0 }).temperature).toBeUndefined();
       expect(validateAISettings({ ...valid(), temperature: 2 }).temperature).toBeUndefined();
+      expect(validateAISettings({ ...valid(), temperature: undefined }).temperature).toBeUndefined();
     });
 
     it('rejects NaN', () => {

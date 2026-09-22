@@ -1,55 +1,105 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { Banner } from '@astryxdesign/core/Banner';
+import { VStack } from '@astryxdesign/core/Stack';
+import { Text } from '@astryxdesign/core/Text';
 import { useReaderStore } from '@/store/readerStore';
 import { useSegmentationStore } from '@/store/segmentationStore';
-import { DEMO_BOOK, DEMO_MONOLITHIC_TXT, type DemoSection } from '@/services/reader/demoBook';
+import { useLibraryStore } from '@/store/libraryStore';
+import { DEMO_MONOLITHIC_TXT, type DemoSection } from '@/services/reader/demoBook';
 import { type QuickAction } from '@/services/chat/quickActions';
+import { fontStackByKey, useReaderSettingsStore } from '@/store/readerSettingsStore';
+import { subscribeLocate } from '@/services/reader/readerLink';
+import { highlightSnippet } from '@/services/reader/highlight';
 import SegmentationBanner from './SegmentationBanner';
 import SelectionToolbar from './SelectionToolbar';
 import { readTextSelection, useTextSelection } from '@/hooks/useTextSelection';
 import { useQuickActions } from '@/hooks/useQuickActions';
 
-/** Demo hash for the monolithic no-TOC TXT fixture (design doc 4.2 flow). */
-const DEMO_MONOLITHIC_HASH = 'demo-monolithic';
+/** Article column: a capped measure keeps prose lines readable. */
+const ARTICLE_MEASURE = 672;
 
 /**
- * Placeholder reading viewport. Renders demo-book sections as selectable
- * text so tickets 02/05 can exercise extraction and selection features
- * before Foliate is wired in. When a segmentation exists for the active
- * book, navigation switches to the Virtual Section list and the article
- * is sliced from the monolithic text by charOffset (ticket 02 "映射进阅读进度").
+ * Scroll reading viewport for TXT / demo books. Chapter navigation lives in
+ * the unified HeaderBar; this pane renders the current (virtual) section as
+ * selectable text. When a segmentation exists for the active book, the
+ * article is sliced from the monolithic text by charOffset (ticket 02
+ * "映射进阅读进度").
  */
-export default function ReaderPane({ sections, monolithicText }: { sections: DemoSection[]; monolithicText?: string }) {
+export default function ReaderPane({
+  sections,
+  monolithicText,
+}: {
+  sections: DemoSection[];
+  monolithicText?: string;
+}) {
   const bookHash = useReaderStore((s) => s.bookHash);
-  const sectionIndex = useReaderStore((s) => s.sectionIndex);
-  const setSection = useReaderStore((s) => s.setSection);
+  const spineIndex = useReaderStore((s) => s.spineIndex);
+  const setPosition = useReaderStore((s) => s.setPosition);
   const loadBook = useReaderStore((s) => s.loadBook);
   const segmentation = useSegmentationStore((s) => s.segmentation);
-  const scanAndPrompt = useSegmentationStore((s) => s.scanAndPrompt);
+  const typography = useReaderSettingsStore((s) => s.typography);
   const [toast, setToast] = useState<string | null>(null);
   const lastToastKey = useRef<string | null>(null);
   const articleRef = useRef<HTMLElement | null>(null);
   const { selection, close, reset } = useTextSelection(articleRef);
   const runQuickAction = useQuickActions();
 
+  // Reader typography (font size / family / line height / paragraph spacing)
+  // applies to the TXT scroll article just like to engine chapters.
+  const typoStyle = {
+    fontSize: `${typography.fontSize}px`,
+    fontFamily: fontStackByKey(typography.fontFamily),
+    lineHeight: typography.lineHeight,
+  } as const;
+  const paragraphStyle = { marginTop: `${typography.paragraphSpacing}em` } as const;
+
   // Virtual-section mode: the segmentation belongs to the book being read.
   const virtualSections =
     segmentation && segmentation.bookHash === bookHash ? segmentation.virtualSections : [];
   const isVirtual = virtualSections.length > 0;
-  const currentVirtual = isVirtual ? (virtualSections[sectionIndex] ?? null) : null;
-  const section = !isVirtual ? sections[sectionIndex] : undefined;
-  const totalSections = isVirtual ? virtualSections.length : sections.length;
+  const currentVirtual = isVirtual ? (virtualSections[spineIndex] ?? null) : null;
+  const section = !isVirtual ? sections[spineIndex] : undefined;
 
   // Virtual-section text source: the opened book's monolithic text (real TXT
-  // books), falling back to the demo fixture for the dev demo button path.
+  // books), falling back to the demo fixture for the dev demo flow.
   const virtualSource = monolithicText ?? DEMO_MONOLITHIC_TXT;
   const virtualText = currentVirtual
     ? virtualSource.slice(
         currentVirtual.charOffset,
-        virtualSections[sectionIndex + 1]?.charOffset ?? virtualSource.length,
+        virtualSections[spineIndex + 1]?.charOffset ?? virtualSource.length,
       )
     : '';
+
+  // Agent → reader jump (reading-agent doc §5.3 locate_in_reader): hop to the
+  // target virtual section, then breathe-highlight the quoted snippet. For TXT
+  // the virtual sections share the agent pipeline's node space (same layered
+  // segmenter), so `request.nodeIndex` maps 1:1 onto the physical ordinal.
+  const [pendingHighlight, setPendingHighlight] = useState<string | null>(null);
+  useEffect(() => {
+    return subscribeLocate((request) => {
+      if (request.bookHash !== bookHash) return;
+      const target = virtualSections[request.nodeIndex];
+      if (!target) return;
+      if (spineIndex !== request.nodeIndex) {
+        setPosition(request.nodeIndex, target.title);
+      }
+      setPendingHighlight(request.quoteSnippet);
+    });
+  }, [bookHash, virtualSections, spineIndex, setPosition]);
+
+  // Highlight fires once the target section's paragraphs have painted.
+  // NOTE: no cleanup here — clearing `pendingHighlight` re-renders before the
+  // rAF fires, and cancelling the frame would swallow the highlight.
+  useEffect(() => {
+    if (!pendingHighlight || !articleRef.current) return;
+    const snippet = pendingHighlight;
+    setPendingHighlight(null);
+    requestAnimationFrame(() => {
+      highlightSnippet(articleRef.current, snippet);
+    });
+  }, [pendingHighlight, spineIndex, virtualText]);
 
   /**
    * Selection AI quick action (design doc 4.4.3, ADR 0007) — shared with the
@@ -74,9 +124,9 @@ export default function ReaderPane({ sections, monolithicText }: { sections: Dem
     }, 0);
   };
 
-  // Dev-demo feedback + reading-progress mapping: once the user answers the
-  // segmentation banner (or the fallback applies directly), switch the reader
-  // onto the generated Virtual Sections (design doc 4.2).
+  // Segmentation feedback + reading-progress mapping: once the user answers
+  // the segmentation banner (or the fallback applies directly), switch the
+  // reader onto the generated Virtual Sections (design doc 4.2).
   useEffect(() => {
     if (!segmentation || segmentation.virtualSections.length === 0) return;
     const key = `${segmentation.bookHash}:${segmentation.strategy}:${segmentation.virtualSections.length}`;
@@ -86,120 +136,85 @@ export default function ReaderPane({ sections, monolithicText }: { sections: Dem
     const timer = window.setTimeout(() => setToast(null), 5_000);
 
     const first = segmentation.virtualSections[0]!;
+    // Book title comes from the library row (never the hash — the panorama
+    // dialog, the agent system prompt and the chat header all read it).
+    const libTitle = useLibraryStore
+      .getState()
+      .books.find((book) => book.hash === segmentation.bookHash)?.title;
+    const bookTitle =
+      libTitle ?? useReaderStore.getState().bookTitle ?? segmentation.bookHash;
     loadBook({
       bookHash: segmentation.bookHash,
-      bookTitle: segmentation.bookHash === DEMO_MONOLITHIC_HASH ? '风起之地（无目录 TXT）' : segmentation.bookHash,
-      sectionCount: segmentation.virtualSections.length,
+      bookTitle,
+      spineCount: segmentation.virtualSections.length,
     });
-    setSection(0, first.title);
+    setPosition(0, first.title);
     return () => window.clearTimeout(timer);
-  }, [segmentation, loadBook, setSection]);
-
-  const go = (delta: number) => {
-    const nextIndex = sectionIndex + delta;
-    if (nextIndex < 0 || nextIndex >= totalSections) return;
-    if (isVirtual) setSection(nextIndex, virtualSections[nextIndex]!.title);
-    else {
-      const next = sections[nextIndex];
-      if (next) setSection(next.index, next.title);
-    }
-  };
-
-  const backToDemoBook = () => {
-    loadBook({
-      bookHash: DEMO_BOOK.bookHash,
-      bookTitle: DEMO_BOOK.title,
-      sectionCount: DEMO_BOOK.sections.length,
-    });
-    setSection(DEMO_BOOK.sections[0].index, DEMO_BOOK.sections[0].title);
-  };
+  }, [segmentation, loadBook, setPosition]);
 
   if (isVirtual ? !currentVirtual : !section) {
-    return <div className="flex-1 overflow-auto p-8 text-base-content/60">暂无内容</div>;
+    return (
+      <VStack aria-label="阅读视窗" data-testid="reader-pane" padding={6} height="100%">
+        <Text color="secondary">暂无内容</Text>
+      </VStack>
+    );
   }
 
   return (
-    <section className="flex min-w-0 flex-1 flex-col" aria-label="阅读视窗" data-testid="reader-pane">
+    <VStack aria-label="阅读视窗" data-testid="reader-pane" height="100%" gap={0}>
       <SegmentationBanner />
       {toast && (
-        <div
-          role="status"
+        <Banner
           data-testid="segmentation-toast"
-          className="alert alert-success mx-4 mt-2 py-2 text-sm"
-          onClick={() => setToast(null)}
-        >
-          {toast}
-        </div>
-      )}
-      <div className="flex items-center justify-between border-b border-base-300 bg-base-100 px-4 py-2">
-        <span className="truncate text-sm font-medium text-base-content/80" data-testid="reader-chapter-title">
-          {isVirtual ? currentVirtual!.title : section!.title}
-        </span>
-        <div className="flex gap-2">
-          {isVirtual && bookHash === DEMO_MONOLITHIC_HASH && (
-            <button
-              type="button"
-              className="btn btn-xs btn-outline"
-              title="开发演示：返回结构化演示书"
-              onClick={backToDemoBook}
-            >
-              返回演示书
-            </button>
-          )}
-          {!isVirtual && (bookHash === DEMO_BOOK.bookHash || bookHash === '') && (
-            <button
-              type="button"
-              className="btn btn-xs btn-outline"
-              title="开发演示：以无目录 TXT 触发章节探测流程"
-              onClick={() => void scanAndPrompt(DEMO_MONOLITHIC_HASH, DEMO_MONOLITHIC_TXT)}
-            >
-              加载无目录 TXT
-            </button>
-          )}
-          <button
-            type="button"
-            className="btn btn-xs"
-            disabled={sectionIndex === 0}
-            onClick={() => go(-1)}
-          >
-            上一章
-          </button>
-          <button
-            type="button"
-            className="btn btn-xs"
-            disabled={sectionIndex === totalSections - 1}
-            onClick={() => go(1)}
-          >
-            下一章
-          </button>
-        </div>
-      </div>
-      {isVirtual ? (
-        <article
-          ref={articleRef}
-          data-testid="reader-article"
-          className="flex-1 overflow-auto px-6 py-6 leading-loose text-base-content"
-          onPointerDown={handleArticlePointerDown}
-        >
-          {virtualText
-            .split('\n')
-            .map((line) => line.trim())
-            .filter(Boolean)
-            .map((line, i) => (
-              <p key={i}>{line}</p>
-            ))}
-        </article>
-      ) : (
-        <article
-          ref={articleRef}
-          data-testid="reader-article"
-          className="flex-1 overflow-auto px-6 py-6 leading-loose text-base-content"
-          onPointerDown={handleArticlePointerDown}
-          // Static fixture content owned by this app (demoBook.ts), not user input.
-          dangerouslySetInnerHTML={{ __html: section!.html }}
+          role="status"
+          status="success"
+          container="section"
+          title={toast}
+          isDismissable
+          onDismiss={() => setToast(null)}
         />
       )}
+      <article
+        ref={articleRef}
+        data-testid="reader-article"
+        onPointerDown={handleArticlePointerDown}
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          background: 'var(--color-background-surface)',
+          color: 'var(--color-text-primary)',
+          padding: 'var(--spacing-8) var(--spacing-6)',
+        }}
+      >
+        <div
+          style={{
+            ...typoStyle,
+            maxWidth: ARTICLE_MEASURE,
+            marginInline: 'auto',
+          }}
+          data-testid="reader-typography"
+        >
+          {isVirtual ? (
+            virtualText
+              .split('\n')
+              .map((line) => line.trim())
+              .filter(Boolean)
+              .map((line, i) => (
+                <p key={i} style={{ ...paragraphStyle, textAlign: 'justify', textIndent: '2em' }}>
+                  {line}
+                </p>
+              ))
+          ) : (
+            <>
+              {/* Static fixture content owned by this app (demoBook.ts), not user input. */}
+              <div style={{ letterSpacing: '0.02em' }} dangerouslySetInnerHTML={{ __html: section!.html }} />
+              <style>{`[data-testid="reader-typography"] p { margin-top: ${typography.paragraphSpacing}em; }`}</style>
+            </>
+          )}
+        </div>
+      </article>
       <SelectionToolbar selection={selection} onAction={handleQuickAction} onClose={reset} />
-    </section>
+    </VStack>
   );
 }

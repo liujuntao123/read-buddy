@@ -7,7 +7,8 @@ import { ConversationRepository } from '@/services/db/repositories';
 import { ReadestPlusDatabase } from '@/services/db/database';
 import { useAISettingsStore } from '@/store/aiSettingsStore';
 import { DEFAULT_AI_SETTINGS, type AISettings } from '@/types/ai';
-import type { StreamTextFn } from '@/services/ai/streamClient';
+import type { RunTurnInput, RunTurnResult } from '@/services/agent/agentOrchestrator';
+import type { AgentTurnEvent } from '@/services/agent/agentOrchestrator';
 
 const databases: ReadestPlusDatabase[] = [];
 
@@ -20,16 +21,43 @@ afterEach(async () => {
   useAISettingsStore.setState({ settings: { ...DEFAULT_AI_SETTINGS } });
 });
 
-const makeStore = (options: { maxTurnsPerTopic?: number; stream?: StreamTextFn } = {}) => {
+interface ScriptStep {
+  event: AgentTurnEvent;
+  /** Await this promise before replaying the step (pacing control). */
+  gate?: Promise<void>;
+}
+
+const makeStore = (options: { maxTurnsPerTopic?: number; script?: ScriptStep[] } = {}) => {
   const db = new ReadestPlusDatabase(`chat-tab-test-${Math.random().toString(36).slice(2)}`);
   databases.push(db);
   const manager = createConversationManager({ repository: new ConversationRepository(db) });
   let settings: AISettings = { ...DEFAULT_AI_SETTINGS, maxTurnsPerTopic: options.maxTurnsPerTopic ?? 10 };
   const store: ChatStoreHook = createChatStore({
     manager,
-    stream: options.stream ?? (async function* () { yield '回答A'; }),
+    runTurn: async (input: RunTurnInput): Promise<RunTurnResult> => {
+      const toolCalls: RunTurnResult['toolCalls'] = [];
+      const citations: RunTurnResult['citations'] = [];
+      let content = '';
+      for (const step of options.script ?? [{ event: { type: 'delta', text: '回答A' as const } }]) {
+        if (step.gate) await step.gate;
+        const { event } = step;
+        if (event.type === 'delta') {
+          content += event.text;
+          input.onEvent(event);
+        } else if (event.type === 'tool-call') {
+          toolCalls.push(event.trace);
+          input.onEvent(event);
+        } else if (event.type === 'citation') {
+          citations.push(event.citation);
+          input.onEvent(event);
+        } else {
+          input.onEvent(event);
+        }
+      }
+      return { content, toolCalls, citations };
+    },
     getSettings: () => settings,
-    getChapterText: () => ({ title: '第一章 迷雾之城', text: '灯火在雾中摇曳。' }),
+    getNodeText: () => ({ title: '第一章 迷雾之城', text: '灯火在雾中摇曳。' }),
   });
   return { store, setSettings: (next: AISettings) => { settings = next; } };
 };
@@ -69,12 +97,12 @@ describe('ChatTab', () => {
   it('shows the live streaming bubble with cursor and stop button while generating', async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
-    const stream: StreamTextFn = async function* () {
-      yield '正在思考';
-      await gate;
-      yield '完毕';
-    };
-    const { store } = makeStore({ stream });
+    const { store } = makeStore({
+      script: [
+        { event: { type: 'delta', text: '正在思考' } },
+        { gate, event: { type: 'delta', text: '完毕' } },
+      ],
+    });
     await store.getState().openBook('demo-fog-city-0001', 0);
     render(<ChatTab store={store} />);
 
@@ -90,6 +118,108 @@ describe('ChatTab', () => {
     await act(async () => { release(); });
     await waitFor(() => expect(screen.getByTestId('assistant-bubble').textContent).toBe('正在思考完毕'));
     await waitFor(() => expect(screen.getByTestId('turn-quota').textContent).toBe('💬 1 / 10 轮'));
+  });
+
+  it('renders the collapsed tool-trace accordion and citation cards on a reply', async () => {
+    const citation = {
+      bookHash: 'demo-fog-city-0001',
+      nodeIndex: 2,
+      nodeTitle: '第三章 长夜漫漫',
+      nodeKind: 'chapter' as const,
+      charOffset: 4321,
+      quoteSnippet: '守夜人在第七次巡逻时发现星图移动',
+    };
+    const { store } = makeStore({
+      script: [
+        {
+          event: {
+            type: 'tool-call',
+            trace: {
+              id: 'call-1',
+              toolName: 'search_book_text',
+              args: { query: '星图' },
+              durationMs: 0,
+            },
+          },
+        },
+        {
+          event: {
+            type: 'tool-result',
+            trace: {
+              id: 'call-1',
+              toolName: 'search_book_text',
+              args: {},
+              resultSnippet: '{"matches":[...]}',
+              durationMs: 26,
+            },
+          },
+        },
+        { event: { type: 'delta', text: '在第三章形成呼应。' } },
+        { event: { type: 'citation', citation } },
+      ],
+    });
+    await store.getState().openBook('demo-fog-city-0001', 0);
+    render(<ChatTab store={store} />);
+
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: '星图有伏笔吗？' } });
+    fireEvent.click(screen.getByTestId('send-message'));
+
+    // The reply carries a collapsed trace accordion (1 tool) and one jump card.
+    await waitFor(() => expect(screen.getByTestId('assistant-bubble').textContent).toContain('在第三章形成呼应'));
+    const accordion = screen.getByTestId('agent-trace-accordion');
+    expect(accordion.textContent).toContain('Agent 思考与工具调用轨迹 (1)');
+    expect(screen.queryByTestId('agent-trace-body')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('agent-trace-toggle'));
+    expect(await screen.findByTestId('agent-trace-body')).toBeTruthy();
+    expect(screen.getByTestId('agent-trace-body').textContent).toContain('检索全书关键词');
+
+    const card = screen.getByTestId('citation-card');
+    // Node title alone + its level word — never the global ordinal as a 章号.
+    expect(card.textContent).toContain('第三章 长夜漫漫');
+    expect(screen.getByTestId('citation-node-kind').textContent).toBe('章');
+    expect(card.textContent).not.toContain('《第 3 章');
+    expect(card.textContent).toContain('偏移量 4,321 字符');
+    expect(card.textContent).toContain('守夜人在第七次巡逻时发现星图移动');
+
+    // The jump button re-dispatches the reader locate request.
+    const locateSpy = vi.fn();
+    window.addEventListener('readest-plus:agent-locate-test', locateSpy);
+    fireEvent.click(screen.getByTestId('citation-jump'));
+    // (No global event exists; the readerLink bus is exercised in service
+    // tests — here we only assert the button is wired without crashing.)
+    expect(screen.getByTestId('citation-jump')).toBeTruthy();
+    window.removeEventListener('readest-plus:agent-locate-test', locateSpy);
+  });
+
+  it('renders a second-level citation as a 节 with its 章 breadcrumb', async () => {
+    const citation = {
+      bookHash: 'demo-fog-city-0001',
+      nodeIndex: 5,
+      nodeTitle: '第一节 灯塔的守望',
+      nodeKind: 'section' as const,
+      parentNodeTitle: '第三章 长夜漫漫',
+      charOffset: 12,
+      quoteSnippet: '灯塔的火种由守夜人代代相传',
+    };
+    const { store } = makeStore({
+      script: [
+        { event: { type: 'delta', text: '这条线索在第一节。' } },
+        { event: { type: 'citation', citation } },
+      ],
+    });
+    await store.getState().openBook('demo-fog-city-0001', 0);
+    render(<ChatTab store={store} />);
+
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: '火种从哪来？' } });
+    fireEvent.click(screen.getByTestId('send-message'));
+    await waitFor(() => expect(screen.getByTestId('citation-card')).toBeTruthy());
+
+    const card = screen.getByTestId('citation-card');
+    expect(card.textContent).toContain('《第三章 长夜漫漫》 ›');
+    expect(card.textContent).toContain('第一节 灯塔的守望');
+    expect(screen.getByTestId('citation-node-kind').textContent).toBe('节');
+    expect(card.textContent).not.toContain('《第 6 章');
   });
 
   it('locks the input at the quota, offers new-topic + copy, and resets on a new topic', async () => {
@@ -147,14 +277,16 @@ describe('ChatTab', () => {
     expect(screen.queryByTestId('user-bubble')).toBeNull();
   });
 
-  it('shows a pending selection quote above the input and clears it on demand', async () => {
+  it('shows a pending selection quote (markdown-parsed quote block) above the input and clears it on demand', async () => {
     const { store } = makeStore();
     await store.getState().openBook('demo-fog-city-0001', 0);
     render(<ChatTab store={store} />);
 
     act(() => { store.getState().setQuoteDraft('古老的钟楼敲响了第三声'); });
     const quote = await screen.findByTestId('quote-draft');
-    expect(quote.textContent).toContain('> 古老的钟楼敲响了第三声');
+    expect(quote.textContent).toContain('古老的钟楼敲响了第三声');
+    // The quote renders inside the dedicated quote block with its own testid.
+    expect(screen.getByTestId('quote-draft-block')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: '清除引用' }));
     await waitFor(() => expect(screen.queryByTestId('quote-draft')).toBeNull());
@@ -175,3 +307,4 @@ describe('ChatTab', () => {
     expect(input.selectionEnd).toBe('为什么雾永远不散？'.length);
   });
 });
+

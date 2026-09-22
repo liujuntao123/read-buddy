@@ -7,6 +7,7 @@
  * injectable so tests run against an isolated ReadestPlusDatabase.
  */
 import type { ChatRole, Conversation, Message } from '@/types/ai';
+import type { AgentCitation, ToolCallTrace } from '@/types/readingAgent';
 import type { ConversationRepository } from '@/services/db/repositories';
 
 export const DEFAULT_TOPIC_TITLE = '新话题';
@@ -20,7 +21,7 @@ export interface ConversationManagerDeps {
 
 export interface StartConversationInput {
   bookHash: string;
-  sectionIndex?: number;
+  nodeIndex?: number;
   title?: string;
 }
 
@@ -28,6 +29,11 @@ export interface SendMessageInput {
   role: ChatRole;
   content: string;
   quoteText?: string;
+  /** Resolved chapter attribution of the quote (selection tracking). */
+  quoteSource?: string;
+  /** Tool-call trail + citations persisted with assistant replies. */
+  toolCalls?: ToolCallTrace[];
+  citations?: AgentCitation[];
 }
 
 export interface ConversationManager {
@@ -57,12 +63,12 @@ export function createConversationManager(deps: ConversationManagerDeps): Conver
   const now = deps.now ?? Date.now;
 
   return {
-    startConversation: async ({ bookHash, sectionIndex, title }) => {
+    startConversation: async ({ bookHash, nodeIndex, title }) => {
       const timestamp = now();
       const conversation: Conversation = {
         id: newId(),
         bookHash,
-        sectionIndex,
+        nodeIndex,
         title: normalizeTitle(title),
         turnCount: 0,
         isClosed: false,
@@ -73,13 +79,16 @@ export function createConversationManager(deps: ConversationManagerDeps): Conver
       return conversation;
     },
 
-    sendMessage: async (conversation, { role, content, quoteText }) => {
+    sendMessage: async (conversation, { role, content, quoteText, quoteSource, toolCalls, citations }) => {
       const message: Message = {
         id: newId(),
         conversationId: conversation.id,
         role,
         content,
         quoteText,
+        ...(quoteSource ? { quoteSource } : {}),
+        ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
+        ...(citations && citations.length > 0 ? { citations } : {}),
         createdAt: now(),
       };
       await deps.repository.appendMessage(message);

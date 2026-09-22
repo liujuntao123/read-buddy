@@ -1,10 +1,13 @@
 'use client';
 
 import { useEffect } from 'react';
+import { Button } from '@astryxdesign/core/Button';
+import { Divider } from '@astryxdesign/core/Divider';
+import { HStack } from '@astryxdesign/core/Stack';
 import type { QuickAction } from '@/services/chat/quickActions';
 import type { TextSelection } from '@/hooks/useTextSelection';
 
-/** Estimated rendered height of the toolbar (btn-xs + padding). */
+/** Estimated rendered height of the toolbar (sm buttons + padding). */
 export const TOOLBAR_HEIGHT = 36;
 /** Estimated rendered width, used only for viewport clamping. */
 export const TOOLBAR_ESTIMATED_WIDTH = 236;
@@ -72,25 +75,40 @@ export default function SelectionToolbar({ selection, onAction, onClose }: Selec
   const { top, left } = computeToolbarPosition(selection.rect);
 
   return (
-    <div
+    <HStack
       data-testid="selection-toolbar"
       role="toolbar"
       aria-label="选区 AI 快捷操作"
-      className="fixed z-50 flex -translate-x-1/2 items-center gap-0.5 rounded-box border border-base-300 bg-base-100 p-1 shadow-lg"
-      style={{ top: `${top}px`, left: `${left}px` }}
+      gap={0}
+      vAlign="center"
+      style={{
+        position: 'fixed',
+        zIndex: 50,
+        top,
+        left,
+        transform: 'translateX(-50%)',
+        paddingInline: 'var(--spacing-2)',
+        paddingBlock: 'var(--spacing-1)',
+        borderRadius: 'var(--radius-full)',
+        border: '1px solid var(--color-border)',
+        background: 'var(--color-background-surface)',
+        boxShadow: 'var(--shadow-high)',
+        userSelect: 'none',
+      }}
     >
-      {ACTIONS.map(({ action, label, icon }) => (
-        <button
-          key={action}
-          type="button"
-          className="btn btn-ghost btn-xs whitespace-nowrap"
-          aria-label={label}
-          title={label}
-          onClick={() => onAction(action, selection.text)}
-        >
-          {icon} {label}
-        </button>
+      {ACTIONS.map(({ action, label, icon }, idx) => (
+        <HStack key={action} gap={0} vAlign="center">
+          {idx > 0 && <Divider orientation="vertical" />}
+          <Button
+            label={label}
+            variant="ghost"
+            size="sm"
+            onClick={() => onAction(action, selection.text)}
+          >
+            {icon} {label}
+          </Button>
+        </HStack>
       ))}
-    </div>
+    </HStack>
   );
 }

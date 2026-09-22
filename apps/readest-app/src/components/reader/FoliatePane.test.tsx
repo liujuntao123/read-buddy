@@ -1,11 +1,20 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import FoliatePane from './FoliatePane';
+import { applyTheme } from '@/theme/readingTheme';
 import type { EngineLocation, FoliateEngineHandle } from '@/services/library/foliateEngine';
+import type { BookNode } from '@/types/readingAgent';
+import {
+  clearAgentBookContext,
+  createAgentBookContext,
+  registerAgentBookContext,
+} from '@/services/agent/agentContext';
+import { clearLocateListeners, requestLocate } from '@/services/reader/readerLink';
 import { useAISidebarStore } from '@/store/aiSidebarStore';
 import { useChatStore } from '@/store/chatStore';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useReaderStore } from '@/store/readerStore';
+import { useReaderSettingsStore } from '@/store/readerSettingsStore';
 
 /**
  * A hand-rolled engine double: listeners are captured so tests can drive
@@ -19,6 +28,8 @@ interface FakeEngine extends FoliateEngineHandle {
   goTo: (target: string | number) => Promise<void>;
   goToCfi: (cfi: string) => Promise<void>;
   close: () => void;
+  setLayout: (params: { pageMode: 'single' | 'double' }) => void;
+  setTypography: (css: string) => void;
   relocators: Set<(location: EngineLocation) => void>;
   loaders: Set<(payload: { doc: Document; index: number }) => void>;
   location: EngineLocation | null;
@@ -48,18 +59,33 @@ const makeEngine = (toc = TOC): FakeEngine => {
       loaders.add(cb);
       return () => loaders.delete(cb);
     }),
-    getSectionText: vi.fn(async () => ''),
-    getCachedSectionHtml: vi.fn(() => ''),
-    getCachedSectionText: vi.fn(() => ''),
-    getSectionTitle: vi.fn((index: number) => TOC[index]?.label ?? `第 ${index + 1} 节`),
-    get sectionCount() {
+    getSpineText: vi.fn(async () => ''),
+    getCachedSpineHtml: vi.fn(() => ''),
+    getCachedSpineText: vi.fn(() => ''),
+    getSpineTitle: vi.fn((index: number) => TOC[index]?.label ?? `第 ${index + 1} 节`),
+    get spineCount() {
       return toc.length;
     },
-    tocItems: vi.fn(() => toc.map(({ label, href }) => ({ label, href }))),
+    tocItems: vi.fn(() => toc.map(({ label, href }) => ({ label, href, depth: 0 }))),
+    tocEntries: vi.fn(() =>
+      toc.map(({ label, href }, index) => ({ label, href, depth: 0, spineIndex: index })),
+    ),
+    getSpineAnchors: vi.fn(() => []),
     currentLocation: vi.fn(function (this: FakeEngine) {
       return this.location;
     }),
     close: vi.fn(),
+    setTheme: vi.fn(),
+    setPageMode: vi.fn(),
+    setLayout: vi.fn(),
+    setTypography: vi.fn(),
+    getTocIndex: vi.fn((loc: EngineLocation) => {
+      if (loc.tocItemHref) {
+        const found = toc.findIndex((t) => t.href === loc.tocItemHref);
+        if (found >= 0) return found;
+      }
+      return loc.index;
+    }),
   };
   return engine;
 };
@@ -86,9 +112,10 @@ const resetStores = (): void => {
   useReaderStore.setState({
     bookHash: 'engine-book',
     bookTitle: '迷雾之城',
-    sectionIndex: 0,
-    chapterTitle: '',
-    sectionCount: 3,
+    spineIndex: 0,
+    anchor: undefined,
+    nodeTitle: '',
+    spineCount: 3,
   });
   useLibraryStore.setState({ currentHash: null, engines: {}, resumeCfi: null });
   useAISidebarStore.setState({ expanded: false, width: 400, activeTab: 'summary' });
@@ -96,11 +123,16 @@ const resetStores = (): void => {
 
 beforeEach(() => {
   resetStores();
+  clearLocateListeners();
+  window.localStorage.setItem('readest-plus:page-mode', 'double');
+  useReaderSettingsStore.getState().reset();
   useChatStore.setState({ quoteDraft: null });
 });
 
 afterEach(() => {
   resetStores();
+  clearLocateListeners();
+  clearAgentBookContext('engine-book');
 });
 
 describe('FoliatePane', () => {
@@ -128,10 +160,9 @@ describe('FoliatePane', () => {
     render(<FoliatePane engine={engine} />);
 
     await waitFor(() => {
-      expect(useReaderStore.getState().sectionIndex).toBe(1);
-      expect(useReaderStore.getState().chapterTitle).toBe('第二章 图书馆的密语');
+      expect(useReaderStore.getState().spineIndex).toBe(1);
+      expect(useReaderStore.getState().nodeTitle).toBe('第二章 图书馆的密语');
     });
-    expect(screen.getByTestId('foliate-chapter-title').textContent).toBe('第二章 图书馆的密语');
   });
 
   it('relocate events update the reader store chapter context', async () => {
@@ -141,9 +172,71 @@ describe('FoliatePane', () => {
 
     act(() => relocate(engine, 2));
 
-    expect(useReaderStore.getState().sectionIndex).toBe(2);
-    expect(useReaderStore.getState().chapterTitle).toBe('第三章 长夜漫漫');
-    expect(screen.getByTestId('foliate-chapter-title').textContent).toBe('第三章 长夜漫漫');
+    expect(useReaderStore.getState().spineIndex).toBe(2);
+    expect(useReaderStore.getState().nodeTitle).toBe('第三章 长夜漫漫');
+  });
+
+  it('carries the directory anchor of the relocated href into the store', async () => {
+    const engine = makeEngine();
+    render(<FoliatePane engine={engine} />);
+    await waitFor(() => expect(engine.openIn).toHaveBeenCalled());
+
+    act(() => relocate(engine, 1, 'ch2.xhtml#sigil_toc_id_1'));
+    expect(useReaderStore.getState().spineIndex).toBe(1);
+    expect(useReaderStore.getState().anchor).toBe('sigil_toc_id_1');
+
+    // A href without a hash clears the anchor (段起始处).
+    act(() => relocate(engine, 2, 'ch3.xhtml'));
+    expect(useReaderStore.getState().anchor).toBeUndefined();
+  });
+
+  it('locates an agent request through the node model instead of scanning spine texts', async () => {
+    const engine = makeEngine();
+    const nodes: BookNode[] = [
+      {
+        nodeId: 'engine-book:n_0',
+        bookHash: 'engine-book',
+        nodeIndex: 0,
+        title: '第一章 迷雾之城',
+        depth: 0,
+        startOffset: 0,
+        endOffset: 100,
+        charCount: 100,
+        spineIndex: 0,
+        href: 'ch1.xhtml',
+        indexStatus: 'ready',
+      },
+      {
+        nodeId: 'engine-book:n_1',
+        bookHash: 'engine-book',
+        nodeIndex: 1,
+        title: '§2 图书馆的密语',
+        depth: 1,
+        parentNodeId: 'engine-book:n_0',
+        startOffset: 0,
+        endOffset: 60,
+        charCount: 60,
+        spineIndex: 1,
+        anchor: 'sigil_toc_id_2',
+        href: 'ch2.xhtml#sigil_toc_id_2',
+        indexStatus: 'ready',
+      },
+    ];
+    registerAgentBookContext(
+      createAgentBookContext({ bookHash: 'engine-book', nodes, fullText: '' }),
+    );
+
+    render(<FoliatePane engine={engine} />);
+    await waitFor(() => expect(engine.openIn).toHaveBeenCalled());
+
+    act(() => {
+      requestLocate({ bookHash: 'engine-book', nodeIndex: 1, quoteSnippet: '图书馆的密语' });
+    });
+
+    // The node's own href (目录锚点 included) is the destination …
+    await waitFor(() => expect(engine.goTo).toHaveBeenCalledWith('ch2.xhtml#sigil_toc_id_2'));
+    // … so the book is never scanned section by section.
+    expect(engine.getSpineText).not.toHaveBeenCalled();
   });
 
   it('arrow keys page through the book and Escape retracts the toolbar', async () => {
@@ -162,39 +255,6 @@ describe('FoliatePane', () => {
     fireEvent.keyDown(input, { key: 'ArrowRight' });
     expect(engine.next).toHaveBeenCalledTimes(1);
     input.remove();
-  });
-
-  it('navigates chapters via the toc dropdown and prev/next chapter buttons', async () => {
-    const engine = makeEngine();
-    render(<FoliatePane engine={engine} />);
-    await waitFor(() => expect(engine.openIn).toHaveBeenCalled());
-    act(() => relocate(engine, 1));
-
-    // Chapter buttons jump by toc entries (not foliate page turns).
-    const prev = screen.getByRole('button', { name: '上一章' }) as HTMLButtonElement;
-    const next = screen.getByRole('button', { name: '下一章' }) as HTMLButtonElement;
-    expect(prev.disabled).toBe(false);
-    expect(next.disabled).toBe(false);
-    fireEvent.click(next);
-    expect(engine.goTo).toHaveBeenCalledWith('ch3.xhtml');
-    fireEvent.click(prev);
-    expect(engine.goTo).toHaveBeenCalledWith('ch1.xhtml');
-
-    // The dropdown lists every toc entry and navigates on click.
-    const tocList = screen.getByTestId('foliate-toc-list');
-    expect(tocList.textContent).toContain('第二章 图书馆的密语');
-    fireEvent.click(screen.getByRole('button', { name: '第三章 长夜漫漫' }));
-    expect(engine.goTo).toHaveBeenCalledWith('ch3.xhtml');
-  });
-
-  it('disables chapter navigation at the ends of the toc', async () => {
-    const engine = makeEngine();
-    render(<FoliatePane engine={engine} />);
-    await waitFor(() => expect(engine.openIn).toHaveBeenCalled());
-    act(() => relocate(engine, 0));
-
-    expect((screen.getByRole('button', { name: '上一章' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: '下一章' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('shows the selection toolbar for iframe selections and forwards quick actions', async () => {
@@ -271,5 +331,141 @@ describe('FoliatePane', () => {
     render(<FoliatePane engine={engine} />);
     await waitFor(() => expect(engine.goToCfi).toHaveBeenCalledWith('epubcfi(/6/8!/2/2)'));
     expect(useLibraryStore.getState().resumeCfi).toBeNull();
+  });
+
+  it('applies the page mode from the settings store to the engine', async () => {
+    const engine = makeEngine();
+    render(<FoliatePane engine={engine} />);
+    await waitFor(() => expect(engine.openIn).toHaveBeenCalled());
+
+    // The store is the single source of truth (HeaderBar drives it).
+    act(() => {
+      useReaderSettingsStore.getState().setPageMode('single');
+    });
+    expect(engine.setLayout).toHaveBeenLastCalledWith(
+      expect.objectContaining({ pageMode: 'single' }),
+    );
+
+    act(() => {
+      useReaderSettingsStore.getState().setPageMode('double');
+    });
+    expect(engine.setLayout).toHaveBeenLastCalledWith(
+      expect.objectContaining({ pageMode: 'double' }),
+    );
+  });
+
+  it('applies persisted typography and layout settings to the engine', async () => {
+    const engine = makeEngine();
+    useReaderSettingsStore.getState().setTypography({ fontSize: 21, fontFamily: 'songti' });
+    useReaderSettingsStore.getState().setLayoutSettings({ contentWidth: 900 });
+
+    render(<FoliatePane engine={engine} />);
+    await waitFor(() => expect(engine.openIn).toHaveBeenCalled());
+
+    expect(engine.setTypography).toHaveBeenCalledWith(expect.stringContaining('font-size: 21px'));
+    expect(engine.setTypography).toHaveBeenCalledWith(expect.stringContaining('font-family'));
+    expect(engine.setLayout).toHaveBeenCalledWith(
+      expect.objectContaining({ pageMode: 'double', contentWidth: 900 }),
+    );
+  });
+
+  it('does not intercept the wheel in single-page (scrolled) mode', async () => {
+    const engine = makeEngine();
+    render(<FoliatePane engine={engine} />);
+    await waitFor(() => expect(engine.openIn).toHaveBeenCalled());
+
+    act(() => {
+      useReaderSettingsStore.getState().setPageMode('single');
+    });
+    const container = screen.getByTestId('foliate-container');
+    fireEvent.wheel(container, { deltaY: 400 });
+    fireEvent.wheel(container, { deltaY: 400 });
+    expect(engine.next).not.toHaveBeenCalled();
+
+    // Wheel on the chapter iframe doc in single-page mode also does not intercept
+    const doc = document.implementation.createHTMLDocument();
+    act(() => {
+      for (const cb of engine.loaders) cb({ doc, index: 0 });
+      doc.dispatchEvent(new WheelEvent('wheel', { deltaY: 400, bubbles: true }));
+    });
+    expect(engine.next).not.toHaveBeenCalled();
+
+    // Back to double-page: wheel turns pages again.
+    act(() => {
+      useReaderSettingsStore.getState().setPageMode('double');
+    });
+    fireEvent.wheel(container, { deltaY: 80 });
+    expect(engine.next).toHaveBeenCalledTimes(1);
+  });
+
+  it('turns pages on mouse wheel scroll with threshold', async () => {
+    const engine = makeEngine();
+    render(<FoliatePane engine={engine} />);
+    await waitFor(() => expect(engine.openIn).toHaveBeenCalled());
+
+    const container = screen.getByTestId('foliate-container');
+
+    // Small scroll should not turn page
+    fireEvent.wheel(container, { deltaY: 20 });
+    expect(engine.next).not.toHaveBeenCalled();
+
+    // Accumulated scroll beyond threshold turns page forward
+    fireEvent.wheel(container, { deltaY: 60 });
+    expect(engine.next).toHaveBeenCalledTimes(1);
+
+    // After cooldown, scroll up turns page backward
+    await new Promise((r) => setTimeout(r, 300));
+    fireEvent.wheel(container, { deltaY: -80 });
+    expect(engine.prev).toHaveBeenCalledTimes(1);
+  });
+
+  it('turns pages when keyboard events occur inside chapter iframe doc', async () => {
+    const engine = makeEngine();
+    render(<FoliatePane engine={engine} />);
+    await waitFor(() => expect(engine.openIn).toHaveBeenCalled());
+
+    const doc = document.implementation.createHTMLDocument('ch0');
+    act(() => {
+      for (const cb of engine.loaders) cb({ doc, index: 0 });
+    });
+
+    act(() => {
+      doc.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    });
+    expect(engine.next).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      doc.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true }));
+    });
+    expect(engine.next).toHaveBeenCalledTimes(2);
+
+    act(() => {
+      doc.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    });
+    expect(engine.next).toHaveBeenCalledTimes(3);
+
+    act(() => {
+      doc.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+    });
+    expect(engine.prev).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      doc.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageUp', bubbles: true }));
+    });
+    expect(engine.prev).toHaveBeenCalledTimes(2);
+  });
+
+  it('synchronizes reading-theme changes to the engine', async () => {
+    const engine = makeEngine();
+    render(<FoliatePane engine={engine} />);
+    await waitFor(() => expect(engine.openIn).toHaveBeenCalled());
+
+    act(() => {
+      applyTheme('dark');
+    });
+
+    await waitFor(() => {
+      expect(engine.setTheme).toHaveBeenCalledWith('dark');
+    });
   });
 });

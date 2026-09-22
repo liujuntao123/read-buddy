@@ -1,11 +1,16 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { waitFor } from '@testing-library/react';
 import { ReadestPlusDatabase } from '@/services/db/database';
-import { ConversationRepository } from '@/services/db/repositories';
+import {
+  AgentTraceRepository,
+  ConversationRepository,
+} from '@/services/db/repositories';
 import { createConversationManager } from '@/services/chat/conversationManager';
-import type { StreamRequest, StreamTextFn } from '@/services/ai/streamClient';
+import type { RunTurnInput, RunTurnResult } from '@/services/agent/agentOrchestrator';
+import type { AgentTurnEvent } from '@/services/agent/agentOrchestrator';
 import { DEFAULT_AI_SETTINGS, type AISettings } from '@/types/ai';
-import { createChatStore, turnLabel } from './chatStore';
+import type { NodeKind, ToolCallTrace } from '@/types/readingAgent';
+import { createChatStore, turnLabel, type RunTurnFn } from './chatStore';
 
 const databases: ReadestPlusDatabase[] = [];
 
@@ -16,38 +21,86 @@ afterAll(async () => {
 interface Harness {
   store: ReturnType<typeof createChatStore>;
   manager: ReturnType<typeof createConversationManager>;
-  requests: StreamRequest[];
+  requests: RunTurnInput[];
   setSettings: (settings: AISettings) => void;
+  traces: AgentTraceRepository;
 }
 
-const makeStore = (options: { settings?: Partial<AISettings>; stream?: StreamTextFn; now?: () => number } = {}): Harness => {
+const TRACE: ToolCallTrace = {
+  id: 'call-1',
+  toolName: 'search_book_text',
+  args: { query: '灯塔' },
+  resultSnippet: '{"matches":[...]}',
+  durationMs: 30,
+};
+
+/**
+ * Fake orchestrator seam: records the run input and replays a scripted
+ * event trail before resolving with the aggregated result.
+ */
+const makeRunTurn = (
+  requests: RunTurnInput[],
+  script?: (input: RunTurnInput) => Array<AgentTurnEvent | Promise<void>>,
+): RunTurnFn => {
+  return async (input) => {
+    requests.push(input);
+    const steps = script?.(input) ?? [];
+    let content = '';
+    const toolCalls: ToolCallTrace[] = [];
+    const citations: RunTurnResult['citations'] = [];
+    for (const step of steps) {
+      if (step instanceof Promise) {
+        await step;
+        continue;
+      }
+      if (step.type === 'delta') {
+        content += step.text;
+        input.onEvent(step);
+      } else if (step.type === 'tool-call') {
+        toolCalls.push(step.trace);
+        input.onEvent(step);
+      } else if (step.type === 'tool-result') {
+        input.onEvent(step);
+      } else if (step.type === 'citation') {
+        citations.push(step.citation);
+        input.onEvent(step);
+      }
+    }
+    return { content: content || '回答继续', toolCalls, citations };
+  };
+};
+
+const makeStore = (
+  options: {
+    settings?: Partial<AISettings>;
+    script?: (input: RunTurnInput) => Array<AgentTurnEvent | Promise<void>>;
+    now?: () => number;
+    locateQuote?: (
+      bookHash: string,
+      quoteText: string,
+    ) => { nodeIndex: number; nodeTitle: string; charOffset: number; nodeKind: NodeKind } | null;
+  } = {},
+): Harness => {
   const db = new ReadestPlusDatabase(`chat-store-test-${Math.random().toString(36).slice(2)}`);
   databases.push(db);
   const manager = createConversationManager({ repository: new ConversationRepository(db), now: options.now });
-  const requests: StreamRequest[] = [];
-  const inner: StreamTextFn =
-    options.stream ??
-    (async function* () {
-      yield '回答';
-      yield '继续';
-    });
-  const stream: StreamTextFn = async function* (req, settings) {
-    requests.push(req);
-    yield* inner(req, settings);
-  };
+  const traces = new AgentTraceRepository(db);
+  const requests: RunTurnInput[] = [];
   let settings: AISettings = { ...DEFAULT_AI_SETTINGS, ...options.settings };
   const store = createChatStore({
     manager,
-    stream,
+    traces,
+    runTurn: makeRunTurn(requests, options.script),
     getSettings: () => settings,
-    getChapterText: () => ({ title: '第一章 迷雾之城', text: '灯火在雾中摇曳。' }),
+    getNodeText: () => ({ title: '第一章 迷雾之城', text: '灯火在雾中摇曳。' }),
+    ...(options.locateQuote ? { locateQuote: options.locateQuote } : {}),
   });
-  return { store, manager, requests, setSettings: (next) => { settings = next; } };
+  return { store, manager, requests, traces, setSettings: (next) => { settings = next; } };
 };
 
 describe('send', () => {
   it('streams the answer, persists user+assistant messages and advances the turn count', async () => {
-    const h = makeStore();
+    const h = makeStore({ script: () => [{ type: 'delta', text: '回答' }, { type: 'delta', text: '继续' }] });
     await h.store.getState().openBook('book-a', 1);
     await h.store.getState().send('第一章讲了什么？', '灯火在雾中摇曳');
 
@@ -55,6 +108,7 @@ describe('send', () => {
     expect(state.phase).toBe('idle');
     expect(state.error).toBeNull();
     expect(state.streamingText).toBe('');
+    expect(state.liveTraces).toEqual([]);
     expect(state.conversation?.turnCount).toBe(1);
     expect(state.conversation?.title).toBe('第一章讲了什么？');
     expect(state.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
@@ -66,20 +120,69 @@ describe('send', () => {
     expect(persisted.map((m) => m.role)).toEqual(['user', 'assistant']);
   });
 
-  it('builds the prompt from the chapter text, anti-spoiler system prompt and FULL history', async () => {
+  it('passes the whole-book turn context into the orchestrator', async () => {
     const h = makeStore();
     await h.store.getState().openBook('book-a', 0);
     await h.store.getState().send('问题一');
-    await h.store.getState().send('问题二');
 
-    expect(h.requests.length).toBe(2);
-    expect(h.requests[1]!.system).toContain('伴读助手');
-    expect(h.requests[1]!.system).toContain('严禁主动剧透后续章节内容');
-    expect(h.requests[1]!.prompt).toContain('【本章正文】\n灯火在雾中摇曳。');
-    // Every previous turn is in the second prompt — no sliding window.
-    expect(h.requests[1]!.prompt).toContain('读者：问题一');
-    expect(h.requests[1]!.prompt).toContain('助手：回答继续');
-    expect(h.requests[1]!.prompt).toContain('【本轮提问】\n问题二');
+    const request = h.requests[0]!;
+    expect(request.bookHash).toBe('book-a');
+    expect(request.currentSectionIndex).toBe(0);
+    expect(request.currentNodeTitle).toBe('第一章 迷雾之城');
+    expect(request.currentNodeText).toBe('灯火在雾中摇曳。');
+    expect(request.quoteText).toBeUndefined();
+    expect(request.history).toEqual([]);
+
+    await h.store.getState().send('问题二');
+    const second = h.requests[1]!;
+    // Full in-topic history rides along (no sliding window).
+    expect(second.history.map((m) => m.content)).toEqual(['问题一', '回答继续']);
+  });
+
+  it('surfaces live tool traces and citations while streaming, then persists them', async () => {
+    let releaseTools!: () => void;
+    let releaseCite!: () => void;
+    const toolsGate = new Promise<void>((resolve) => { releaseTools = resolve; });
+    const citeGate = new Promise<void>((resolve) => { releaseCite = resolve; });
+    const citation = {
+      bookHash: 'book-a',
+      nodeIndex: 3,
+      nodeTitle: '第四章 河灯',
+      nodeKind: 'chapter',
+      charOffset: 120,
+      quoteSnippet: '河灯顺流而下',
+    } as const;
+    const h = makeStore({
+      script: () => [
+        { type: 'tool-call', trace: { ...TRACE, resultSnippet: undefined } },
+        toolsGate,
+        { type: 'tool-result', trace: TRACE },
+        { type: 'delta', text: '印证完毕。' },
+        citeGate,
+        { type: 'citation', citation },
+      ],
+    });
+    await h.store.getState().openBook('book-a', 0);
+
+    const pending = h.store.getState().send('伏笔在后文有呼应吗？');
+    await waitFor(() => expect(h.store.getState().liveTraces.length).toBe(1));
+    expect(h.store.getState().phase).toBe('streaming');
+    releaseTools();
+    releaseCite();
+    await pending;
+
+    const state = h.store.getState();
+    // Live surfaces cleared after the turn…
+    expect(state.liveTraces).toEqual([]);
+    expect(state.liveCitations).toEqual([]);
+    // …and persisted on the assistant message + trace table.
+    const assistant = state.messages.find((m) => m.role === 'assistant')!;
+    expect(assistant.toolCalls).toHaveLength(1);
+    expect(assistant.toolCalls![0]).toMatchObject({ toolName: 'search_book_text', durationMs: 30 });
+    expect(assistant.citations![0]).toMatchObject({ nodeIndex: 3, quoteSnippet: '河灯顺流而下' });
+    const traceRows = await h.traces.listByConversation(state.conversation!.id);
+    expect(traceRows).toHaveLength(1);
+    expect(traceRows[0]!.toolCalls[0]!.toolName).toBe('search_book_text');
   });
 
   it('locks the topic at the quota and rejects further sends', async () => {
@@ -108,15 +211,17 @@ describe('send', () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const slow: StreamTextFn = async function* (req) {
-      yield '部分回答';
-      await gate;
-      if (req.signal?.aborted) {
-        throw Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
-      }
-      yield '后半段';
-    };
-    const h = makeStore({ stream: slow });
+    const h = makeStore({
+      script: (input) => [
+        { type: 'delta', text: '部分回答' },
+        gate.then(() => {
+          if (input.signal.aborted) {
+            throw Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+          }
+        }),
+        { type: 'delta', text: '后半段' },
+      ],
+    });
     await h.store.getState().openBook('book-a', 0);
 
     const pending = h.store.getState().send('请停一下');
@@ -135,16 +240,12 @@ describe('send', () => {
     expect(persisted.map((m) => m.role)).toEqual(['user']);
   });
 
-  it('surfaces stream failures as phase=error without consuming a turn', async () => {
-    const failing: StreamTextFn = async function* () {
-      yield '开头';
-      throw new Error('provider unreachable');
-    };
-    const h = makeStore({ stream: failing });
-    await h.store.getState().openBook('book-a', 0);
-    await h.store.getState().send('会失败的问题');
+  it('surfaces turn failures as phase=error without consuming a turn', async () => {
+    const store = makeFailingStore();
+    await store.getState().openBook('book-a', 0);
+    await store.getState().send('会失败的问题');
 
-    const state = h.store.getState();
+    const state = store.getState();
     expect(state.phase).toBe('error');
     expect(state.error).toContain('provider unreachable');
     expect(state.conversation?.turnCount).toBe(0);
@@ -152,12 +253,29 @@ describe('send', () => {
   });
 });
 
+/** Direct failing-seam store (avoids generator/as-function confusion). */
+function makeFailingStore() {
+  const db = new ReadestPlusDatabase(`chat-store-fail-${Math.random().toString(36).slice(2)}`);
+  databases.push(db);
+  const manager = createConversationManager({ repository: new ConversationRepository(db) });
+  const runTurn: RunTurnFn = async (input) => {
+    input.onEvent({ type: 'delta', text: '开头' });
+    throw new Error('provider unreachable');
+  };
+  return createChatStore({
+    manager,
+    runTurn,
+    getSettings: () => ({ ...DEFAULT_AI_SETTINGS }),
+    getNodeText: () => ({ title: '第一章', text: '正文' }),
+  });
+}
+
 describe('topic lifecycle', () => {
   it('openBook resumes the newest still-open conversation and replays its messages', async () => {
     const h = makeStore({ now: (() => { let tick = 0; return () => ++tick; })() });
-    const older = await h.manager.startConversation({ bookHash: 'book-f', sectionIndex: 0, title: '旧话题' });
+    const older = await h.manager.startConversation({ bookHash: 'book-f', nodeIndex: 0, title: '旧话题' });
     await h.manager.sendMessage(older, { role: 'user', content: '旧问题' });
-    const newer = await h.manager.startConversation({ bookHash: 'book-f', sectionIndex: 1, title: '新话题' });
+    const newer = await h.manager.startConversation({ bookHash: 'book-f', nodeIndex: 1, title: '新话题' });
     await h.manager.sendMessage(newer, { role: 'user', content: '新问题' });
 
     await h.store.getState().openBook('book-f', 0);
@@ -223,8 +341,23 @@ describe('quoteDraft + transcript', () => {
     expect(h.store.getState().quoteDraft).toBeNull();
   });
 
-  it('exports the transcript with the title, roles, quote blocks and every message', async () => {
-    const h = makeStore();
+  it('exports the transcript with the title, roles, quotes, tools and citations', async () => {
+    const h = makeStore({
+      script: () => [
+        { type: 'tool-call', trace: { ...TRACE, resultSnippet: undefined } },
+        { type: 'tool-result', trace: TRACE },
+        {
+          type: 'citation',
+          citation: {
+            bookHash: 'book-e',
+            nodeIndex: 2,
+            nodeTitle: '第三章 夜航',
+            nodeKind: 'chapter',
+            quoteSnippet: '夜航开始',
+          },
+        },
+      ],
+    });
     await h.store.getState().openBook('book-e', 0);
     await h.store.getState().send('引用提问', '灯火在雾中摇曳');
 
@@ -233,5 +366,23 @@ describe('quoteDraft + transcript', () => {
     expect(transcript).toContain('> 灯火在雾中摇曳');
     expect(transcript).toContain('[读者] 引用提问');
     expect(transcript).toContain('[助手] 回答继续');
+    expect(transcript).toContain('🔧 search_book_text');
+    expect(transcript).toContain('📍 章《第三章 夜航》');
+  });
+
+  it('labels the quote source with the node level word', async () => {
+    const h = makeStore({
+      locateQuote: () => ({
+        nodeIndex: 4,
+        nodeTitle: '第二节 河灯',
+        charOffset: 128,
+        nodeKind: 'section',
+      }),
+    });
+    await h.store.getState().openBook('book-g', 4);
+    await h.store.getState().send('这句话什么意思？', '河灯顺流而下');
+
+    const userMessage = h.store.getState().messages.find((message) => message.role === 'user')!;
+    expect(userMessage.quoteSource).toBe('节《第二节 河灯》 约 128 字符处');
   });
 });

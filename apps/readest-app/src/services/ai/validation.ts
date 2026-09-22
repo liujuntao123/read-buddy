@@ -40,7 +40,10 @@ export function validateAISettings(settings: AISettings): AISettingsErrors {
   }
 
   const { temperature } = settings;
-  if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) {
+  if (
+    temperature !== undefined &&
+    (!Number.isFinite(temperature) || temperature < 0 || temperature > 2)
+  ) {
     errors.temperature = 'Temperature 必须在 0 ~ 2 之间';
   }
 

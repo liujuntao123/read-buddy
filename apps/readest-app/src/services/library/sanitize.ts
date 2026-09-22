@@ -47,6 +47,8 @@ const ALLOWED_TAGS = new Set([
   'LI',
   'A',
   'IMG',
+  'CODE',
+  'PRE',
   'BR',
   'HR',
   'SPAN',

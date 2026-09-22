@@ -7,7 +7,7 @@
  * chapter anchor. Fewer than two anchors cannot form a multi-chapter
  * segmentation, so the detector reports failure with an empty array.
  */
-import { CHAPTER_HEADING_PATTERN, type VirtualSection } from '@/types/ai';
+import { NODE_HEADING_PATTERN, type VirtualSection } from '@/types/ai';
 
 export interface DetectedChapter {
   /** Trimmed heading line, e.g. "第一章 风起之地". */
@@ -39,7 +39,7 @@ const buildHeadingLinePattern = (pattern: RegExp): RegExp =>
  */
 export function detectChapters(
   fullText: string,
-  pattern: RegExp = CHAPTER_HEADING_PATTERN,
+  pattern: RegExp = NODE_HEADING_PATTERN,
 ): DetectedChapter[] {
   const headingLine = buildHeadingLinePattern(pattern);
   const found: DetectedChapter[] = [];

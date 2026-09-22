@@ -60,7 +60,10 @@ export function createAISettingsStore({
       const errors = validateAISettings(next);
       if (Object.keys(errors).length > 0) return errors;
       await repository.save(next);
-      set({ settings: next });
+      set({
+        settings: next,
+        toast: { type: 'success', text: '设置已成功保存' },
+      });
       return {};
     },
     testConnection: async (settings) => {
