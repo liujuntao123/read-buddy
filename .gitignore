@@ -9,6 +9,10 @@ src-tauri/gen/
 apps/readest-app/src-tauri/target/
 apps/readest-app/src-tauri/gen/
 
+# 工具生成的产物（不入库；缺失时由 next dev / next build 自动重建，
+# 跟踪它只会在 dev 与 build 之间来回翻转工作区）
+next-env.d.ts
+
 # 本地临时产物：调试截图、验证输出与临时配图（不入库）
 .scratch/shots/
 .scratch/test-results.json
