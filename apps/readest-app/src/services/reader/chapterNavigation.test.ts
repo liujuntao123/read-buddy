@@ -176,68 +176,87 @@ describe('navEntriesFromDirectory', () => {
 });
 
 /**
- * 《说理》(陈嘉映) — the book that exposed defect 3.
+ * 《说理》(陈嘉映) — the book that exposed defect 3, with the **real** rows read out
+ * of its `toc.ncx` (hrefs as the engine sees them: resolved against the NCX's own
+ * directory, so `OEBPS/Text/partNNNN.xhtml`).
  *
- * Its NCX names each chapter's file twice: the 章 row without an anchor and its
- * first 节 with one (`第2章 → part0043.xhtml`, `§2.1 → part0043.xhtml#id_1`). The
- * two hrefs are different strings but the same *place* — the 章 row starts where
- * the 节 row starts — and the vendored engine reports either of them depending on
- * whether the viewport has passed the heading. Before this table existed, 「上一节」
- * at the first 节 of every chapter stepped onto the 章 row, re-rendered the page it
- * was already on, and looked dead; 「下一节」 mirrored it by jumping backwards onto
- * the heading just passed.
+ * Its directory names each chapter's file twice: the 章 row without an anchor and
+ * its first 节 with one (`第2章 → …part0043.xhtml`, `§2.1 → …part0043.xhtml#id_1`
+ * — 9 chapters, 9 such pairs, 227 rows in all). The two hrefs are different
+ * strings but the same *place*: the 章 row starts exactly where the 节 row starts.
+ * The vendored engine reports either of them depending on whether the viewport has
+ * passed the heading. Before this table existed, 「上一节」 at the first 节 of every
+ * chapter stepped onto the 章 row, re-rendered the page it was already on, and
+ * looked dead; 「下一节」 mirrored it by jumping backwards onto the heading just
+ * passed.
  */
-describe('one file named twice: 章 row + its first 节 row (《说理》 shape)', () => {
+describe('one file named twice: 章 row + its first 节 row (《说理》’s real rows)', () => {
   const SHUOLI: NavEntry[] = [
-    { title: '序言', target: 'part0003.xhtml', spineIndex: 3 },
-    { title: '第1章 哲学之为穷理', target: 'part0004.xhtml', spineIndex: 4 },
-    { title: '§1.1 哲学是什么', target: 'part0004.xhtml#id_1', spineIndex: 4 },
-    { title: '§1.2 好道与说理', target: 'part0005.xhtml#id_2', spineIndex: 5 },
-    { title: '第2章 哲学为什么关注语言？', target: 'part0043.xhtml', spineIndex: 43 },
-    { title: '§2.1 语言转向', target: 'part0043.xhtml#id_3', spineIndex: 43 },
-    { title: '§2.2 语言或概念 vs. 事质', target: 'part0044.xhtml#id_4', spineIndex: 44 },
+    { title: '版权信息', target: 'OEBPS/Text/part0000.xhtml', spineIndex: 0 },
+    { title: '目录', target: 'OEBPS/Text/part0001.xhtml', spineIndex: 1 },
+    { title: '新版说明', target: 'OEBPS/Text/part0002.xhtml', spineIndex: 2 },
+    { title: '序言', target: 'OEBPS/Text/part0003.xhtml', spineIndex: 3 },
+    { title: '第1章 哲学之为穷理', target: 'OEBPS/Text/part0004.xhtml', spineIndex: 4 },
+    { title: '§1.1 哲学是什么', target: 'OEBPS/Text/part0004.xhtml#id_1', spineIndex: 4 },
+    { title: '§1.2 好道与说理', target: 'OEBPS/Text/part0005.xhtml', spineIndex: 5 },
+    { title: '§1.39 中西哲学的区别', target: 'OEBPS/Text/part0042.xhtml', spineIndex: 43 },
+    { title: '第2章 哲学为什么关注语言？', target: 'OEBPS/Text/part0043.xhtml', spineIndex: 44 },
+    { title: '§2.1 语言转向', target: 'OEBPS/Text/part0043.xhtml#id_1', spineIndex: 44 },
+    { title: '§2.2 语言或概念 vs. 事质', target: 'OEBPS/Text/part0044.xhtml', spineIndex: 45 },
   ];
 
   it('「上一节」 from the first 节 of a chapter reaches the previous chapter’s last 节 — not its own 章 row', async () => {
     // The engine reports the anchor the viewport sits at or just before …
-    const anchored = navigatorAt(SHUOLI, { spineIndex: 43, href: 'part0043.xhtml#id_3' }, 219);
+    const anchored = navigatorAt(SHUOLI, { spineIndex: 44, href: 'OEBPS/Text/part0043.xhtml#id_1' }, 219);
     expect(anchored.navigator.canStep('prev')).toBe(true);
     await expect(anchored.navigator.step('prev')).resolves.toMatchObject({
-      title: '§1.2 好道与说理',
-      target: 'part0005.xhtml#id_2',
+      title: '§1.39 中西哲学的区别',
+      target: 'OEBPS/Text/part0042.xhtml',
     });
-    expect(anchored.steps).toEqual(['part0005.xhtml#id_2']);
+    expect(anchored.steps).toEqual(['OEBPS/Text/part0042.xhtml']);
 
     // … and a plain file href once the viewport has passed the heading. A plain
     // file means "inside the first anchored node of that file", so the 章 row is
-    // behind the reader here too (this is the exact reported symptom).
-    const plain = navigatorAt(SHUOLI, { spineIndex: 43, href: 'part0043.xhtml' }, 219);
+    // behind the reader here too (this is the reported symptom).
+    const plain = navigatorAt(SHUOLI, { spineIndex: 44, href: 'OEBPS/Text/part0043.xhtml' }, 219);
     expect(plain.navigator.canStep('prev')).toBe(true);
     await expect(plain.navigator.step('prev')).resolves.toMatchObject({
-      target: 'part0005.xhtml#id_2',
+      target: 'OEBPS/Text/part0042.xhtml',
     });
   });
 
   it('「下一节」 never steps backwards onto the heading just passed', async () => {
     // Reported as the plain file: the reader is already inside §2.1, so next must
-    // move forward to §2.2 rather than re-entering part0043.xhtml#id_3.
-    const plain = navigatorAt(SHUOLI, { spineIndex: 43, href: 'part0043.xhtml' }, 219);
+    // move forward to §2.2 rather than re-entering …part0043.xhtml#id_1.
+    const plain = navigatorAt(SHUOLI, { spineIndex: 44, href: 'OEBPS/Text/part0043.xhtml' }, 219);
     await expect(plain.navigator.step('next')).resolves.toMatchObject({
       title: '§2.2 语言或概念 vs. 事质',
-      target: 'part0044.xhtml#id_4',
+      target: 'OEBPS/Text/part0044.xhtml',
     });
-    expect(plain.steps).toEqual(['part0044.xhtml#id_4']);
+    expect(plain.steps).toEqual(['OEBPS/Text/part0044.xhtml']);
 
     // Reported as the anchor: §2.1 is where the reader is, so next skips it too.
-    const anchored = navigatorAt(SHUOLI, { spineIndex: 43, href: 'part0043.xhtml#id_3' }, 219);
+    const anchored = navigatorAt(SHUOLI, { spineIndex: 44, href: 'OEBPS/Text/part0043.xhtml#id_1' }, 219);
     await expect(anchored.navigator.step('next')).resolves.toMatchObject({
-      target: 'part0044.xhtml#id_4',
+      target: 'OEBPS/Text/part0044.xhtml',
     });
   });
 
-  it('still steps from a plain 章 row onto its first 节 when there is no anchor to report', () => {
-    // A 章 row whose file the reader is at with no anchored sibling yet: the row
-    // itself is the place, so the ladder must not invent an anchor for it.
+  it('steps through the front matter one row at a time', async () => {
+    // 版权信息 → 目录 → 新版说明 → 序言 → 第1章, and back again.
+    const atFront = navigatorAt(SHUOLI, { spineIndex: 0, href: 'OEBPS/Text/part0000.xhtml' }, 219);
+    expect(atFront.navigator.canStep('prev')).toBe(false);
+    await expect(atFront.navigator.step('next')).resolves.toMatchObject({ title: '目录' });
+
+    const atNewEdition = navigatorAt(SHUOLI, { spineIndex: 2, href: 'OEBPS/Text/part0002.xhtml' }, 219);
+    expect(atNewEdition.navigator.canStep('prev')).toBe(true);
+    await expect(atNewEdition.navigator.step('prev')).resolves.toMatchObject({ title: '目录' });
+    expect(atNewEdition.steps).toEqual(['OEBPS/Text/part0001.xhtml']);
+  });
+
+  it('steps from a 章 row onto its first 节 when the file has no anchor to report', () => {
+    // A directory whose 章 and 节 point at separate files: the plain-file row IS
+    // the place, so the ladder must not invent an anchored sibling for it.
     const separateFiles: NavEntry[] = [
       { title: '第1章', target: 'ch1.xhtml', spineIndex: 0 },
       { title: '第2章', target: 'ch2.xhtml', spineIndex: 1 },
