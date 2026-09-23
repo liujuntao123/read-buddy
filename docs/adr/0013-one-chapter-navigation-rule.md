@@ -1,7 +1,7 @@
 # ADR 0013: One chapter-navigation rule, two adapters
 
 ## Status
-Accepted
+Accepted — ¶2's comparison is refined by ADR 0016 (a place is `(file, anchor)`, not a raw href string; 《说理》 exposed a 章 row that names its own first 节's file without the anchor).
 
 ## Context
 1. **「下一章」 was decided twice.** The engine walked its flattened Directory with `nextChapter`/`prevChapter` (57 lines) plus a three-step `getTocIndex` ladder (exact href → first row at this section → last row at or before it). The reader dock re-implemented stepping from TOC-row adjacency, with its own shadowing copy of the same ladder and its own `prevToc`/`nextToc` arithmetic.

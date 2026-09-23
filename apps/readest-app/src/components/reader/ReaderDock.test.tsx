@@ -290,6 +290,38 @@ describe('ReaderDock', () => {
     expect(screen.getByRole('button', { name: '下一节' })).toBeTruthy();
   });
 
+  it('steps 「上一节」 out of a chapter’s first 节 instead of re-rendering its own 章 row', () => {
+    // 《说理》 shape (用户反馈): each chapter's file is named twice — the 章 row with
+    // no anchor, its first 节 with one. The engine reports whichever matches the
+    // viewport, and both must land the reader on the previous 节, never on the
+    // page they are already looking at.
+    const engine = makeEngine(TOC);
+    resetStores(engine);
+    registerModel('engine-book', [
+      { title: '第1章 迷雾之城', depth: 0, href: 'ch1.xhtml' },
+      { title: '§1.1 起雾', depth: 1, href: 'ch1.xhtml#s1' },
+      { title: '第2章 图书馆的密语', depth: 0, href: 'ch2.xhtml' },
+      { title: '§2.1 星图', depth: 1, href: 'ch2.xhtml#s1' },
+    ]);
+    render(<ReaderDock />);
+
+    // (a) The viewport sits at the 节's anchor.
+    act(() => relocate(engine, 1, { tocItemHref: 'ch2.xhtml#s1', tocItemLabel: '§2.1 星图' }));
+    fireEvent.click(screen.getByRole('button', { name: '上一节' }));
+    expect(engine.goTo).toHaveBeenLastCalledWith('ch1.xhtml#s1');
+
+    // (b) Same place, reported as the plain file: the 章 row is still not a step.
+    vi.mocked(engine.goTo).mockClear();
+    act(() => relocate(engine, 1, { tocItemHref: 'ch2.xhtml', tocItemLabel: '第2章 图书馆的密语' }));
+    fireEvent.click(screen.getByRole('button', { name: '上一节' }));
+    expect(engine.goTo).toHaveBeenLastCalledWith('ch1.xhtml#s1');
+
+    // … and 「下一节」 must not step backwards onto the heading just passed.
+    vi.mocked(engine.goTo).mockClear();
+    fireEvent.click(screen.getByRole('button', { name: '下一节' }));
+    expect(engine.goTo).not.toHaveBeenCalledWith('ch2.xhtml#s1');
+  });
+
   it('stamps the hierarchy of a flat NCX from the titles themselves', () => {
     const engine = makeEngine(FLAT_NCX_TOC);
     resetStores(engine);

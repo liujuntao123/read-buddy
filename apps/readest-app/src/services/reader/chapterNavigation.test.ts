@@ -61,6 +61,23 @@ describe('resolveCurrentEntryIndex', () => {
     const later: NavEntry[] = [{ title: 'A', target: 'a.xhtml', spineIndex: 3 }];
     expect(resolveCurrentEntryIndex(later, { spineIndex: 0 })).toBe(-1);
   });
+
+  it('prefers the anchored 节 over the 章 row that names the same file', () => {
+    // 《说理》 shape: the plain-file href means "inside the file's first anchored
+    // node", whose row precedes the 章 row in nothing but document order.
+    const rows: NavEntry[] = [
+      { title: '第2章', target: 'ch2.xhtml', spineIndex: 1 },
+      { title: '§2.1', target: 'ch2.xhtml#a', spineIndex: 1 },
+    ];
+    // Anchor reported: the anchored row is the position.
+    expect(resolveCurrentEntryIndex(rows, { spineIndex: 1, href: 'ch2.xhtml#a' })).toBe(1);
+    // Plain file reported: still the anchored row, not the 章 row at index 0.
+    expect(resolveCurrentEntryIndex(rows, { spineIndex: 1, href: 'ch2.xhtml' })).toBe(1);
+    // No anchored sibling: the plain-file row is the position (unchanged).
+    expect(
+      resolveCurrentEntryIndex([rows[0]!], { spineIndex: 1, href: 'ch2.xhtml' }),
+    ).toBe(0);
+  });
 });
 
 describe('canStep and step agree', () => {
@@ -155,5 +172,89 @@ describe('navEntriesFromDirectory', () => {
     expect(rows[0]).toEqual({ title: '第一章', target: 'ch1.xhtml', spineIndex: 0 });
     // No spineIndex: the row is still reachable, it just cannot be section-compared.
     expect(rows[1]).toEqual({ title: '坏条目', target: 'nope.xhtml' });
+  });
+});
+
+/**
+ * 《说理》(陈嘉映) — the book that exposed defect 3.
+ *
+ * Its NCX names each chapter's file twice: the 章 row without an anchor and its
+ * first 节 with one (`第2章 → part0043.xhtml`, `§2.1 → part0043.xhtml#id_1`). The
+ * two hrefs are different strings but the same *place* — the 章 row starts where
+ * the 节 row starts — and the vendored engine reports either of them depending on
+ * whether the viewport has passed the heading. Before this table existed, 「上一节」
+ * at the first 节 of every chapter stepped onto the 章 row, re-rendered the page it
+ * was already on, and looked dead; 「下一节」 mirrored it by jumping backwards onto
+ * the heading just passed.
+ */
+describe('one file named twice: 章 row + its first 节 row (《说理》 shape)', () => {
+  const SHUOLI: NavEntry[] = [
+    { title: '序言', target: 'part0003.xhtml', spineIndex: 3 },
+    { title: '第1章 哲学之为穷理', target: 'part0004.xhtml', spineIndex: 4 },
+    { title: '§1.1 哲学是什么', target: 'part0004.xhtml#id_1', spineIndex: 4 },
+    { title: '§1.2 好道与说理', target: 'part0005.xhtml#id_2', spineIndex: 5 },
+    { title: '第2章 哲学为什么关注语言？', target: 'part0043.xhtml', spineIndex: 43 },
+    { title: '§2.1 语言转向', target: 'part0043.xhtml#id_3', spineIndex: 43 },
+    { title: '§2.2 语言或概念 vs. 事质', target: 'part0044.xhtml#id_4', spineIndex: 44 },
+  ];
+
+  it('「上一节」 from the first 节 of a chapter reaches the previous chapter’s last 节 — not its own 章 row', async () => {
+    // The engine reports the anchor the viewport sits at or just before …
+    const anchored = navigatorAt(SHUOLI, { spineIndex: 43, href: 'part0043.xhtml#id_3' }, 219);
+    expect(anchored.navigator.canStep('prev')).toBe(true);
+    await expect(anchored.navigator.step('prev')).resolves.toMatchObject({
+      title: '§1.2 好道与说理',
+      target: 'part0005.xhtml#id_2',
+    });
+    expect(anchored.steps).toEqual(['part0005.xhtml#id_2']);
+
+    // … and a plain file href once the viewport has passed the heading. A plain
+    // file means "inside the first anchored node of that file", so the 章 row is
+    // behind the reader here too (this is the exact reported symptom).
+    const plain = navigatorAt(SHUOLI, { spineIndex: 43, href: 'part0043.xhtml' }, 219);
+    expect(plain.navigator.canStep('prev')).toBe(true);
+    await expect(plain.navigator.step('prev')).resolves.toMatchObject({
+      target: 'part0005.xhtml#id_2',
+    });
+  });
+
+  it('「下一节」 never steps backwards onto the heading just passed', async () => {
+    // Reported as the plain file: the reader is already inside §2.1, so next must
+    // move forward to §2.2 rather than re-entering part0043.xhtml#id_3.
+    const plain = navigatorAt(SHUOLI, { spineIndex: 43, href: 'part0043.xhtml' }, 219);
+    await expect(plain.navigator.step('next')).resolves.toMatchObject({
+      title: '§2.2 语言或概念 vs. 事质',
+      target: 'part0044.xhtml#id_4',
+    });
+    expect(plain.steps).toEqual(['part0044.xhtml#id_4']);
+
+    // Reported as the anchor: §2.1 is where the reader is, so next skips it too.
+    const anchored = navigatorAt(SHUOLI, { spineIndex: 43, href: 'part0043.xhtml#id_3' }, 219);
+    await expect(anchored.navigator.step('next')).resolves.toMatchObject({
+      target: 'part0044.xhtml#id_4',
+    });
+  });
+
+  it('still steps from a plain 章 row onto its first 节 when there is no anchor to report', () => {
+    // A 章 row whose file the reader is at with no anchored sibling yet: the row
+    // itself is the place, so the ladder must not invent an anchor for it.
+    const separateFiles: NavEntry[] = [
+      { title: '第1章', target: 'ch1.xhtml', spineIndex: 0 },
+      { title: '第2章', target: 'ch2.xhtml', spineIndex: 1 },
+    ];
+    const { navigator } = navigatorAt(separateFiles, { spineIndex: 0, href: 'ch1.xhtml' }, 2);
+    expect(resolveCurrentEntryIndex(separateFiles, { spineIndex: 0, href: 'ch1.xhtml' })).toBe(0);
+    expect(navigator.canStep('prev')).toBe(false);
+  });
+
+  it('does not send a reader in front of the whole directory to the end of the book', async () => {
+    // `from === -1` (the position precedes every row) used to start the backward
+    // loop at the LAST row — a jump to the end of the book from its front.
+    const later: NavEntry[] = [{ title: '第三章', target: 'ch3.xhtml', spineIndex: 7 }];
+    const { navigator, steps } = navigatorAt(later, { spineIndex: 2 }, 20);
+    expect(navigator.canStep('prev')).toBe(true);
+    // The honest answer is the section fallback (2 - 1), not row 0 of the book.
+    await expect(navigator.step('prev')).resolves.toMatchObject({ target: 1, spineIndex: 1 });
+    expect(steps).toEqual([1]);
   });
 });

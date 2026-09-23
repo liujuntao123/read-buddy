@@ -32,6 +32,15 @@
  * 2. taking "document order is the truth" literally then walked into a row that
  *    repeats the current target (`第二章` and `卷二` both point at `ch2.xhtml`), so
  *    the reader appeared stuck on the same page.
+ *
+ * A third was found by reading 《说理》 (用户反馈：「位于某一章的第一节时，点击上一节
+ * 失效」), and it is the reason this module now thinks in **(file, anchor)** rather
+ * than in raw href strings: a directory that names one file twice — `第2章 →
+ * part0043.xhtml` (no anchor) and `§2.1 → part0043.xhtml#id_1` — made the *章* row
+ * look like a destination from inside its own first 节, so 「上一节」 re-rendered the
+ * page the reader was already on (all 9 chapters of that book, with the button
+ * enabled the whole time). The mirror case made 「下一节」 jump backwards onto the
+ * heading just passed. See `splitTarget` / `isCurrentPlace` for the rule.
  */
 import type { BookTocEntry } from '@/types/readingAgent';
 
@@ -79,13 +88,50 @@ export interface ChapterNavigator {
 }
 
 /**
+ * A target split into the **file** it names and the **anchor** inside it.
+ *
+ * The distinction is what this module was missing. A directory routinely names
+ * one file twice:
+ *
+ * ```text
+ * 第2章 哲学为什么关注语言？   -> part0043.xhtml        (the 章; no anchor)
+ * §2.1 语言转向                -> part0043.xhtml#id_1   (its first 节)
+ * ```
+ *
+ * 《说理》 is that shape in all 9 of its chapters. `part0043.xhtml` and
+ * `part0043.xhtml#id_1` are different strings but not different *places* — the
+ * first one is where the second one starts — and a rule that only compares
+ * strings treats the 章 row as a destination the reader can still step onto.
+ */
+const splitTarget = (target: string): { file: string; anchor?: string } => {
+  const hash = target.indexOf('#');
+  if (hash < 0) return { file: target };
+  const anchor = target.slice(hash + 1);
+  return anchor ? { file: target.slice(0, hash), anchor } : { file: target.slice(0, hash) };
+};
+
+const anchorOfTarget = (target: string | number): string | undefined =>
+  typeof target === 'string' ? splitTarget(target).anchor : undefined;
+
+const fileOfTarget = (target: string | number): string | undefined =>
+  typeof target === 'string' ? splitTarget(target).file : undefined;
+
+/**
  * The index of the row the reader is at.
  *
- * Three signals, in decreasing precision — the ladder the engine used to publish
- * as `getTocIndex`, now the only copy of it:
- *   1. the exact href the viewport reports;
- *   2. the first row that starts at this physical section;
- *   3. the last row that starts at or before it (a directory coarser than the
+ * Four signals, in decreasing precision:
+ *   1. **the exact href** the viewport reports, when it carries an anchor — the
+ *      engine reports the anchor the viewport sits at or just before;
+ *   2. **the first anchored row of the reported file**, when the href is a plain
+ *      file. The vendored engine's `TOCProgress` resolves a plain-file href to the
+ *      directory row *preceding* the anchor the viewport has passed
+ *      (`vendor/foliate-js/progress.js` returns `items[i - 1]`), so a plain
+ *      `part0043.xhtml` means the reader is already inside `part0043.xhtml#id_1` —
+ *      the 章 row that also names that file is *behind* them. Taking the first
+ *      exact match instead (which is always the 章 row) made 「下一节」 jump back
+ *      onto the heading the reader had just passed;
+ *   3. the first row that starts at this physical section;
+ *   4. the last row that starts at or before it (a directory coarser than the
  *      spine: one row can span several sections).
  *
  * Returns -1 when the position precedes every row.
@@ -94,11 +140,24 @@ export function resolveCurrentEntryIndex(
   entries: readonly NavEntry[],
   current: NavPosition,
 ): number {
+  const exactMatch = (href: string): number =>
+    entries.findIndex((entry) => typeof entry.target === 'string' && entry.target === href);
+
   if (current.href) {
-    const exact = entries.findIndex(
-      (entry) => typeof entry.target === 'string' && entry.target === current.href,
-    );
-    if (exact >= 0) return exact;
+    const here = splitTarget(current.href);
+    if (here.anchor !== undefined) {
+      const exact = exactMatch(current.href);
+      if (exact >= 0) return exact;
+    } else {
+      // Plain file href: prefer the anchored node inside that file over the
+      // container row that merely names the file (signal 2 above).
+      const firstAnchored = entries.findIndex(
+        (entry) => fileOfTarget(entry.target) === here.file && anchorOfTarget(entry.target) !== undefined,
+      );
+      if (firstAnchored >= 0) return firstAnchored;
+      const exact = exactMatch(current.href);
+      if (exact >= 0) return exact;
+    }
   }
   const atSection = entries.findIndex((entry) => entry.spineIndex === current.spineIndex);
   if (atSection >= 0) return atSection;
@@ -126,13 +185,31 @@ export function resolveCurrentEntryIndex(
  * - a row that only shares the *file* is a real move (`ch1.xhtml#s1` →
  *   `ch1.xhtml#s2` — two 节 inside one spine file), so it is taken.
  *
- * Comparing **targets** is what distinguishes those two cases; comparing sections
- * called both "the same place" and produced defect 1 above.
+ * A row that names the **same file with no anchor of its own** is the container
+ * the reader is already inside (its own 章 row). Its destination resolves to the
+ * file's start — the very place the current node begins — so stepping onto it
+ * moves nothing. Treating it as a destination is the defect 《说理》 exposed: at
+ * `...part0043.xhtml#id_1` (the first 节 of 第2章) 「上一节」 stepped onto
+ * `...part0043.xhtml` (the 章 row) and re-rendered the page the reader was
+ * already looking at, so the button appeared dead for all 9 chapters.
+ *
+ * Comparing **(file, anchor)** is what distinguishes all three cases.
  */
-const isCurrentPlace = (entry: NavEntry, current: NavPosition): boolean =>
-  current.href !== undefined
-    ? entry.target === current.href
-    : entry.spineIndex !== undefined && entry.spineIndex === current.spineIndex;
+const isCurrentPlace = (entry: NavEntry, current: NavPosition): boolean => {
+  if (current.href === undefined) {
+    return entry.spineIndex !== undefined && entry.spineIndex === current.spineIndex;
+  }
+  // An ordinal target (a segmented TXT book) never equals an href: preserve the
+  // original behaviour and let it be a step.
+  if (typeof entry.target !== 'string') return false;
+  const here = splitTarget(current.href);
+  const there = splitTarget(entry.target);
+  if (there.file !== here.file) return false;
+  // Same file, no anchor: the file's own head — already inside what I am reading.
+  if (there.anchor === undefined) return true;
+  return there.anchor === here.anchor;
+};
+
 
 export function createChapterNavigator(deps: ChapterNavigatorDeps): ChapterNavigator {
   const { entries, totalSections, current, goTo } = deps;
@@ -161,7 +238,11 @@ export function createChapterNavigator(deps: ChapterNavigatorDeps): ChapterNavig
   /** The row a 「上一章」 step reaches, or null. */
   const findPrev = (): NavEntry | null => {
     const from = resolveCurrentEntryIndex(entries, current);
-    for (let i = from >= 0 ? from - 1 : entries.length - 1; i >= 0; i--) {
+    // `from < 0` means the position precedes every row: there is nothing *before*
+    // the reader in the directory to step onto. (The loop used to start at the
+    // LAST row for this case, which sent a reader at the front of the book to its
+    // end.) The section fallback below still applies.
+    for (let i = from - 1; i >= 0; i--) {
       const entry = entries[i]!;
       if (!isCurrentPlace(entry, current)) return entry;
     }
