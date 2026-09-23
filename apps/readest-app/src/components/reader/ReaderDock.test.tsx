@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import ReaderDock from './ReaderDock';
+import ReaderDock, { DOCK_PEEK_MS } from './ReaderDock';
 import FoliatePane from '@/components/reader/FoliatePane';
 import type { EngineLocation, FoliateEngineHandle } from '@/services/library/foliateEngine';
 import { useAISidebarStore } from '@/store/aiSidebarStore';
@@ -239,6 +239,47 @@ describe('ReaderDock', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '第三章 长夜漫漫' }));
     expect(dock.getAttribute('data-open')).toBe('false'); // selection closes it
+  });
+
+  it('peeks once when a book opens, then fades back on its own', () => {
+    vi.useFakeTimers();
+    try {
+      const engine = makeEngine();
+      resetStores(engine);
+      render(<ReaderDock />);
+
+      // 开书（bookHash 落地）就让 dock 现身一次：目录 / 排版住在这个角落，只靠
+      // 悬停的话新读者根本找不到它们。
+      const dock = screen.getByTestId('reader-dock');
+      expect(dock.getAttribute('data-peek')).toBe('true');
+
+      act(() => {
+        vi.advanceTimersByTime(DOCK_PEEK_MS);
+      });
+      expect(dock.getAttribute('data-peek')).toBe('false');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not re-peek while the same book stays open', () => {
+    vi.useFakeTimers();
+    try {
+      const engine = makeEngine();
+      resetStores(engine);
+      const { rerender } = render(<ReaderDock />);
+      const dock = screen.getByTestId('reader-dock');
+      act(() => {
+        vi.advanceTimersByTime(DOCK_PEEK_MS);
+      });
+      expect(dock.getAttribute('data-peek')).toBe('false');
+
+      // A page turn is not an open: the peek belongs to opening a book.
+      rerender(<ReaderDock />);
+      expect(dock.getAttribute('data-peek')).toBe('false');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('dismisses open popovers when focus moves into a book iframe (window blur)', () => {

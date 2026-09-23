@@ -49,6 +49,12 @@ interface RawTocRow {
 }
 
 /**
+ * 打开书籍时 dock 自己现身的长短（毫秒）。够读者看清「这里有几个按钮」，
+ * 又短到不影响阅读——它只是**指路**，不是常驻控件。
+ */
+export const DOCK_PEEK_MS = 2_500;
+
+/**
  * Floating reader dock: the reading-time controls (chapter prev/next, TOC,
  * page mode, reader settings) live in a vertical strip at the bottom-right
  * corner of the reading pane, revealed only when the pointer enters its
@@ -56,7 +62,8 @@ interface RawTocRow {
  * header stays reserved for identity + global actions.
  *
  * `data-open` keeps the dock pinned while one of its popovers is open, so
- * the anchor never disappears under an open TOC / settings panel.
+ * the anchor never disappears under an open TOC / settings panel; `data-peek`
+ * shows it once when a book is opened (see `DOCK_PEEK_MS`).
  */
 export default function ReaderDock() {
   const spineCount = useReaderStore((s) => s.spineCount);
@@ -73,6 +80,19 @@ export default function ReaderDock() {
   const [isTocOpen, setIsTocOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [tocPos, setTocPos] = useState(-1);
+  /**
+   * 开书时的「现身」：目录、翻章、排版都住在这个角落，可它们只在鼠标移入时
+   * 出现——第一次打开一本书的读者根本不知道它们在哪。于是开书（bookHash 变化）
+   * 让 dock 亮出来一次，然后自己隐回去（CSS 与 `data-open` 共用一条显示规则）。
+   */
+  const [isPeeking, setIsPeeking] = useState(false);
+
+  useEffect(() => {
+    if (!bookHash) return;
+    setIsPeeking(true);
+    const timer = window.setTimeout(() => setIsPeeking(false), DOCK_PEEK_MS);
+    return () => window.clearTimeout(timer);
+  }, [bookHash]);
 
   // Clicks inside the chapter iframes never reach the parent document, so
   // popover light dismiss alone cannot fire there — close on window blur.
@@ -315,6 +335,7 @@ export default function ReaderDock() {
         className="reader-dock"
         data-testid="reader-dock"
         data-open={isTocOpen || isSettingsOpen ? 'true' : 'false'}
+        data-peek={isPeeking ? 'true' : 'false'}
       >
         <IconButton
           label={prevLabel}

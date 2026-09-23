@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import HighlightsTab from './HighlightsTab';
 import { createHighlightStore, type HighlightRepositoryLike } from '@/store/highlightStore';
@@ -7,6 +7,8 @@ import {
   subscribeLocate,
   type LocateRequest,
 } from '@/services/reader/readerLink';
+import { useAISidebarStore } from '@/store/aiSidebarStore';
+import { useChatStore } from '@/store/chatStore';
 import { useReaderStore } from '@/store/readerStore';
 import {
   clearAgentBookContext,
@@ -80,6 +82,8 @@ let unsubscribe: () => void;
 
 beforeEach(() => {
   useReaderStore.setState({ bookHash: BOOK, bookTitle: '灯塔之夜', spineIndex: 1 });
+  useChatStore.setState({ quoteDraft: null });
+  useAISidebarStore.setState({ expanded: false, width: 400, activeTab: 'summary' });
   requests = [];
   unsubscribe = subscribeLocate((request) => requests.push(request));
   registerNodes();
@@ -89,6 +93,12 @@ afterEach(() => {
   unsubscribe();
   clearLocateListeners();
   clearAgentBookContext(BOOK);
+  useChatStore.setState({ quoteDraft: null });
+  useAISidebarStore.setState({ expanded: false, activeTab: 'summary' });
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  delete (navigator as any).clipboard;
 });
 
 describe('HighlightsTab', () => {
@@ -160,5 +170,126 @@ describe('HighlightsTab', () => {
     const { store, repository } = makeStore([]);
     render(<HighlightsTab store={store} />);
     await waitFor(() => expect(repository.listByBook).toHaveBeenCalledWith(BOOK));
+  });
+
+  it('hands a mark to the chat as a quote draft, without jumping', async () => {
+    const { store } = makeStore([row({ id: 'a', quote: '穹顶上的星图亮了起来' })]);
+    render(<HighlightsTab store={store} />);
+
+    fireEvent.click(await screen.findByTestId('ask-highlight-ai'));
+
+    // The selection toolbar's own 追问 path: the sidebar expands onto the chat tab
+    // and the quote waits in the composer — a mark and a selection enter the same way.
+    expect(useChatStore.getState().quoteDraft).toBe('穹顶上的星图亮了起来');
+    expect(useAISidebarStore.getState().expanded).toBe(true);
+    expect(useAISidebarStore.getState().activeTab).toBe('chat');
+    // Asking a question is not a request to move the reader.
+    expect(requests).toEqual([]);
+  });
+
+  it('dates each row the way a reader would', async () => {
+    const createdAt = Date.now() - 3 * 24 * 60 * 60 * 1000;
+    const { store } = makeStore([row({ id: 'a', quote: '穹顶上的星图亮了起来', createdAt })]);
+    render(<HighlightsTab store={store} />);
+
+    const item = await screen.findByTestId('highlight-item');
+    expect(within(item).getByTestId('highlight-created-at').textContent).toContain('3 天前');
+  });
+
+  it('copies every mark as Markdown grouped by location', async () => {
+    const writeText = vi.fn(async (_text: string) => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const { store } = makeStore([
+      row({ id: 'a', quote: '穹顶上的星图亮了起来', nodeIndex: 1, createdAt: 1 }),
+      row({ id: 'b', quote: '图书馆的木门在她身后合上', nodeIndex: 1, createdAt: 2 }),
+      row({ id: 'c', quote: '灯火在雾中摇曳', nodeIndex: 2, nodeTitle: '第三章 灯塔', createdAt: 3 }),
+    ]);
+    render(<HighlightsTab store={store} />);
+
+    fireEvent.click(await screen.findByTestId('copy-highlights'));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(writeText.mock.calls[0]![0]).toBe(
+      [
+        '# 《灯塔之夜》划线',
+        '',
+        '## 第一卷 迷雾 › 第二章 图书馆的密语',
+        '',
+        '> 穹顶上的星图亮了起来',
+        '',
+        '> 图书馆的木门在她身后合上',
+        '',
+        '## 第三章 灯塔',
+        '',
+        '> 灯火在雾中摇曳',
+        '',
+      ].join('\n'),
+    );
+    // 「已复制」 is the acknowledgement, not a silent clipboard write.
+    await waitFor(() => expect(screen.getByTestId('copy-highlights').textContent).toContain('已复制'));
+  });
+
+  it('puts a deleted mark back from the undo row', async () => {
+    const { store, repository } = makeStore([
+      row({ id: 'a', quote: '要删掉的一句' }),
+      row({ id: 'b', quote: '留下的一句', createdAt: 2 }),
+    ]);
+    render(<HighlightsTab store={store} />);
+
+    fireEvent.click((await screen.findAllByTestId('delete-highlight'))[0]!);
+    await waitFor(() => expect(repository.remove).toHaveBeenCalledWith('a'));
+    expect(screen.getByTestId('highlight-undo')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('highlight-undo-button'));
+
+    // Back under its own id and its own place — that is what makes it an undo
+    // rather than a second mark.
+    await waitFor(() =>
+      expect(repository.put).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'a', quote: '要删掉的一句' }),
+      ),
+    );
+    await waitFor(() => expect(screen.getAllByTestId('highlight-item')).toHaveLength(2));
+    expect(screen.queryByTestId('highlight-undo')).toBeNull();
+  });
+
+  it('drops a pending undo when the reader switches books', async () => {
+    const { store } = makeStore([
+      row({ id: 'a', quote: '要删掉的一句' }),
+      row({ id: 'b', quote: '留下的一句', createdAt: 2 }),
+    ]);
+    render(<HighlightsTab store={store} />);
+
+    fireEvent.click((await screen.findAllByTestId('delete-highlight'))[0]!);
+    expect(await screen.findByTestId('highlight-undo')).toBeTruthy();
+
+    act(() => {
+      useReaderStore.setState({ bookHash: 'book-b' });
+    });
+    // The row it would restore belongs to the book the reader just left.
+    await waitFor(() => expect(screen.queryByTestId('highlight-undo')).toBeNull());
+  });
+
+  it('closes the undo window on its own, so a stale row cannot come back', async () => {
+    const { store } = makeStore([row({ id: 'a', quote: '要删掉的一句' })]);
+    render(<HighlightsTab store={store} />);
+    const item = await screen.findByTestId('highlight-item');
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(within(item).getByTestId('delete-highlight'));
+      // `remove` is async: let its microtask land before looking.
+      await act(async () => {});
+      // The empty state is what the last row's undo leaves behind, so the window
+      // has to be there too.
+      expect(screen.getByTestId('highlight-undo')).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(screen.queryByTestId('highlight-undo')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

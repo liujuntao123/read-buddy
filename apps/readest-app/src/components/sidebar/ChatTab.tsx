@@ -7,11 +7,22 @@
  * jump the reader viewport; a silent indexing status row tracks the import
  * pipeline; the composer keeps the turn-quota topic model (ADR 0006).
  *
+ * Around that core, the surfaces the product review found missing (ticket 14):
+ *   - an empty state that *asks* something — welcome block + suggestion chips
+ *     whose level word comes from the Node View, never a literal 章 / 节;
+ *   - a setup card above the composer while no provider is configured, instead
+ *     of failing on the reader's first question (ADR 0004: nothing is called
+ *     until the reader asks);
+ *   - failures as a classified banner *in the message stream* with 重试 /
+ *     AI 设置, where the one truncated red line used to sit;
+ *   - copy actions on every finished answer and on the whole topic.
+ *
  * The parent (AISidebar) mounts this without props to use the default
  * `useChatStore` singleton; tests inject a store built by `createChatStore`.
  */
-import { useEffect, useRef, useState } from 'react';
-import { Check, Clock, Copy, Plus, Send, Square, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Clock, MessageSquare, Plus, Send, Sparkles, Square, X } from 'lucide-react';
+import { Banner } from '@astryxdesign/core/Banner';
 import { Button } from '@astryxdesign/core/Button';
 import { Card } from '@astryxdesign/core/Card';
 import { ChatMessage, ChatMessageBubble, ChatMessageList } from '@astryxdesign/core/Chat';
@@ -24,13 +35,29 @@ import { TextArea } from '@astryxdesign/core/TextArea';
 import { Token } from '@astryxdesign/core/Token';
 import { type Message } from '@/types/ai';
 import { useChatStore, turnQuotaLabel, type ChatStoreHook } from '@/store/chatStore';
-import { canSend } from '@/services/chat/conversationManager';
+import { canSend, retryTargetIndex } from '@/services/chat/conversationManager';
+import { nodeKindLabel, resolveCurrentNodeView } from '@/services/bookNodes';
+import { providerReady } from '@/services/ai/providerReadiness';
+import { useAISettingsStore } from '@/store/aiSettingsStore';
+import { useAISidebarStore } from '@/store/aiSidebarStore';
+import { useReaderStore } from '@/store/readerStore';
 import { useDismissOnWindowBlur } from '@/hooks/useDismissOnWindowBlur';
 import MarkdownView from '@/components/common/MarkdownView';
 import QuoteBlock from '@/components/common/QuoteBlock';
+import CopyButton from '@/components/common/CopyButton';
+import AIProviderSetupCard from '@/components/common/AIProviderSetupCard';
 import AgentTraceAccordion from './AgentTraceAccordion';
 import CitationCard from './CitationCard';
 import IndexingStatusBar from './IndexingStatusBar';
+
+/**
+ * Remaining turns at or below this number paint the quota pill in the warning
+ * colour: the reader should feel the cap approaching *before* the topic locks.
+ */
+const QUOTA_WARNING_TURNS = 2;
+
+/** What the setup card promises *this* panel will do once a model exists. */
+const SETUP_DESCRIPTION = '配置模型后，可以就当前阅读位置提问，伴读会检索全书后回答。';
 
 interface ChatTabProps {
   /** Injectable store seam; defaults to the app-wide singleton. */
@@ -62,12 +89,27 @@ function UserMessage({ message }: { message: Message }) {
   );
 }
 
-/** Assistant reply: trace accordion + markdown body + citation cards. */
+/** Assistant reply: trace accordion + markdown body + citation cards + copy. */
 function AssistantMessage({ message }: { message: Message }) {
   const traces = message.toolCalls ?? [];
   const citations = message.citations ?? [];
   return (
-    <ChatMessage sender="assistant">
+    <ChatMessage
+      sender="assistant"
+      metadata={
+        // Revealed on hover/focus of the message (`.chat-copy-action` in
+        // globals.css): an answer action that is always visible would add one
+        // more thing to read under every turn.
+        <CopyButton
+          className="chat-copy-action"
+          getText={() => message.content}
+          label="复制回答"
+          tooltip="复制这条回答"
+          showCopiedText
+          testId="copy-answer"
+        />
+      }
+    >
       <ChatMessageBubble width="100%" data-testid="assistant-bubble">
         <VStack gap={2}>
           <AgentTraceAccordion traces={traces} />
@@ -102,6 +144,63 @@ function StreamingMessage({
   );
 }
 
+/**
+ * Empty state: what the companion can do, and four questions to try. The level
+ * word is the Node View's (`nodeKindLabel`) — a TXT 段 book must not be asked
+ * about 「本节」 (CONTEXT.md / ADR 0010).
+ */
+function ChatEmptyState({ onPick }: { onPick: (question: string) => void }) {
+  const bookHash = useReaderStore((s) => s.bookHash);
+  const spineIndex = useReaderStore((s) => s.spineIndex);
+  const anchor = useReaderStore((s) => s.anchor);
+  const nodeTitle = useReaderStore((s) => s.nodeTitle);
+  const bookTitle = useReaderStore((s) => s.bookTitle);
+
+  const view = useMemo(
+    () => resolveCurrentNodeView(),
+    [bookHash, spineIndex, anchor, nodeTitle],
+  );
+  const level = nodeKindLabel(view.kind);
+
+  const suggestions = useMemo(
+    () => [
+      `这一${level}主要讲了什么？`,
+      `本${level}有哪些关键概念？`,
+      '梳理一下到目前为止的脉络',
+      '这本书讲了什么？',
+    ],
+    [level],
+  );
+
+  return (
+    <VStack data-testid="chat-empty-state" gap={2} padding={1}>
+      <HStack gap={2} vAlign="center">
+        <Sparkles size={14} aria-hidden style={{ color: 'var(--color-accent)' }} />
+        <Text weight="medium">有什么想问的？</Text>
+      </HStack>
+      <Text type="supporting" color="secondary" style={{ lineHeight: 1.6 }}>
+        {/* 《》 is for the book title — node titles themselves never wear it. */}
+        {bookTitle
+          ? `回答会结合《${bookTitle}》的正文检索与全书脉络生成。`
+          : '回答会结合全书正文检索与脉络生成。'}
+      </Text>
+      {/* Chips are Buttons, not Tokens: Tokens are metadata, these are actions. */}
+      <HStack gap={1} wrap="wrap">
+        {suggestions.map((question) => (
+          <Button
+            key={question}
+            label={question}
+            variant="secondary"
+            size="sm"
+            data-testid="chat-suggestion"
+            onClick={() => onPick(question)}
+          />
+        ))}
+      </HStack>
+    </VStack>
+  );
+}
+
 export default function ChatTab({ store = useChatStore }: ChatTabProps) {
   const conversation = store((s) => s.conversation);
   const messages = store((s) => s.messages);
@@ -119,7 +218,9 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
 
   const [input, setInput] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
+
+  const providerConfigured = useAISettingsStore((s) => providerReady(s.settings));
+  const openSettings = useAISidebarStore((s) => s.openSettings);
 
   // Clicks into the book iframe (most of the window while reading) must
   // also dismiss the history popover.
@@ -160,6 +261,8 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
 
   const streaming = phase === 'streaming';
   const isClosed = !canSend(conversation);
+  const remainingTurns = maxTurns - (conversation?.turnCount ?? 0);
+  const retryable = retryTargetIndex(messages) !== -1;
 
   const submit = () => {
     const text = input.trim();
@@ -169,34 +272,18 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
     store.getState().setQuoteDraft(null);
   };
 
-  const copyTranscript = async () => {
-    const text = store.getState().exportTranscript();
-    let ok = false;
-    if (navigator.clipboard?.writeText) {
-      try {
-        await navigator.clipboard.writeText(text);
-        ok = true;
-      } catch {
-        ok = false;
-      }
+  /**
+   * A suggestion chip: with a provider configured it *is* the send; without
+   * one it lands in the composer, so the reader still sees what was about to
+   * happen and can finish the thought after 配置 AI 模型.
+   */
+  const pickSuggestion = (question: string) => {
+    if (providerConfigured && !inputDisabled) {
+      void store.getState().send(question);
+      return;
     }
-    if (!ok) {
-      // Legacy fallback for non-secure contexts.
-      try {
-        const helper = document.createElement('textarea');
-        helper.value = text;
-        helper.style.position = 'fixed';
-        helper.style.opacity = '0';
-        document.body.appendChild(helper);
-        helper.select();
-        ok = document.execCommand('copy');
-        document.body.removeChild(helper);
-      } catch {
-        ok = false;
-      }
-    }
-    setCopied(ok);
-    window.setTimeout(() => setCopied(false), 1500);
+    setInput(question);
+    inputRef.current?.focus();
   };
 
   return (
@@ -258,6 +345,14 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
           icon={<Plus size={14} aria-hidden />}
           onClick={() => store.getState().startNewTopic()}
         />
+        {/* 复制对话 lives here, not only on the quota-exhausted card: copying a
+            good topic out is a normal thing to want mid-conversation. */}
+        <CopyButton
+          getText={() => store.getState().exportTranscript()}
+          label="复制对话"
+          tooltip="复制本轮对话"
+          testId="copy-topic-transcript"
+        />
       </HStack>
 
       {/* Message stream: user right, assistant left, live agent turn.
@@ -270,11 +365,7 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
         density="compact"
         style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingBlock: 'var(--spacing-1)' }}
       >
-        {messages.length === 0 && !streaming && (
-          <Text type="supporting" color="secondary" as="p">
-            可以针对当前章节或全书内容随时提问。
-          </Text>
-        )}
+        {messages.length === 0 && !streaming && <ChatEmptyState onPick={pickSuggestion} />}
         {messages.map((message) =>
           message.role === 'user' ? (
             <UserMessage key={message.id} message={message} />
@@ -285,26 +376,50 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
         {streaming && (
           <StreamingMessage streamingText={streamingText} liveTraces={liveTraces} />
         )}
+        {/* Failure belongs in the stream, where the answer would have been —
+            with the two ways out of it (设计文档 §6, ticket 14 item 6). */}
+        {error && (
+          <Banner
+            data-testid="chat-error"
+            status="error"
+            container="card"
+            collapsible={false}
+            title={error}
+            endContent={
+              <HStack gap={2} wrap="wrap">
+                {retryable && (
+                  <Button
+                    label="重试"
+                    variant="secondary"
+                    size="sm"
+                    data-testid="retry-message"
+                    onClick={() => void store.getState().retry()}
+                  />
+                )}
+                <Button
+                  label="AI 设置"
+                  variant="secondary"
+                  size="sm"
+                  data-testid="chat-error-settings"
+                  onClick={openSettings}
+                />
+              </HStack>
+            }
+          />
+        )}
         <div ref={bottomRef} />
       </ChatMessageList>
 
-      {/* Turn quota pill + error surface. */}
+      {/* Turn quota pill. The colour is the early warning: 剩余 ≤2 轮 turn it
+          yellow, and an exhausted topic red (the card below then takes over). */}
       <HStack justify="between" gap={2} vAlign="center" style={{ borderTop: '1px solid var(--color-border)', paddingTop: 'var(--spacing-2)' }}>
         <Token
           data-testid="turn-quota"
-          label={`💬 ${turnQuotaLabel(conversation, maxTurns)} 轮`}
+          icon={<MessageSquare size={12} aria-hidden />}
+          color={remainingTurns <= 0 ? 'red' : remainingTurns <= QUOTA_WARNING_TURNS ? 'yellow' : 'default'}
+          label={`${turnQuotaLabel(conversation, maxTurns)} 轮`}
           size="sm"
         />
-        {error && (
-          <Text
-            type="supporting"
-            maxLines={1}
-            data-testid="chat-error"
-            style={{ color: 'var(--color-error)' }}
-          >
-            {error}
-          </Text>
-        )}
       </HStack>
 
       {/* Pending selection quote (ticket 05 fills this via setQuoteDraft). */}
@@ -339,19 +454,23 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
                 icon={<Plus size={14} aria-hidden />}
                 onClick={() => store.getState().startNewTopic()}
               />
-              <Button
+              <CopyButton
+                getText={() => store.getState().exportTranscript()}
                 label="复制对话"
+                isIconOnly={false}
                 variant="secondary"
-                size="sm"
-                data-testid="copy-transcript"
-                icon={copied ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />}
-                onClick={() => void copyTranscript()}
-              >
-                {copied ? '已复制' : '复制对话'}
-              </Button>
+                testId="copy-transcript"
+              />
             </HStack>
           </VStack>
         </Card>
+      )}
+
+      {/* Unconfigured provider: name the capability and the fix *before* the
+          first question fails (ticket 14 item 3). The composer stays visible —
+          talking to a model is not the only thing on this panel. */}
+      {!providerConfigured && (
+        <AIProviderSetupCard testId="chat-setup" description={SETUP_DESCRIPTION} />
       )}
 
       {/* Composer: full width with inside-positioned action button and a fixed

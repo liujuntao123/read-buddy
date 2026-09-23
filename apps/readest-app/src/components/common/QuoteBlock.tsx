@@ -25,7 +25,7 @@ export const QUOTE_AUTO_COLLAPSE_CHARS = 60;
 export interface QuoteBlockProps {
   /** The quoted book text (rendered as Markdown). */
   text: string;
-  /** Optional source attribution, e.g. 「第 3 章《河灯迷影》」. */
+  /** Optional source attribution, e.g. 节「河灯迷影」 约 128 字符处. */
   source?: string;
   /** Tighter paddings for use inside chat bubbles. */
   compact?: boolean;

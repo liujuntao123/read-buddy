@@ -30,10 +30,10 @@ export const BRIEF_MAX_CHARS = 120;
 export const BRIEF_CONCURRENCY = 2;
 
 export const BRIEF_SYSTEM_PROMPT = [
-  '你是一名极其精炼的读书助理。请根据节点标题与正文首尾切片，提炼本节点微摘要。',
-  '输出格式（两行，不要任何多余文字）：',
-  '第一行：不超过80字的单行客观陈述句，概括核心事件进展、剧情转折及新出场人物；',
-  '第二行：以“【实体】”开头，列出本节点登场的关键人物或术语，用顿号分隔（无则输出“【实体】无”）。',
+  '请根据节点标题与正文切片提炼本节点微摘要。',
+  '输出格式（两行）：',
+  '第一行：不超过80字的单行客观陈述句，概括核心事件进展、剧情转折或论点推进；',
+  '第二行：以“【实体】”开头，列出关键人物或术语，用顿号分隔（无则输出“【实体】无”）。',
 ].join('\n');
 
 /** Head+tail slice of a node body for token-frugal summarization. */
@@ -44,8 +44,7 @@ export function sliceHeadAndTail(text: string): string {
 
 export function buildBriefPrompt(nodeTitle: string, nodeSlice: string): string {
   return [
-    '【任务】用极其简练客观的语言（不超过80字），提炼本节点发生的核心事件进展、剧情转折及新出场人物。',
-    '【要求】严禁寒暄与废话，直接输出单行陈述句。',
+    '【任务】概括本节点核心事件进展、剧情转折或论点推进（不超过80字，直接输出单行陈述句）。',
     `【本节点标题】${nodeTitle}`,
     '【正文切片】',
     nodeSlice,

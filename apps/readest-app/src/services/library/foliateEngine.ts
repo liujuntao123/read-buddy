@@ -198,13 +198,16 @@ export function getReaderThemeStyles(theme: ReaderTheme): string {
     `;
   }
   if (theme === 'sepia') {
+    // 链接色取护眼主题**自己的** accent（src/theme/readest-sepia.css:
+    // `--color-accent: light-dark(#7B5802, #EFBF6D)` 的浅色值——书页永远是浅色面）。
+    // 之前这里是通用紫罗兰 #8b5cf6：在米色纸面和暖褐正文之间，那是另一套色系。
     return `
       html, body {
         color: #433422 !important;
         background-color: #faf5ea !important;
       }
       a, a:link, a:visited {
-        color: #8b5cf6 !important;
+        color: #7b5802 !important;
       }
       p, div, span, h1, h2, h3, h4, h5, h6, li, blockquote, dd, dt {
         color: inherit !important;

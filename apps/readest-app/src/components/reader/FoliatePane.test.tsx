@@ -154,6 +154,39 @@ describe('FoliatePane', () => {
     // (cleanup runs via @testing-library afterEach)
   });
 
+  it('shows a loading overlay until the engine finishes opening', async () => {
+    const engine = makeEngine();
+    let finish: () => void = () => {};
+    vi.mocked(engine.openIn).mockImplementation(
+      (container: HTMLElement) =>
+        new Promise<void>((resolve) => {
+          finish = () => {
+            container.appendChild(document.createElement('div'));
+            resolve();
+          };
+        }),
+    );
+
+    render(<FoliatePane engine={engine} />);
+    // Before `openIn` resolves the pane is an empty box: the reader must be told
+    // the book is on its way instead of being shown nothing.
+    expect(screen.getByTestId('foliate-opening').textContent).toContain('正在打开书籍…');
+
+    await act(async () => {
+      finish();
+    });
+    await waitFor(() => expect(screen.queryByTestId('foliate-opening')).toBeNull());
+  });
+
+  it('drops the loading overlay when opening fails, leaving the error Banner', async () => {
+    const engine = makeEngine();
+    vi.mocked(engine.openIn).mockRejectedValue(new Error('boom'));
+
+    render(<FoliatePane engine={engine} />);
+    await waitFor(() => expect(screen.queryByTestId('foliate-opening')).toBeNull());
+    expect(screen.getByText('打开书籍失败，请重试')).toBeTruthy();
+  });
+
   it('seeds the reading context from the engine position on re-attach', async () => {
     const engine = makeEngine();
     relocate(engine, 1); // position recorded before the pane mounts

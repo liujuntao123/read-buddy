@@ -337,8 +337,9 @@ describe('createAgentOrchestrator', () => {
     const result = await orchestrator.runTurn(INPUT);
     expect(result.content).toBe('回答');
     expect(result.toolCalls).toEqual([]);
-    // Level word still comes from the node model, even in degraded mode.
-    expect(seenSystem).toContain('当前用户正在阅读《灯塔之夜》的章《第一章 起源》');
+    // Level word still comes from the node model, even in degraded mode. The
+    // node title is quoted with 「」 — 《》 is for the book title alone.
+    expect(seenSystem).toContain('当前用户正在阅读《灯塔之夜》的章「第一章 起源」');
     expect(seenSystem).not.toContain('的节点《');
     expect(seenTools).toEqual({});
   });

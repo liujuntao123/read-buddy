@@ -15,7 +15,7 @@ import { useLibraryStore } from '@/store/libraryStore';
 
 /**
  * Unified top navigation bar — identity + global actions only.
- * In Shelf mode: brand, shelf title + count, continue-reading, import.
+ * In Shelf mode: brand (non-interactive), shelf title + count, continue-reading, import.
  * In Reader mode: back-to-shelf, book title & chapter.
  * Reading-time controls (chapters, TOC, page mode, typography) live in the
  * hover-revealed ReaderDock at the reading pane's bottom-right corner.
@@ -70,14 +70,15 @@ export default function HeaderBar() {
             icon={<ChevronLeft size={16} aria-hidden />}
           />
         ) : (
-          <Button
-            label="Readest+"
-            variant="ghost"
-            size="sm"
-            tooltip="Readest+"
-            isIconOnly
-            icon={<BookMarked size={16} aria-hidden />}
-          />
+          /* Branding, not a control: the shelf's 继续阅读 action lives on the shelf
+             itself now (Bookshelf's hero band), so this no longer pretends to be a
+             button that does nothing — and it is out of the tab order. */
+          <HStack gap={2} vAlign="center" data-testid="header-brand" style={{ flexShrink: 0 }}>
+            <BookMarked size={18} aria-hidden style={{ color: 'var(--color-accent)' }} />
+            <Text weight="semibold" style={{ letterSpacing: '0.02em' }}>
+              Readest+
+            </Text>
+          </HStack>
         )
       }
       startContent={

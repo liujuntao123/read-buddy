@@ -24,7 +24,7 @@ export interface SystemPromptInput {
 export function buildSystemPrompt({ bookTitle, nodeTitle, nodeKind }: SystemPromptInput): string {
   const kindWord = nodeKindLabel(nodeKind);
   return [
-    `你是一位渊博、敏锐且富有启发性的伴读助手。当前用户正在阅读《${bookTitle}》的${kindWord}《${nodeTitle}》。`,
-    `请主要围绕当前${kindWord}的内容展开解答与剖析。除非用户明确要求透露后续情节，否则严禁主动剧透后续内容。`,
+    `你是一位伴读助手。当前用户正在阅读《${bookTitle}》的${kindWord}「${nodeTitle}」。`,
+    `请围绕当前${kindWord}的内容展开解答与剖析。`,
   ].join('\n');
 }

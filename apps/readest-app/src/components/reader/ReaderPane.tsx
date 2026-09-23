@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Banner } from '@astryxdesign/core/Banner';
+import { Button } from '@astryxdesign/core/Button';
 import { VStack } from '@astryxdesign/core/Stack';
 import { Text } from '@astryxdesign/core/Text';
 import { useReaderStore } from '@/store/readerStore';
@@ -13,6 +14,14 @@ import { fontStackByKey, useReaderSettingsStore } from '@/store/readerSettingsSt
 import { subscribeLocate, type LocateRequest } from '@/services/reader/readerLink';
 import { recordReadingPosition } from '@/services/reader/readingPosition';
 import { highlightSnippet } from '@/services/reader/highlight';
+import { getAgentBookContext } from '@/services/agent/agentContext';
+import {
+  formatNavLabel,
+  resolveNodeKind,
+  shapeOfNodes,
+  stampDepths,
+} from '@/services/bookNodes';
+import type { NodeKind } from '@/types/readingAgent';
 import SelectionToolbar from './SelectionToolbar';
 import { readTextSelection, useTextSelection, type TextSelection } from '@/hooks/useTextSelection';
 import { useQuickActions } from '@/hooks/useQuickActions';
@@ -55,6 +64,7 @@ export default function ReaderPane({
   const bookHash = useReaderStore((s) => s.bookHash);
   const spineIndex = useReaderStore((s) => s.spineIndex);
   const loadBook = useReaderStore((s) => s.loadBook);
+  const setSectionFraction = useReaderStore((s) => s.setSectionFraction);
   const segmentation = useSegmentationStore((s) => s.segmentation);
   const typography = useReaderSettingsStore((s) => s.typography);
   const [toast, setToast] = useState<string | null>(null);
@@ -104,6 +114,66 @@ export default function ReaderPane({
       .join('');
   }, [virtualText, typography.paragraphSpacing]);
 
+  /** 当前节点之后的下一个节点（段）；没有下一个就是全书末尾。 */
+  const nextNode = useMemo<{ index: number; title: string } | null>(() => {
+    const index = spineIndex + 1;
+    const titles = isVirtual
+      ? virtualSections.map((section) => section.title)
+      : sections.map((section) => section.title);
+    if (index >= titles.length) return null;
+    return { index, title: titles[index] ?? '' };
+  }, [spineIndex, isVirtual, virtualSections, sections]);
+
+  /**
+   * 导航文案的层词：节点模型说了算（`minimalKind`）；模型还没建好时，用同一套
+   * 标题规则从目录行补出层级（`stampDepths` + `resolveNodeKind`）——与 ReaderDock
+   * 的目录弹窗同源，所以同一本书的两个入口不会说出不同的「章 / 节 / 段」。
+   */
+  const navKind: NodeKind = useMemo(() => {
+    const context = bookHash ? getAgentBookContext(bookHash) : undefined;
+    if (context && context.nodes.length > 0) return shapeOfNodes(context.nodes).minimalKind;
+    const titles = isVirtual
+      ? virtualSections.map((section) => section.title)
+      : sections.map((section) => section.title);
+    const stamped = stampDepths(titles.map((title) => ({ title, depth: 0 })));
+    if (stamped.some(({ depth }) => depth > 0)) return 'section';
+    return resolveNodeKind(0, titles[spineIndex] ?? '');
+  }, [bookHash, isVirtual, virtualSections, sections, spineIndex]);
+
+  // 段切换：新的 section 必须从顶部开始。
+  // 此前 article 保留着上一节的 scrollTop，读者翻到下一节会落在半空中。复位放在
+  // 定位高亮 effect **之前**：`highlightSnippet` 在 rAF 里才滚动到命中处，晚于
+  // 这一次复位，所以定位／划线跳转仍然会停在正文片段上。
+  useEffect(() => {
+    const article = articleRef.current;
+    if (!article) return;
+    article.scrollTop = 0;
+    setSectionFraction(0);
+  }, [spineIndex, setSectionFraction]);
+
+  // 段内滚动 → 进度条。滚动事件按帧合并（一次滚动只写一次 store）：进度条要的
+  // 是「这一节里走了多远」，而这件事只有视口知道。
+  useEffect(() => {
+    const article = articleRef.current;
+    if (!article) return;
+    let frame = 0;
+    const report = () => {
+      if (frame !== 0) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        const scrollable = article.scrollHeight - article.clientHeight;
+        setSectionFraction(scrollable > 0 ? article.scrollTop / scrollable : 0);
+      });
+    };
+    article.addEventListener('scroll', report, { passive: true });
+    return () => {
+      article.removeEventListener('scroll', report);
+      if (frame !== 0) cancelAnimationFrame(frame);
+    };
+    // `section` / `spineIndex` 进依赖是为了在文章挂载之后重新绑定（首帧可能是
+    // 「暂无内容」，那时没有 scroll 容器可听）。
+  }, [setSectionFraction, spineIndex, section]);
+
   // Agent → reader jump (reading-agent doc §5.3 locate_in_reader): hop to the
   // target virtual section, then breathe-highlight the quoted snippet. For TXT
   // the virtual sections share the agent pipeline's node space (same layered
@@ -151,6 +221,14 @@ export default function ReaderPane({
   useEffect(() => {
     setMarkTarget(articleRef.current, spineIndex);
   }, [setMarkTarget, spineIndex, paragraphsHtml, section]);
+
+  /** 跳到下一个节点：与 ReaderDock 的目录点击同一条路（Reading Position）。 */
+  const goToNode = (index: number, title: string) => {
+    recordReadingPosition(
+      { bookHash, spineIndex: index },
+      title ? { titleFallback: title } : {},
+    );
+  };
 
   /** Selection 划线 — the mark belongs to this article's document. */
   const handleHighlight = (selected: TextSelection) => {
@@ -213,15 +291,24 @@ export default function ReaderPane({
 
   if (isVirtual ? !currentVirtual : !section) {
     return (
-      <VStack aria-label="阅读视窗" data-testid="reader-pane" padding={6} height="100%">
+      <VStack
+        aria-label="阅读视窗"
+        data-testid="reader-pane"
+        padding={6}
+        style={{ flex: 1, minHeight: 0 }}
+      >
         <Text color="secondary">暂无内容</Text>
       </VStack>
     );
   }
 
   return (
-    <VStack aria-label="阅读视窗" data-testid="reader-pane" height="100%" gap={0}>
-      {toast && (
+    <VStack
+      aria-label="阅读视窗"
+      data-testid="reader-pane"
+      gap={0}
+      style={{ flex: 1, minHeight: 0 }}
+    >      {toast && (
         <Banner
           data-testid="segmentation-toast"
           role="status"
@@ -272,6 +359,28 @@ export default function ReaderPane({
               <style>{`[data-testid="reader-typography"] p { margin-top: ${typography.paragraphSpacing}em; }`}</style>
             </>
           )}
+          {/* 一节读完不该是死路：TXT 的滚动阅读器只在视窗里，没有引擎的翻页手势，
+              读到末尾必须有个出口。层词来自 `formatNavLabel`，标题来自目录行 /
+              节点模型，最末尾则是一句「全书完」。 */}
+          <footer className="reader-section-end" data-testid="reader-section-end">
+            {nextNode ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                data-testid="reader-next-section"
+                label={
+                  nextNode.title
+                    ? `${formatNavLabel(navKind, 'next')}：${nextNode.title}`
+                    : formatNavLabel(navKind, 'next')
+                }
+                onClick={() => goToNode(nextNode.index, nextNode.title)}
+              />
+            ) : (
+              <Text type="supporting" color="secondary" data-testid="reader-book-end">
+                全书完
+              </Text>
+            )}
+          </footer>
         </div>
       </article>
       <SelectionToolbar

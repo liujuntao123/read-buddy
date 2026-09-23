@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Banner } from '@astryxdesign/core/Banner';
+import { Spinner } from '@astryxdesign/core/Spinner';
 import { VStack } from '@astryxdesign/core/Stack';
 import { Text } from '@astryxdesign/core/Text';
 import { useReaderStore } from '@/store/readerStore';
@@ -57,6 +58,12 @@ export interface FoliatePaneProps {
 export default function FoliatePane({ engine, readSelection }: FoliatePaneProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
+  /**
+   * 引擎就绪前的加载态。`openIn` 要先解压、解析并渲染整章才 resolve，这期间
+   * 阅读区是白的——读者看不出是在加载还是这本书没内容（初始为 true：第一次
+   * 渲染时 effect 还没跑，空白最先出现的那一刻也必须在加载态里）。
+   */
+  const [isOpening, setIsOpening] = useState(true);
   const { selection, attach, close, reset } = useIframeSelection(readSelection);
   const runQuickAction = useQuickActions();
   const { setMarkTarget, markSelection } = useReaderHighlights();
@@ -218,15 +225,22 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
     if (!engine || !container) return;
     let disposed = false;
     setOpenError(null);
+    setIsOpening(true);
     const run = async () => {
       container.replaceChildren();
       try {
         await engine.openIn(container);
         if (disposed) return;
+        setIsOpening(false);
         const cfi = useLibraryStore.getState().consumeResumeCfi();
         if (cfi) await engine.goToCfi(cfi);
       } catch {
-        if (!disposed) setOpenError('打开书籍失败，请重试');
+        if (!disposed) {
+          // The Banner says what went wrong; the loading overlay must not keep
+          // claiming the book is still on its way.
+          setIsOpening(false);
+          setOpenError('打开书籍失败，请重试');
+        }
       }
     };
     void run();
@@ -354,7 +368,7 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
       <VStack
         aria-label="阅读视窗"
         data-testid="foliate-pane"
-        height="100%"
+        style={{ flex: 1, minHeight: 0 }}
         vAlign="center"
         hAlign="center"
         padding={8}
@@ -368,9 +382,13 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
     <VStack
       aria-label="阅读视窗"
       data-testid="foliate-pane"
-      height="100%"
       gap={0}
-      style={{ background: 'var(--color-background-surface)' }}
+      style={{
+        flex: 1,
+        minHeight: 0,
+        position: 'relative',
+        background: 'var(--color-background-surface)',
+      }}
     >
       {openError && (
         <Banner status="error" container="section" title={openError} />
@@ -383,6 +401,26 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
         data-testid="foliate-container"
         style={{ flex: 1, minHeight: 0, overflow: 'hidden', background: 'var(--color-background-surface)' }}
       />
+
+      {/* Not a skeleton but a statement: 打开中，请稍候。 Absolutely positioned so
+          the engine mounts into its final box underneath (the chapters paint
+          once it resolves, and the overlay is what is covering them until then). */}
+      {isOpening && (
+        <VStack
+          data-testid="foliate-opening"
+          vAlign="center"
+          hAlign="center"
+          gap={3}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 10,
+            background: 'var(--color-background-surface)',
+          }}
+        >
+          <Spinner size="lg" label="正在打开书籍…" />
+        </VStack>
+      )}
 
       <SelectionToolbar
         selection={selection}

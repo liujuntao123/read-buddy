@@ -699,6 +699,14 @@ describe('resolveTargetDestination and getReaderThemeStyles', () => {
     expect(getReaderThemeStyles('light')).toContain('background-color: #ffffff');
   });
 
+  it('paints 护眼 links in the sepia theme own warm brown', () => {
+    // 羊皮纸主题的 accent（src/theme/readest-sepia.css 浅色值 #7B5802）；曾经是
+    // 通用紫罗兰 #8b5cf6，在米色纸面与暖褐正文之间像贴错了一层主题。
+    const sepia = getReaderThemeStyles('sepia');
+    expect(sepia).toContain('color: #7b5802 !important');
+    expect(sepia).not.toContain('#8b5cf6');
+  });
+
   it('resolves direct numeric index, relative hrefs, and anchors', () => {
     const fakeBook = {
       sections: [

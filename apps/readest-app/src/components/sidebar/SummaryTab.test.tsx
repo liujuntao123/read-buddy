@@ -4,12 +4,14 @@ import SummaryTab from './SummaryTab';
 import {
   createSummaryStore,
   useSummaryStore,
+  MISSING_SETTINGS_ERROR,
   type SummaryNodeContext,
   type SummaryStore,
 } from '@/store/summaryStore';
 import type { NodeSummarizer, SummarizeInput } from '@/services/summary/summarizer';
 import type { NodeSummaryRepository } from '@/services/db/repositories';
 import { useAISettingsStore } from '@/store/aiSettingsStore';
+import { useAISidebarStore } from '@/store/aiSidebarStore';
 import { useReaderStore } from '@/store/readerStore';
 import { useSegmentationStore } from '@/store/segmentationStore';
 import {
@@ -108,6 +110,7 @@ beforeEach(() => {
     status: 'ready',
     toast: null,
   });
+  useAISidebarStore.setState({ settingsOpen: false });
 });
 
 afterEach(() => {
@@ -155,8 +158,9 @@ describe('SummaryTab', () => {
     // Level word pill: the node nested under a 卷 container is a 节.
     expect(screen.getByTestId('summary-node-kind').textContent).toBe('节');
     const panel = screen.getByTestId('summary-tab-panel');
-    // Line 1: the 章 ancestor breadcrumb › the current node title.
-    expect(panel.textContent).toContain('《第一卷 风云之始》 ›');
+    // Line 1: the 章 ancestor breadcrumb › the current node title. 「」 quotes
+    // the node title; 《》 is reserved for book titles.
+    expect(panel.textContent).toContain('「第一卷 风云之始」 ›');
     expect(panel.textContent).toContain('第一章 图书馆的密语');
     // Line 2: level word + size facts, and nothing mechanical.
     const facts = screen.getByTestId('summary-scope-row').textContent ?? '';
@@ -166,7 +170,7 @@ describe('SummaryTab', () => {
     expect(panel.textContent).not.toContain('个节点');
     expect(panel.textContent).not.toContain('隶属《');
     // The viewpoint description names the leaf level explicitly.
-    expect(panel.textContent).toContain('当前节《第一章 图书馆的密语》暂无总结');
+    expect(panel.textContent).toContain('当前节「第一章 图书馆的密语」暂无总结');
     // The CTA is a real labelled button whose icon is a design-system icon, not
     // an emoji baked into the label (the sidebar's other actions read the same way).
     expect(screen.getByRole('button', { name: '总结当前节' })).toBeTruthy();
@@ -439,21 +443,190 @@ describe('SummaryTab', () => {
     expect(factory).toHaveBeenCalledTimes(1);
   });
 
-  it('shows the error card with a retry button and the settings hint', async () => {
-    useAISettingsStore.setState({ settings: { ...DEFAULT_AI_SETTINGS } }); // no apiKey
-    const { store } = setup();
+  it('copies the summary from a button beside 重新生成', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+      writable: true,
+    });
+    const cached: NodeSummary = {
+      id: nodeSummaryId(CHAPTER.bookHash, CHAPTER.nodeIndex),
+      bookHash: CHAPTER.bookHash,
+      nodeIndex: CHAPTER.nodeIndex,
+      nodeTitle: CHAPTER.nodeTitle,
+      modelUsed: 'deepseek-chat',
+      summaryContent: '### 📌 章节核心要义\n可复制的总结正文',
+      pipeline: 'single',
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    setup([cached]);
 
     render(<SummaryTab store={currentStore} />);
-    await waitFor(() => screen.getByTestId('generate-summary'));
 
-    fireEvent.click(screen.getByTestId('generate-summary'));
+    const copy = await screen.findByTestId('copy-summary');
+    // It lives with 重新生成 in the scope card, not in a second action strip.
+    expect(screen.getByTestId('summary-scope-header').contains(copy)).toBe(true);
+    expect(screen.getByTestId('regenerate-summary')).toBeTruthy();
 
-    await waitFor(() => {
-      expect(screen.getByTestId('summary-error-text').textContent).toBe('请先在侧栏右上角 ⚙ 完成 AI 设置');
+    fireEvent.click(copy);
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(cached.summaryContent));
+    await waitFor(() =>
+      expect(screen.getByTestId('copy-summary-feedback').getAttribute('data-copied')).toBe('true'),
+    );
+  });
+
+  it('has no copy action before a summary exists', async () => {
+    setup();
+    render(<SummaryTab store={currentStore} />);
+
+    await screen.findByTestId('generate-summary');
+    expect(screen.queryByTestId('copy-summary')).toBeNull();
+  });
+
+  it('offers the setup card instead of the CTA when no provider is configured', async () => {
+    useAISettingsStore.setState({ settings: { ...DEFAULT_AI_SETTINGS } }); // no apiKey
+    const { factory } = setup();
+
+    render(<SummaryTab store={currentStore} />);
+
+    const card = await screen.findByTestId('summary-setup');
+    expect(card.textContent).toContain('先配置一个 AI 模型');
+    expect(card.textContent).toContain('配置模型后，可以为当前节点生成三段式总结');
+    // No CTA that could only lead to a guaranteed failure (ADR 0004: nothing is
+    // called until the reader asks, and here the asking is the settings panel).
+    expect(screen.queryByTestId('generate-summary')).toBeNull();
+    expect(factory).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('summary-setup-button'));
+    expect(useAISidebarStore.getState().settingsOpen).toBe(true);
+  });
+
+  it('does not offer the setup card on a page that needs no summary at all', async () => {
+    useAISettingsStore.setState({ settings: { ...DEFAULT_AI_SETTINGS } }); // no apiKey
+    const nodes: BookNode[] = [
+      {
+        nodeId: bookNodeId(DEMO_BOOK.bookHash, 0),
+        bookHash: DEMO_BOOK.bookHash,
+        nodeIndex: 0,
+        title: '第 2 节',
+        startOffset: 0,
+        endOffset: COPYRIGHT_PAGE.length,
+        charCount: COPYRIGHT_PAGE.length,
+        depth: 0,
+        spineIndex: 0,
+        indexStatus: 'ready',
+      },
+    ];
+    registerAgentBookContext(
+      createAgentBookContext({ bookHash: DEMO_BOOK.bookHash, nodes, fullText: COPYRIGHT_PAGE }),
+    );
+    setup();
+    useReaderStore.setState({ spineIndex: 0, anchor: undefined, nodeTitle: '第 2 节' });
+    render(<SummaryTab store={currentStore} />);
+
+    expect(await screen.findByTestId('summary-not-summarizable-note')).toBeTruthy();
+    // A missing model is not this page's problem: no CTA, so no setup card —
+    // the note above already says why there is nothing to generate.
+    expect(screen.queryByTestId('summary-setup')).toBeNull();
+  });
+
+  it('answers a missing-key failure with the setup card, not a red error card', async () => {
+    useAISettingsStore.setState({ settings: { ...DEFAULT_AI_SETTINGS } }); // no apiKey
+    setup();
+    render(<SummaryTab store={currentStore} />);
+    await screen.findByTestId('summary-setup');
+
+    // The store still reports the missing-settings error on its own path; the
+    // panel's answer to it is the way out, not a red card with a dead retry.
+    act(() => {
+      currentStore.setState({ phase: 'error', error: MISSING_SETTINGS_ERROR });
     });
-    expect(screen.getByTestId('retry-summary')).toBeTruthy();
-    expect(screen.getByText(/⚙ 检查 AI 设置/)).toBeTruthy();
-    expect(store.getState().phase).toBe('error');
+
+    expect(screen.getByTestId('summary-setup')).toBeTruthy();
+    expect(screen.queryByTestId('summary-error-text')).toBeNull();
+    expect(screen.queryByTestId('retry-summary')).toBeNull();
+  });
+
+  it('shows a classified error card with 重试 and 打开 AI 设置', async () => {
+    const apiFailure = {
+      name: 'AI_APICallError',
+      message: 'Unauthorized',
+      statusCode: 401,
+      responseBody: '{"error":{"message":"Incorrect API key provided: sk-***"}}',
+    };
+    let attempts = 0;
+    const { factory } = setupWithFactory(async () => {
+      attempts += 1;
+      throw apiFailure;
+    });
+
+    render(<SummaryTab store={currentStore} />);
+    fireEvent.click(await screen.findByTestId('generate-summary'));
+
+    const text = await screen.findByTestId('summary-error-text');
+    // Classified Chinese copy; the upstream English never reaches the reader.
+    expect(text.textContent).toContain('API Key');
+    expect(text.textContent).not.toContain('Incorrect API key provided');
+    expect(currentStore.getState().phase).toBe('error');
+    expect(factory).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTestId('retry-summary'));
+    await waitFor(() => expect(factory).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(screen.getByTestId('summary-error-settings'));
+    expect(useAISidebarStore.getState().settingsOpen).toBe(true);
+  });
+
+  it('renders three-part summary sections as collapsible accordion items', async () => {
+    const cached: NodeSummary = {
+      id: nodeSummaryId(CHAPTER.bookHash, CHAPTER.nodeIndex),
+      bookHash: CHAPTER.bookHash,
+      nodeIndex: CHAPTER.nodeIndex,
+      nodeTitle: CHAPTER.nodeTitle,
+      modelUsed: 'deepseek-chat',
+      summaryContent: [
+        '### 📌 核心要义',
+        '这是本章核心要义。',
+        '',
+        '### 🗺️ 关键内容脉络',
+        '1. **要点一**：脉络展开一',
+        '2. **要点二**：脉络展开二',
+        '',
+        '### 💡 核心概念与关键术语',
+        '- **概念一**：术语解释',
+      ].join('\n'),
+      pipeline: 'single',
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    setup([cached]);
+
+    render(<SummaryTab store={currentStore} />);
+
+    // Check all three accordion headers exist
+    const triggerCore = await screen.findByText('📌 核心要义');
+    const triggerOutline = screen.getByText('🗺️ 关键内容脉络');
+    const triggerTerms = screen.getByText('💡 核心概念与关键术语');
+
+    expect(triggerCore).toBeTruthy();
+    expect(triggerOutline).toBeTruthy();
+    expect(triggerTerms).toBeTruthy();
+
+    // The buttons have aria-expanded="true" by default
+    const buttonOutline = triggerOutline.closest('button')!;
+    expect(buttonOutline.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText(/脉络展开一/)).toBeTruthy();
+
+    // Clicking trigger collapses the section
+    fireEvent.click(buttonOutline);
+    expect(buttonOutline.getAttribute('aria-expanded')).toBe('false');
+
+    // Clicking again expands it
+    fireEvent.click(buttonOutline);
+    expect(buttonOutline.getAttribute('aria-expanded')).toBe('true');
   });
 
   it('re-opens (cache check only) when the reader moves to another node', async () => {

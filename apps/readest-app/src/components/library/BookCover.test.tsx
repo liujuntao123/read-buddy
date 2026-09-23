@@ -32,4 +32,26 @@ describe('BookCover', () => {
     expect(screen.getByTestId('book-cover-progress')).toBeTruthy();
     expect(screen.getByText('第 5 节 · 35%')).toBeTruthy();
   });
+
+  it('paints a hairline progress bar along the bottom edge when a fraction is known', () => {
+    render(<BookCover title="原则" progressFraction={0.35} />);
+    expect(screen.getByTestId('book-cover-progress-bar')).toBeTruthy();
+    expect((screen.getByTestId('book-cover-progress-fill') as HTMLElement).style.width).toBe('35%');
+  });
+
+  it('clamps a fraction outside 0..1 instead of overflowing the cover', () => {
+    const { unmount } = render(<BookCover title="原则" progressFraction={1.4} />);
+    expect((screen.getByTestId('book-cover-progress-fill') as HTMLElement).style.width).toBe('100%');
+    unmount();
+
+    render(<BookCover title="原则" progressFraction={-0.2} />);
+    expect((screen.getByTestId('book-cover-progress-fill') as HTMLElement).style.width).toBe('0%');
+  });
+
+  it('shows no bar when no fraction is known', () => {
+    // A book whose progress is only known as an ordinal has no fraction to paint,
+    // and a half-filled bar would be a claim the shelf cannot back.
+    render(<BookCover title="原则" />);
+    expect(screen.queryByTestId('book-cover-progress-bar')).toBeNull();
+  });
 });

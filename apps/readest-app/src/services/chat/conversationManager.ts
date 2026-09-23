@@ -36,6 +36,21 @@ export const turnQuotaLabel = (
 export const canSend = (conversation: Conversation | null | undefined): boolean =>
   !(conversation?.isClosed ?? false);
 
+/**
+ * The index of the user message a **retry** would re-run, or -1 when there is
+ * nothing to retry.
+ *
+ * Only the tail user message qualifies: a reply after it means the turn already
+ * completed (a persistence failure, say), and re-running would persist a second
+ * answer to one question. One rule, two readers — `chatStore.retry` enforces it
+ * and `ChatTab` uses it to decide whether the 重试 action exists at all, so the
+ * button can never be a no-op.
+ */
+export const retryTargetIndex = (messages: readonly Message[]): number => {
+  const last = messages.length - 1;
+  return last >= 0 && messages[last]!.role === 'user' ? last : -1;
+};
+
 export interface ConversationManagerDeps {
   repository: ConversationRepository;
   idFactory?: () => string;
@@ -84,7 +99,20 @@ const normalizeTitle = (title: string | undefined): string => {
 
 export function createConversationManager(deps: ConversationManagerDeps): ConversationManager {
   const newId = deps.idFactory ?? randomId;
-  const now = deps.now ?? Date.now;
+  const clock = deps.now ?? Date.now;
+  /**
+   * Messages are ordered by `createdAt` (see `ConversationRepository.listMessages`)
+   * and a fast turn can put two of them in the same millisecond — where the sort
+   * falls back to comparing random ids, i.e. to a coin flip. A topic's message
+   * order is not something to leave to chance, so the manager stamps strictly
+   * increasing times.
+   */
+  let lastStamp = 0;
+  const now = (): number => {
+    const stamp = clock();
+    lastStamp = stamp > lastStamp ? stamp : lastStamp + 1;
+    return lastStamp;
+  };
 
   return {
     startConversation: async ({ bookHash, spineIndex, title }) => {

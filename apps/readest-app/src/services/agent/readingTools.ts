@@ -54,7 +54,7 @@ export function createReadingTools(context: AgentBookContext, hooks: ReadingTool
   return {
     get_book_outline: tool({
       description:
-        '查询全书完整目录与节点微简介（Briefs）。支持按节点范围分页查阅。当需要梳理全书脉络、确认节点序号、该节点所在层级或了解各节点概要时调用。',
+        '查询全书完整目录与节点微简介（Briefs），支持按节点范围分页查阅。',
       inputSchema: jsonSchema<{
         startSection?: number;
         limit?: number;
@@ -92,7 +92,7 @@ export function createReadingTools(context: AgentBookContext, hooks: ReadingTool
 
     read_node_passage: tool({
       description:
-        '调取全书任意节点的详细原文切片（默认 1500 字符，上限 3000）。当需要考证伏笔、对话细节或结局描述等原文时调用。',
+        '调取全书任意节点的原文切片（默认 1500 字符，上限 3000），用于考证对话细节、伏笔或特定文本。',
       inputSchema: jsonSchema<{
         nodeIndex: number;
         charOffset?: number;
@@ -128,7 +128,7 @@ export function createReadingTools(context: AgentBookContext, hooks: ReadingTool
 
     search_book_text: tool({
       description:
-        '在全书所有节点中进行关键词检索，快速定位特定人名、地名、线索物品出现的全部节点与精确偏移量。',
+        '在全书所有节点中进行关键词检索，快速定位关键词出现的全部节点与精确偏移量。',
       inputSchema: jsonSchema<{
         query: string;
         maxResults?: number;
@@ -158,7 +158,7 @@ export function createReadingTools(context: AgentBookContext, hooks: ReadingTool
 
     locate_in_reader: tool({
       description:
-        '当回答中引用了有价值的原文事实时，驱动阅读器视窗跳转至目标节点的对应段落并施加高亮呼吸动画，带领读者实地印证。',
+        '当回答中引用了有价值的原文事实时，驱动阅读器视窗跳转至目标节点并高亮对应文本。',
       inputSchema: jsonSchema<{
         nodeIndex: number;
         charOffset?: number;

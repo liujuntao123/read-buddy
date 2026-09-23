@@ -11,6 +11,13 @@ export interface BookCoverProps {
   author?: string;
   format?: BookFormat;
   progressText?: string;
+  /**
+   * How far through the book the reader is (0..1), when a fraction is derivable.
+   * The cover paints it as a thin bar of its own along the bottom edge — every
+   * surface that shows a cover gets the same indicator, and none of them has to
+   * re-derive it from `progressText`.
+   */
+  progressFraction?: number;
   className?: string;
   size?: 'normal' | 'small' | 'mini';
 }
@@ -47,6 +54,7 @@ export default function BookCover({
   title,
   author,
   progressText,
+  progressFraction,
   className = '',
   size = 'normal',
 }: BookCoverProps) {
@@ -154,9 +162,22 @@ export default function BookCover({
         </div>
       )}
 
+      {/* Optional progress bar along the bottom edge. A hairline track under the
+          cover's own radius: reading progress is worth a glance, not a badge. */}
+      {typeof progressFraction === 'number' && (
+        <div data-testid="book-cover-progress-bar" className="shelf-progress-track">
+          <div
+            data-testid="book-cover-progress-fill"
+            className="shelf-progress-fill"
+            style={{
+              width: `${Math.round(Math.min(1, Math.max(0, progressFraction)) * 100)}%`,
+            }}
+          />
+        </div>
+      )}
+
       {/* Optional progress overlay on cover */}
-      {progressText && (
-        <HStack
+      {progressText && (        <HStack
           data-testid="book-cover-progress"
           justify="center"
           style={{

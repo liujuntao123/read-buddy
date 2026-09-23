@@ -14,8 +14,8 @@ describe('QuoteBlock', () => {
   });
 
   it('shows the source attribution when provided', () => {
-    render(<QuoteBlock text="河灯顺流而下" source="第 3 章《河灯迷影》 · 偏移 4,321 字符" testId="q2" />);
-    expect(screen.getByTestId('q2').textContent).toContain('第 3 章《河灯迷影》');
+    render(<QuoteBlock text="河灯顺流而下" source="第 3 章「河灯迷影」 · 偏移 4,321 字符" testId="q2" />);
+    expect(screen.getByTestId('q2').textContent).toContain('第 3 章「河灯迷影」');
     expect(screen.getByTestId('q2').textContent).toContain('偏移 4,321 字符');
   });
 

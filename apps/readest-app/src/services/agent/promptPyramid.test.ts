@@ -92,7 +92,7 @@ describe('assembleAgentSystemPrompt', () => {
     expect(prompt).toContain('search_book_text');
     expect(prompt).toContain('read_node_passage');
     expect(prompt).toContain('locate_in_reader');
-    expect(prompt).toContain('全书上帝视角洞察');
+    expect(prompt).toContain('全书视角洞察');
   });
 
   it('renders the hierarchical (章 › 节) breadcrumb for 节 viewpoints', () => {
@@ -150,7 +150,7 @@ describe('assembleAgentSystemPrompt', () => {
     });
     expect(prompt).toContain('所属领域与体裁：未标注');
     expect(prompt).toContain('暂无全景概要');
-    expect(prompt).toContain('【读者划选的原文片段（L0 焦点）】');
+    expect(prompt).toContain('【读者划选的原文片段】');
     expect(prompt).toContain('物理学不存在了');
     expect(prompt).toContain('【全书节点脉络（共 0 个：尚无节点，└ 缩进行为第二层节点）】');
   });

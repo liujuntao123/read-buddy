@@ -12,6 +12,7 @@ import { DEFAULT_AI_SETTINGS, type AISettings } from '@/types/ai';
 import type { NodeKind, ToolCallTrace } from '@/types/readingAgent';
 import { createChatStore, type RunTurnFn } from './chatStore';
 import { turnQuotaLabel } from '@/services/chat/conversationManager';
+import { describeAIError } from '@/services/ai/errorMessages';
 import { useReaderStore } from './readerStore';
 
 const databases: ReadestPlusDatabase[] = [];
@@ -50,14 +51,18 @@ const TRACE: ToolCallTrace = {
 
 /**
  * Fake orchestrator seam: records the run input and replays a scripted
- * event trail before resolving with the aggregated result.
+ * event trail before resolving with the aggregated result. `failures` are
+ * thrown by the first N turns, in order (error/retry tests).
  */
 const makeRunTurn = (
   requests: RunTurnInput[],
   script?: (input: RunTurnInput) => Array<AgentTurnEvent | Promise<void>>,
+  failures: unknown[] = [],
 ): RunTurnFn => {
   return async (input) => {
     requests.push(input);
+    const failure = failures.shift();
+    if (failure !== undefined) throw failure;
     const steps = script?.(input) ?? [];
     let content = '';
     const toolCalls: ToolCallTrace[] = [];
@@ -89,6 +94,8 @@ const makeStore = (
     settings?: Partial<AISettings>;
     script?: (input: RunTurnInput) => Array<AgentTurnEvent | Promise<void>>;
     now?: () => number;
+    /** Errors thrown by the first N turns, in order (error/retry tests). */
+    failures?: unknown[];
     locateQuote?: (
       bookHash: string,
       quoteText: string,
@@ -104,7 +111,7 @@ const makeStore = (
   const store = createChatStore({
     manager,
     traces,
-    runTurn: makeRunTurn(requests, options.script),
+    runTurn: makeRunTurn(requests, options.script, options.failures ?? []),
     getSettings: () => settings,
     ...(options.locateQuote ? { locateQuote: options.locateQuote } : {}),
   });
@@ -275,14 +282,17 @@ describe('send', () => {
     expect(persisted.map((m) => m.role)).toEqual(['user']);
   });
 
-  it('surfaces turn failures as phase=error without consuming a turn', async () => {
+  it('surfaces turn failures as classified copy without consuming a turn', async () => {
     const store = makeFailingStore();
     await store.getState().openBook('book-a', 0);
     await store.getState().send('会失败的问题');
 
     const state = store.getState();
     expect(state.phase).toBe('error');
-    expect(state.error).toContain('provider unreachable');
+    // 设计文档 §6: the SDK's own message is classified before the reader sees it.
+    expect(state.error).toBe(describeAIError(new Error('provider unreachable')).message);
+    expect(state.error).toContain('网络');
+    expect(state.error).not.toContain('provider unreachable');
     expect(state.conversation?.turnCount).toBe(0);
     expect(state.inputDisabled).toBe(false);
   });
@@ -401,7 +411,8 @@ describe('quoteDraft + transcript', () => {
     expect(transcript).toContain('[读者] 引用提问');
     expect(transcript).toContain('[助手] 回答继续');
     expect(transcript).toContain('🔧 search_book_text');
-    expect(transcript).toContain('📍 章《第三章 夜航》');
+    // 「」 quotes the node title — 《》 is for book titles only.
+    expect(transcript).toContain('📍 章「第三章 夜航」');
   });
 
   it('labels the quote source with the node level word', async () => {
@@ -417,6 +428,92 @@ describe('quoteDraft + transcript', () => {
     await h.store.getState().send('这句话什么意思？', '河灯顺流而下');
 
     const userMessage = h.store.getState().messages.find((message) => message.role === 'user')!;
-    expect(userMessage.quoteSource).toBe('节《第二节 河灯》 约 128 字符处');
+    expect(userMessage.quoteSource).toBe('节「第二节 河灯」 约 128 字符处');
+  });
+});
+
+describe('retry (ticket 14 item 6)', () => {
+  const API_ERROR = { name: 'AI_APICallError', message: 'Service Unavailable', statusCode: 503 };
+
+  it('re-runs the last question without appending it twice', async () => {
+    const h = makeStore({ failures: [API_ERROR] });
+    await h.store.getState().openBook('book-r', 0);
+    await h.store.getState().send('会失败的问题');
+
+    expect(h.store.getState().phase).toBe('error');
+    expect(h.store.getState().messages.map((m) => m.role)).toEqual(['user']);
+    expect(h.requests).toHaveLength(1);
+
+    await h.store.getState().retry();
+
+    const state = h.store.getState();
+    expect(state.phase).toBe('idle');
+    expect(state.error).toBeNull();
+    expect(state.streamingText).toBe('');
+    expect(state.conversation?.turnCount).toBe(1);
+    // One question, one answer — on screen and in the topic.
+    expect(state.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect(state.messages[0]!.content).toBe('会失败的问题');
+    expect(h.requests).toHaveLength(2);
+    expect(h.requests[1]!.userMessage).toBe('会失败的问题');
+    // The prompt history is what the first attempt used: nothing before it.
+    expect(h.requests[1]!.history).toEqual([]);
+    const persisted = await h.manager.loadMessages(state.conversation!.id);
+    expect(persisted.map((m) => m.role)).toEqual(['user', 'assistant']);
+  });
+
+  it('carries the question\'s quote and position into the retried turn', async () => {
+    const h = makeStore({ failures: [API_ERROR] });
+    useReaderStore.setState({ bookHash: 'book-r', spineIndex: 3, anchor: 'sec-2' });
+    await h.store.getState().openBook('book-r', 3);
+    await h.store.getState().send('这句话什么意思？', '河灯顺流而下');
+
+    await h.store.getState().retry();
+
+    const retried = h.requests[1]!;
+    expect(retried.userMessage).toBe('这句话什么意思？');
+    expect(retried.quoteText).toBe('河灯顺流而下');
+    expect(retried.position).toEqual({ bookHash: 'book-r', spineIndex: 3, anchor: 'sec-2' });
+    // The quote travels once: the user message was not re-persisted.
+    expect(h.store.getState().messages.filter((m) => m.role === 'user')).toHaveLength(1);
+  });
+
+  it('does nothing when the last message is not the question to re-run', async () => {
+    const h = makeStore();
+    await h.store.getState().openBook('book-r', 0);
+    await h.store.getState().send('问题一');
+    expect(h.requests).toHaveLength(1);
+
+    // The reply after the question means the turn completed; re-running it
+    // would persist a second answer.
+    await h.store.getState().retry();
+
+    expect(h.requests).toHaveLength(1);
+    expect(h.store.getState().messages).toHaveLength(2);
+    expect(h.store.getState().conversation?.turnCount).toBe(1);
+  });
+
+  it('does nothing with no conversation or no messages', async () => {
+    const h = makeStore();
+    await h.store.getState().openBook('book-r', 0);
+    await h.store.getState().retry();
+    expect(h.requests).toHaveLength(0);
+
+    h.store.setState({ conversation: null, messages: [] });
+    await h.store.getState().retry();
+    expect(h.requests).toHaveLength(0);
+  });
+
+  it('surfaces a second failure the same way, still without a turn', async () => {
+    const h = makeStore({ failures: [API_ERROR, new TypeError('Failed to fetch')] });
+    await h.store.getState().openBook('book-r', 0);
+    await h.store.getState().send('会失败的问题');
+    await h.store.getState().retry();
+
+    const state = h.store.getState();
+    expect(state.phase).toBe('error');
+    expect(state.error).toContain('网络');
+    expect(state.conversation?.turnCount).toBe(0);
+    expect(state.messages.map((m) => m.role)).toEqual(['user']);
   });
 });

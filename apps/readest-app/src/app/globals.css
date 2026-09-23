@@ -141,7 +141,10 @@ foliate-view {
    it is open), so it never competes with the page itself. */
 .reader-dock-zone {
   position: absolute;
-  inset-block-end: 0;
+  /* Clears the reading-progress strip, which owns the bottom edge of the pane
+     (see "Reading progress strip" below): the dock floats **above** the strip
+     instead of covering it. */
+  inset-block-end: var(--spacing-7);
   inset-inline-end: 0;
   z-index: 20;
   /* Generous hover catcher around the strip. */
@@ -168,10 +171,22 @@ foliate-view {
 
 .reader-dock-zone:hover .reader-dock,
 .reader-dock-zone:focus-within .reader-dock,
-.reader-dock[data-open='true'] {
+.reader-dock[data-open='true'],
+/* Opening a book lets the dock show itself once (ReaderDock's peek): a reader
+   who has never hovered that corner would otherwise never learn the 目录 /
+   排版 controls live there at all. */
+.reader-dock[data-peek='true'] {
   opacity: 1;
   transform: none;
   pointer-events: auto;
+}
+
+/* The peek is a state change, not a gesture answer: under reduced motion it
+   still happens — instantly, without the fade/slide. */
+@media (prefers-reduced-motion: reduce) {
+  .reader-dock {
+    transition: none;
+  }
 }
 
 /* Shelf cards: gentle lift on hover, settle on press. Disabled under
@@ -428,8 +443,8 @@ textarea[data-testid='chat-input'] {
 }
 
 /* Markdown typography in summary tab.
-   阅读排版（用户反馈「辅助栏要读得舒服」）：总结常是长文，所以字号比正文略收
-   一点（16px × 0.9375 = 15px），行高则进一步放宽到 ~1.95（主题的
+   阅读排版（用户反馈：整体再收一点，长脉络尤其要收）：总结常是长文，字号收在
+   正文之下（16px × 0.875 = 14px），行高则放宽到 ~2.0（主题的
    --text-body-leading 是 1.5，为 UI 文本设计，中文长段落远远不够）。
    宽度**不设上限**：侧栏本身就是可拖拽调宽的，行宽由读者决定，正文占满可用宽度。
 
@@ -452,8 +467,8 @@ textarea[data-testid='chat-input'] {
 .summary-markdown-wrapper .markdown-content blockquote,
 .summary-markdown-wrapper .markdown-content td,
 .summary-markdown-wrapper .markdown-content th {
-  font-size: calc(var(--font-size-base) * 0.9375);
-  line-height: calc(var(--text-body-leading) * 1.3);
+  font-size: calc(var(--font-size-base) * 0.875);
+  line-height: calc(var(--text-body-leading) * 1.35);
 }
 
 .summary-markdown-wrapper .markdown-content {
@@ -477,17 +492,15 @@ textarea[data-testid='chat-input'] {
   border-bottom: none;
 }
 
-/* 三段式总结（核心要义 / 内容脉络 / 核心概念）每个小标题都开启一节：给足上方
-   留白，并用一条极轻的分隔线把「节」和「正文」分开。第一个标题不留白。 */
+/* 三段式总结小标题：依靠留白与手风琴自带层级区分，去除冗余的横向分割线 */
 .summary-markdown-wrapper .markdown-content h2,
 .summary-markdown-wrapper .markdown-content h3 {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 1.35em;
-  margin-bottom: 0.55em;
-  padding-bottom: 0.3em;
-  border-bottom: 1px solid var(--color-border);
+  margin-top: 1.2em;
+  margin-bottom: 0.4em;
+  border-bottom: none;
   line-height: calc(var(--text-body-leading) * 1.05);
 }
 
@@ -497,6 +510,186 @@ textarea[data-testid='chat-input'] {
 
 .summary-markdown-wrapper .markdown-content h3 {
   font-size: 1em;
+}
+
+/* ==========================================================================
+   Summary Accordion (三段式总结折叠手风琴)
+   ========================================================================== */
+
+.summary-accordion-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.summary-accordion-item {
+  border: none;
+  padding-block: var(--spacing-1);
+}
+
+.summary-accordion-item:first-child {
+  padding-top: 0;
+}
+
+.summary-accordion-item:last-child {
+  padding-bottom: 0;
+}
+
+.summary-accordion-item .astryx-collapsible-trigger {
+  width: calc(100% + 2 * var(--spacing-2));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-1-5, 6px) var(--spacing-2);
+  margin-inline: calc(-1 * var(--spacing-2));
+  border-radius: var(--radius-tile);
+  cursor: pointer;
+  user-select: none;
+  border: none;
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+
+.summary-accordion-item .astryx-collapsible-trigger:hover {
+  background: var(--color-overlay-hover);
+}
+
+.summary-accordion-item .astryx-collapsible-trigger:active {
+  background: var(--color-overlay-pressed);
+}
+
+.summary-accordion-item .astryx-collapsible-trigger:focus-visible {
+  outline: 2px solid var(--color-focus-ring, var(--color-accent));
+  outline-offset: -1px;
+}
+
+.summary-accordion-item .astryx-collapsible-content {
+  padding-block-start: var(--spacing-1-5, 6px);
+  padding-block-end: var(--spacing-1);
+}
+
+/* 核心要义：导言级高信息密度卡片底色 + 品牌强调左侧线。
+   提示词把它写成 2~4 条的标注列表，所以卡片落在整个 <ul> 上（一块卡、数行字），
+   并兼容模型偶发输出段落（<p>）的旧形状。
+
+   ⚠️ 下面每条分节规则都带 `.summary-markdown-wrapper` 前缀，这是必须的：
+   正文字号写在 `.summary-markdown-wrapper .markdown-content p/li` 上（特异性
+   0,2,1，且直接作用在 p / li 上），而 `.summary-content-core p` 只有 0,1,1——
+   不加前缀就会**被正文档位压回去**，分节字号全部失效（这正是此前
+   outline / terms 的 0.9 字号实际没生效的原因）。 */
+.summary-markdown-wrapper .summary-content-core p,
+.summary-markdown-wrapper .summary-content-core ul {
+  margin-block: var(--spacing-1);
+  padding: var(--spacing-2-5, 10px) var(--spacing-3);
+  background: var(--color-background-muted);
+  border-inline-start: 3px solid var(--color-accent);
+  border-radius: 0 var(--radius-tile) var(--radius-tile) 0;
+  color: var(--color-text-primary);
+}
+
+.summary-markdown-wrapper .summary-content-core p,
+.summary-markdown-wrapper .summary-content-core ul > li {
+  font-size: calc(var(--font-size-base) * 0.9);
+  line-height: calc(var(--text-body-leading) * 1.45);
+}
+
+.summary-markdown-wrapper .summary-content-core ul {
+  /* 列表标记留在卡片内，不越出左侧强调线。 */
+  padding-inline-start: var(--spacing-6, 24px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.summary-markdown-wrapper .summary-content-core ul > li {
+  margin: 0;
+}
+
+.summary-markdown-wrapper .summary-content-core ul > li::marker {
+  color: var(--color-accent);
+}
+
+/* 关键内容脉络：主干要点突出有序数字，子项以极细时间线/树状结构呈现 */
+.summary-content-outline ol {
+  margin: 0;
+  padding-inline-start: var(--spacing-5, 20px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2-5, 10px);
+}
+
+.summary-markdown-wrapper .summary-content-outline ol > li {
+  margin: 0;
+  /* 主条目与总结正文同为 14px，长脉络的阅读负担交给行高与条目间距。 */
+  font-size: calc(var(--font-size-base) * 0.875);
+  line-height: calc(var(--text-body-leading) * 1.4);
+  color: var(--color-text-primary);
+}
+
+.summary-content-outline ol > li::marker {
+  color: var(--color-accent);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-content-outline ol > li strong,
+.summary-content-outline ol > li > p > strong {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+/* 脉络要点下的展开与子项：通过缩进与次级字色自然区分，去除硬线边框 */
+.summary-content-outline ol > li ul {
+  margin-block: var(--spacing-1) var(--spacing-0-5, 2px);
+  padding-inline-start: var(--spacing-2);
+  list-style-type: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  border-inline-start: none;
+}
+
+.summary-markdown-wrapper .summary-content-outline ol > li ul > li {
+  position: relative;
+  padding-inline-start: var(--spacing-2-5, 10px);
+  margin: 0;
+  font-size: calc(var(--font-size-base) * 0.85);
+  line-height: calc(var(--text-body-leading) * 1.35);
+  color: var(--color-text-secondary);
+}
+
+.summary-content-outline ol > li ul > li::before {
+  content: "–";
+  position: absolute;
+  inset-inline-start: 0;
+  color: var(--color-text-tertiary, var(--color-border-emphasized));
+}
+
+/* 核心概念与关键术语：纯色块微卡片呈现，去除每个词条的多余边框线 */
+.summary-content-terms ul {
+  margin: 0;
+  padding: 0;
+  list-style-type: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1-5, 6px);
+}
+
+.summary-markdown-wrapper .summary-content-terms ul > li {
+  margin: 0;
+  padding: var(--spacing-2) var(--spacing-3);
+  background: var(--color-background-muted);
+  border: none;
+  border-radius: var(--radius-tile);
+  line-height: calc(var(--text-body-leading) * 1.35);
+  font-size: calc(var(--font-size-base) * 0.85);
+  color: var(--color-text-primary);
+}
+
+.summary-content-terms ul > li strong,
+.summary-content-terms ul > li > p > strong {
+  color: var(--color-accent);
+  font-weight: 600;
+  margin-inline-end: 2px;
 }
 
 .summary-markdown-wrapper .markdown-content > :first-child,
@@ -580,4 +773,182 @@ textarea[data-testid='chat-input'] {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-border-emphasized);
+}
+
+/* ==========================================================================
+   Reading progress strip (设计文档 §3 FooterBar：进度轨 + 百分比 + 位置)
+   ==========================================================================
+   阅读区底边的一条 28px 静默细条，高度与 .reader-dock-zone 的 inset-block-end
+   共用 --spacing-7（dock 浮在它上方）。进度轨在静止时低对比度，指针进入或键盘
+   聚焦时才提亮：读者需要的是一个能瞥一眼的读数，不是一个抢视线的控件。 */
+
+.reader-progress {
+  flex-shrink: 0;
+  height: var(--spacing-7);
+  border-top: 1px solid var(--color-border);
+  background: var(--color-background-surface);
+}
+
+.reader-progress-track {
+  /* 命中区：4px 的细轨外面套 16px 的一行——让人去点一条发丝是不合理的。 */
+  display: flex;
+  align-items: center;
+  height: var(--spacing-4);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.reader-progress-rail {
+  position: relative;
+  flex: 1;
+  height: var(--spacing-1);
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: var(--color-track);
+  transition:
+    height var(--duration-fast) ease,
+    background-color var(--duration-fast) ease;
+}
+
+.reader-progress-fill {
+  height: 100%;
+  background: var(--color-accent-muted);
+  transition: background-color var(--duration-fast) ease;
+}
+
+/* 交互态（悬停 / 键盘聚焦）：轨道变亮、变粗一点——静止态说的是「进度在哪」，
+   这里说的是「这里可以点」。 */
+.reader-progress:hover .reader-progress-rail,
+.reader-progress-track:focus-visible .reader-progress-rail {
+  height: var(--spacing-1-5);
+  background: var(--color-border-emphasized);
+}
+
+.reader-progress:hover .reader-progress-fill,
+.reader-progress-track:focus-visible .reader-progress-fill {
+  background: var(--color-accent);
+}
+
+.reader-progress-track:focus-visible {
+  outline: var(--focus-outline-width) var(--focus-outline-style) var(--focus-outline-color);
+  outline-offset: calc(-1 * var(--focus-outline-offset));
+  border-radius: var(--radius-element);
+}
+
+/* 读数用等宽数字：百分比在 9% → 10% 之间跳动时不会左右晃。 */
+.reader-progress-percent,
+.reader-progress-position {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.reader-progress-percent {
+  min-inline-size: 4ch;
+  text-align: end;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reader-progress-rail,
+  .reader-progress-fill {
+    transition: none;
+  }
+}
+
+/* 一节读完的收尾（ReaderPane 的滚动阅读器）。它是正文的最后一屏，所以跟着正文
+   的版心居中，只留一段安静的空隙——读者该看到的是「这里还有下一节」，不是
+   一个新的界面元素。 */
+.reader-section-end {
+  display: flex;
+  justify-content: center;
+  padding-block: var(--spacing-8) var(--spacing-6);
+}
+
+/* ==========================================================================
+   书架与划线的安静交互 (shelf & highlights quiet affordances)
+   --------------------------------------------------------------------------
+   1. `.shelf-hero` — 继续阅读条：书架的主动作，用一条发丝线划出，不做成横幅；
+   2. `.shelf-progress-*` — 封面底边的阅读进度发丝条（0..1，由 Bookshelf 推导）；
+   3. `.shelf-card-action` / `.highlight-row-action` — 常驻的删除 ✕ 与「问 AI」
+      只在悬停或键盘聚焦时出现：静止的书架 / 划线列表说的是内容，不是操作。
+   ========================================================================== */
+
+/* 继续阅读条：极淡的一层底色 + 发丝分界线，重心仍留给下方的书。 */
+.shelf-hero {
+  padding: var(--spacing-4) var(--spacing-6);
+  border-bottom: 1px solid var(--color-border);
+  background: linear-gradient(to bottom, var(--color-background-muted), transparent);
+}
+
+/* 封面底边的进度条。
+   轨道用封面自身 chrome 的半透明炭黑（同 `.modern-format-badge`）：它要盖在任何
+   一张封面图上，而 token 里没有「压在任意图片上」的颜色；填充用主题的 accent。 */
+.shelf-progress-track {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 22;
+  height: var(--spacing-1);
+  background: rgba(18, 14, 12, 0.55);
+  pointer-events: none;
+}
+
+.shelf-progress-fill {
+  height: 100%;
+  background: var(--color-accent);
+}
+
+/* ---------------------------------------------------------------------------
+   伴读消息的复制动作（ticket 14 item 9）
+   每条回答下面的「复制」不该常驻：它是答完之后的动作，不是回答的一部分。
+   与书架卡片同一条规则——悬停或键盘聚焦该消息时显现，隐藏时连命中一起关掉；
+   刚刚复制过的按钮（data-copied）保持可见，免得「已复制」两个字闪一下就不见。
+   位置放在书架那一段**之前**：BookCover 的测试用 `lastIndexOf` 找文件里最后一个
+   prefers-reduced-motion 块来断言封面动作，追加在末尾会让它找错块。 */
+.astryx-chat-message .chat-copy-action {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.astryx-chat-message:hover .chat-copy-action,
+.astryx-chat-message:focus-within .chat-copy-action,
+.astryx-chat-message .chat-copy-action[data-copied='true'] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .astryx-chat-message .chat-copy-action,
+  .astryx-chat-message:hover .chat-copy-action,
+  .astryx-chat-message:focus-within .chat-copy-action {
+    transition: none;
+  }
+}
+
+/* 悬停 / 聚焦才出现的操作：隐藏时连命中一起关掉，免得点到看不见的按钮。
+   选择器带上卡片本身（两个类），所以不依赖样式注入的先后顺序。 */
+.shelf-card .shelf-card-action,
+.highlight-row .highlight-row-action {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.shelf-card:hover .shelf-card-action,
+.shelf-card:focus-within .shelf-card-action,
+.highlight-row:hover .highlight-row-action,
+.highlight-row:focus-within .highlight-row-action {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shelf-card .shelf-card-action,
+  .highlight-row .highlight-row-action,
+  .shelf-card:hover .shelf-card-action,
+  .shelf-card:focus-within .shelf-card-action,
+  .highlight-row:hover .highlight-row-action,
+  .highlight-row:focus-within .highlight-row-action {
+    transition: none;
+  }
 }

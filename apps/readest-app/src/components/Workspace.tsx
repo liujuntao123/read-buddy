@@ -15,6 +15,7 @@ import { DEMO_BOOK, type DemoSection } from '@/services/reader/demoBook';
 import ReaderPane from '@/components/reader/ReaderPane';
 import FoliatePane from '@/components/reader/FoliatePane';
 import ReaderDock from '@/components/reader/ReaderDock';
+import ReaderProgressBar from '@/components/reader/ReaderProgressBar';
 import HeaderBar from '@/components/HeaderBar';
 import AISidebar from '@/components/sidebar/AISidebar';
 import Bookshelf from '@/components/library/Bookshelf';
@@ -199,12 +200,18 @@ export default function Workspace() {
             <Bookshelf />
           ) : (
             <>
-              {currentEngine ? (
-                <FoliatePane engine={currentEngine} />
-              ) : (
-                <ReaderPane sections={sections} monolithicText={monolithicText} />
-              )}
-              {/* Hover-revealed reading controls at the pane's bottom-right. */}
+              <VStack height="100%" gap={0} style={{ minHeight: 0 }}>
+                {currentEngine ? (
+                  <FoliatePane engine={currentEngine} />
+                ) : (
+                  <ReaderPane sections={sections} monolithicText={monolithicText} />
+                )}
+                {/* Reading progress footer (design doc §3 FooterBar): the pane
+                    gives up the bottom 28px of its height to it, so the bar is
+                    never an overlay on the text. */}
+                <ReaderProgressBar />
+              </VStack>
+              {/* Hover-revealed reading controls, floating above the strip. */}
               <ReaderDock />
             </>
           )}

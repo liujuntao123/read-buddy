@@ -179,4 +179,37 @@ describe('createHighlightStore', () => {
     expect(store.getState().bookHash).toBe('book-b');
     expect(store.getState().highlights).toEqual([]);
   });
+
+  it('restores a deleted row under its own id, back in document order', async () => {
+    await store.getState().load('book-a');
+    const added = await store.getState().add(input({ quote: '中间的一句', nodeIndex: 5 }));
+    await store.getState().remove(added!.id);
+    expect(store.getState().highlights.map((r) => r.id)).toEqual(['book-a:h_old']);
+
+    await store.getState().restore(added!);
+
+    // Same id, same place — that is what makes it an undo rather than a second
+    // mark on the same sentence.
+    expect(store.getState().highlights.map((r) => r.id)).toEqual(['book-a:h_old', added!.id]);
+    expect(await harness.repository.listByBook('book-a')).toHaveLength(2);
+  });
+
+  it('stores another book’s restored row without showing it', async () => {
+    await store.getState().load('book-a');
+    await store.getState().restore(
+      row({ id: 'book-b:h_other', bookHash: 'book-b', quote: '别的书' }),
+    );
+    expect(store.getState().highlights.map((r) => r.id)).toEqual(['book-a:h_old']);
+    expect(await harness.repository.listByBook('book-b')).toHaveLength(1);
+  });
+
+  it('never lists the same row twice when an undo repeats', async () => {
+    await store.getState().load('book-a');
+    const existing = row({ id: 'book-a:h_old', quote: '旧的划线', nodeIndex: 2, createdAt: 5 });
+
+    await store.getState().restore(existing);
+    await store.getState().restore(existing);
+
+    expect(store.getState().highlights.filter((r) => r.id === 'book-a:h_old')).toHaveLength(1);
+  });
 });

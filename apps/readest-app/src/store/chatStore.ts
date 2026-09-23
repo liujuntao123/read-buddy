@@ -8,8 +8,12 @@
  *   tool traces and citations surface through `liveTraces` / `liveCitations`
  *   while streaming), then persists the assistant message WITH its trace and
  *   the `agent_turn_traces` row, completing the visible turn quota.
+ * - `retry` re-runs that turn for the last user message — the message is
+ *   already persisted, so nothing is duplicated on screen or in the topic.
  * - Aborting keeps the partial answer on screen but never persists an
  *   assistant message for the interrupted turn (ADR 0006 behaviour kept).
+ * - Failures surface as `describeAIError` copy (设计文档 §6), never the SDK's
+ *   own English message.
  *
  * Factory `createChatStore` takes injectable manager/runTurn/settings/
  * chapter seams; the app uses the `useChatStore` singleton bound to the real
@@ -27,6 +31,7 @@ import {
   TOPIC_TITLE_MAX_CHARS,
   canSend,
   createConversationManager,
+  retryTargetIndex,
   type ConversationManager,
 } from '@/services/chat/conversationManager';
 import {
@@ -38,6 +43,7 @@ import {
 } from '@/services/agent/agentOrchestrator';
 import { getAgentBookContext } from '@/services/agent/agentContext';
 import { roleLabel } from '@/services/chat/messageLabels';
+import { describeAIError } from '@/services/ai/errorMessages';
 import {
   currentReadingPosition,
   nodeKindLabel,
@@ -100,6 +106,12 @@ export interface ChatState {
   activeSpineIndex: number | null;
   openBook: (bookHash: string, spineIndex?: number) => Promise<void>;
   send: (userText: string, quoteText?: string) => Promise<void>;
+  /**
+   * Re-run the last user message's turn without re-appending it. Only the tail
+   * user message is retryable: the failure path persists no assistant reply,
+   * so after an error the user message *is* the last message.
+   */
+  retry: () => Promise<void>;
   stop: () => void;
   startNewTopic: () => void;
   selectTopic: (conversationId: string) => Promise<void>;
@@ -116,9 +128,6 @@ const isAbortError = (err: unknown): boolean => {
   if (candidate.name === 'AbortError') return true;
   return typeof candidate.message === 'string' && /abort/i.test(candidate.message);
 };
-
-const toErrorMessage = (err: unknown): string =>
-  err instanceof Error ? err.message : typeof err === 'string' ? err : 'AI 请求失败，请稍后重试';
 
 const computeInputDisabled = (phase: ChatPhase, conversation: Conversation | null): boolean =>
   phase === 'streaming' || !canSend(conversation);
@@ -141,6 +150,114 @@ export function createChatStore(deps: ChatStoreDeps): ChatStoreHook {
           partial.conversation !== undefined ? partial.conversation : state.conversation;
         return { ...partial, inputDisabled: computeInputDisabled(phase, conversation) };
       });
+
+    /**
+     * One agent turn over a user message that is already part of the visible
+     * conversation: `send` has just appended it, `retry` finds it already
+     * there. Sharing the body keeps a retry from ever drifting from a first
+     * attempt — the position rule, the live event wiring and the persistence
+     * order exist once.
+     */
+    const runTurnFor = async (
+      conversation: Conversation,
+      history: Message[],
+      userMessage: Message,
+    ): Promise<void> => {
+      patch({
+        phase: 'streaming',
+        streamingText: '',
+        liveTraces: [],
+        liveCitations: [],
+        error: null,
+      });
+
+      const reader = useReaderStore.getState();
+      controller = new AbortController();
+
+      // The Reading Position this turn runs against. A topic bound to an older
+      // position keeps it, but carries no anchor — none was recorded for it
+      // (ADR 0011). Otherwise the live reader position wins, anchor included.
+      const bookHash = conversation.bookHash;
+      const activeSpineIndex = get().activeSpineIndex;
+      const live = currentReadingPosition();
+      const position: ReadingPosition =
+        activeSpineIndex !== null && activeSpineIndex !== live.spineIndex
+          ? { bookHash, spineIndex: activeSpineIndex }
+          : {
+              bookHash,
+              spineIndex: live.spineIndex,
+              ...(live.anchor ? { anchor: live.anchor } : {}),
+            };
+
+      try {
+        const result = await deps.runTurn({
+          position,
+          bookTitle: reader.bookTitle,
+          history,
+          userMessage: userMessage.content,
+          quoteText: userMessage.quoteText,
+          signal: controller.signal,
+          onEvent: (event) => {
+            if (event.type === 'delta') {
+              patch({ streamingText: get().streamingText + event.text });
+            } else if (event.type === 'tool-call') {
+              patch({ liveTraces: [...get().liveTraces, event.trace] });
+            } else if (event.type === 'tool-result') {
+              patch({ liveTraces: [...get().liveTraces] });
+            } else if (event.type === 'citation') {
+              patch({ liveCitations: [...get().liveCitations, event.citation] });
+            }
+          },
+        });
+
+        controller = null;
+        const assistantMessage = await deps.manager.sendMessage(conversation, {
+          role: 'assistant',
+          content: result.content,
+          toolCalls: result.toolCalls,
+          citations: result.citations,
+        });
+        if (deps.traces && result.toolCalls.length > 0) {
+          await deps.traces.put({
+            id: assistantMessage.id,
+            conversationId: conversation.id,
+            messageId: assistantMessage.id,
+            toolCalls: result.toolCalls,
+            createdAt: assistantMessage.createdAt,
+          });
+        }
+        // One read of the cap: the number enforced is the number displayed.
+        const maxTurns = deps.getSettings().maxTurnsPerTopic;
+        const updated = await deps.manager.completeTurn(conversation, maxTurns);
+        const [messages, topics] = await Promise.all([
+          deps.manager.loadMessages(conversation.id),
+          deps.manager.listTopics(updated.bookHash),
+        ]);
+        patch({
+          conversation: updated,
+          maxTurns,
+          messages,
+          topics,
+          streamingText: '',
+          liveTraces: [],
+          liveCitations: [],
+          error: null,
+          phase: updated.isClosed ? 'closed' : 'idle',
+        });
+      } catch (err) {
+        controller = null;
+        if (isAbortError(err)) {
+          // User stopped the answer: keep the partial text on screen, persist
+          // nothing for this turn and stay usable (design doc 4.4.3).
+          patch({ phase: 'idle', error: null });
+          return;
+        }
+        // 设计文档 §6: one classified, reader-facing sentence — never the
+        // SDK's own message (see `services/ai/errorMessages`).
+        patch({ phase: 'error', error: describeAIError(err).message, streamingText: '' });
+        return;
+      }
+    };
 
     return {
       conversation: null,
@@ -201,7 +318,8 @@ export function createChatStore(deps: ChatStoreDeps): ChatStoreHook {
         if (quoteText && deps.locateQuote) {
           const anchor = deps.locateQuote(bookHash, quoteText);
           if (anchor) {
-            quoteSource = `${nodeKindLabel(anchor.nodeKind)}《${anchor.nodeTitle}》 约 ${anchor.charOffset} 字符处`;
+            // 「」 quotes a node title; 《》 is for book titles only (CONTEXT.md).
+            quoteSource = `${nodeKindLabel(anchor.nodeKind)}「${anchor.nodeTitle}」 约 ${anchor.charOffset} 字符处`;
           }
         }
         const userMessage = await deps.manager.sendMessage(conversation, {
@@ -210,98 +328,24 @@ export function createChatStore(deps: ChatStoreDeps): ChatStoreHook {
           quoteText,
           ...(quoteSource ? { quoteSource } : {}),
         });
-        patch({
-          messages: [...history, userMessage],
-          phase: 'streaming',
-          streamingText: '',
-          liveTraces: [],
-          liveCitations: [],
-          error: null,
-        });
+        patch({ messages: [...history, userMessage] });
 
-        const reader = useReaderStore.getState();
-        controller = new AbortController();
+        await runTurnFor(conversation, history, userMessage);
+      },
 
-        // The Reading Position this turn runs against. A topic bound to an older
-        // position keeps it, but carries no anchor — none was recorded for it
-        // (ADR 0011). Otherwise the live reader position wins, anchor included.
-        const activeSpineIndex = get().activeSpineIndex;
-        const live = currentReadingPosition();
-        const position: ReadingPosition =
-          activeSpineIndex !== null && activeSpineIndex !== live.spineIndex
-            ? { bookHash, spineIndex: activeSpineIndex }
-            : {
-                bookHash,
-                spineIndex: live.spineIndex,
-                ...(live.anchor ? { anchor: live.anchor } : {}),
-              };
+      retry: async () => {
+        const { conversation, messages, phase } = get();
+        if (!conversation || conversation.isClosed || phase === 'streaming') return;
 
-        try {
-          const result = await deps.runTurn({
-            position,
-            bookTitle: reader.bookTitle,
-            history,
-            userMessage: userText,
-            quoteText,
-            signal: controller.signal,
-            onEvent: (event) => {
-              if (event.type === 'delta') {
-                patch({ streamingText: get().streamingText + event.text });
-              } else if (event.type === 'tool-call') {
-                patch({ liveTraces: [...get().liveTraces, event.trace] });
-              } else if (event.type === 'tool-result') {
-                patch({ liveTraces: [...get().liveTraces] });
-              } else if (event.type === 'citation') {
-                patch({ liveCitations: [...get().liveCitations, event.citation] });
-              }
-            },
-          });
+        // The retry rule lives in `conversationManager` so ChatTab can ask the
+        // same question before it renders the action (no dead 重试 button).
+        const index = retryTargetIndex(messages);
+        if (index === -1) return;
 
-          controller = null;
-          const assistantMessage = await deps.manager.sendMessage(conversation, {
-            role: 'assistant',
-            content: result.content,
-            toolCalls: result.toolCalls,
-            citations: result.citations,
-          });
-          if (deps.traces && result.toolCalls.length > 0) {
-            await deps.traces.put({
-              id: assistantMessage.id,
-              conversationId: conversation.id,
-              messageId: assistantMessage.id,
-              toolCalls: result.toolCalls,
-              createdAt: assistantMessage.createdAt,
-            });
-          }
-          // One read of the cap: the number enforced is the number displayed.
-          const maxTurns = deps.getSettings().maxTurnsPerTopic;
-          const updated = await deps.manager.completeTurn(conversation, maxTurns);
-          const [messages, topics] = await Promise.all([
-            deps.manager.loadMessages(conversation.id),
-            deps.manager.listTopics(updated.bookHash),
-          ]);
-          patch({
-            conversation: updated,
-            maxTurns,
-            messages,
-            topics,
-            streamingText: '',
-            liveTraces: [],
-            liveCitations: [],
-            error: null,
-            phase: updated.isClosed ? 'closed' : 'idle',
-          });
-        } catch (err) {
-          controller = null;
-          if (isAbortError(err)) {
-            // User stopped the answer: keep the partial text on screen, persist
-            // nothing for this turn and stay usable (design doc 4.4.3).
-            patch({ phase: 'idle', error: null });
-            return;
-          }
-          patch({ phase: 'error', error: toErrorMessage(err), streamingText: '' });
-          return;
-        }
+        // The prompt history is what the first attempt used: everything before
+        // the user message. The message itself is already persisted and stays
+        // on screen — retry never duplicates it.
+        await runTurnFor(conversation, messages.slice(0, index), messages[index]!);
       },
 
       stop: () => {
@@ -369,7 +413,7 @@ export function createChatStore(deps: ChatStoreDeps): ChatStoreHook {
             .map((call) => `  · 🔧 ${call.toolName}${call.resultSnippet ? `：${call.resultSnippet}` : ''}`)
             .join('\n');
           const citationLines = (message.citations ?? [])
-            .map((citation) => `  · 📍 ${nodeKindLabel(citation.nodeKind)}《${citation.nodeTitle}》`)
+            .map((citation) => `  · 📍 ${nodeKindLabel(citation.nodeKind)}「${citation.nodeTitle}」`)
             .join('\n');
           return `${quote}[${label}] ${message.content}${toolLines ? `\n${toolLines}` : ''}${citationLines ? `\n${citationLines}` : ''}`;
         });

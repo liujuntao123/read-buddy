@@ -13,6 +13,7 @@ import {
   type SummarizeInput,
 } from '@/services/summary/summarizer';
 import { useAISettingsStore } from '@/store/aiSettingsStore';
+import { describeAIError } from '@/services/ai/errorMessages';
 import { nodeSummaryId, DEFAULT_AI_SETTINGS, type AISettings, type NodeSummary } from '@/types/ai';
 
 const VALID_SETTINGS: AISettings = {
@@ -296,7 +297,7 @@ describe('generate', () => {
     expect(state.controller).toBeNull();
   });
 
-  it('surfaces model failures as phase error with the message', async () => {
+  it('surfaces model failures as phase error with classified, readable copy', async () => {
     const harness = makeHarness();
     await harness.store.getState().openNode(CHAPTER.bookHash, CHAPTER.nodeIndex, CHAPTER.nodeTitle, 9_000);
 
@@ -310,8 +311,34 @@ describe('generate', () => {
 
     const state = harness.store.getState();
     expect(state.phase).toBe('error');
-    expect(state.error).toBe('boom: rate limited');
+    // 设计文档 §6: one classified sentence; the raw upstream text stays out.
+    expect(state.error).toBe(describeAIError(new Error('boom: rate limited')).message);
+    expect(state.error).toContain('额度');
+    expect(state.error).not.toContain('boom');
     expect(harness.put).not.toHaveBeenCalled();
+  });
+
+  it('classifies an APICallError-shaped failure by its status code', async () => {
+    const harness = makeHarness();
+    await harness.store.getState().openNode(CHAPTER.bookHash, CHAPTER.nodeIndex, CHAPTER.nodeTitle, 9_000);
+
+    harness.factory.mockImplementation(() => ({
+      summarize: async () => {
+        throw {
+          name: 'AI_APICallError',
+          message: 'Unauthorized',
+          statusCode: 401,
+          responseBody: '{"error":{"message":"Incorrect API key provided: sk-***"}}',
+        };
+      },
+    }));
+
+    await harness.store.getState().generate();
+
+    const state = harness.store.getState();
+    expect(state.phase).toBe('error');
+    expect(state.error).toContain('API Key');
+    expect(state.error).not.toContain('Incorrect API key provided');
   });
 
   it('rejects generation with a hint when AI settings are unconfigured', async () => {

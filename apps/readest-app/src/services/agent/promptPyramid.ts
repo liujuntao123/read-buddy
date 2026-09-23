@@ -99,7 +99,7 @@ export function assembleAgentSystemPrompt({
   const nodeShape = shape;
 
   const quoteBlock = quoteText
-    ? `\n【读者划选的原文片段（L0 焦点）】\n${quoteText}\n`
+    ? `\n【读者划选的原文片段】\n${quoteText}\n`
     : '';
 
   const kind: NodeKind = currentNodeKind ?? (parentNodeTitle ? 'section' : 'chapter');
@@ -108,13 +108,12 @@ export function assembleAgentSystemPrompt({
     ? `《${parentNodeTitle}》 › ${kindWord}《${currentNodeTitle}》`
     : `${kindWord}《${currentNodeTitle}》（全书一级节点）`;
 
-  return `你是一位专业、渊博且具备深刻洞察力的全书特化伴读智能体（Whole-Book Reading Specialist Agent）。
-你正在陪伴读者阅读《${bookTitle}》。
+  return `你正在陪伴读者阅读《${bookTitle}》。
 
-【读者当前阅读视口（L1 局部）】
+【读者当前阅读视口】
 - 读者目前停留在：${formatNodeOrdinal(kind, currentNodeIndex + 1)}，${breadcrumb}
 ${quoteBlock}
-【全书宏观画像与主旨（L2 骨架）】
+【全书宏观画像与主旨】
 - 所属领域与体裁：${panorama?.genre ?? '未标注'}
 - 全书核心主旨与脉络：${panorama?.summary ?? '暂无全景概要'}
 - 核心概念与关键主体：${panorama?.mainCharacters?.join('、') ?? '未标注'}
@@ -124,9 +123,11 @@ ${quoteBlock}
 ${fullTOC}
 
 【核心行为准则与能力】
-1. **全书上帝视角洞察**：你拥有全书维度的完整认知。无论是探讨当前章节的细节，还是梳理全书主线伏笔、跨章节人物动机、结局呼应，你都应站在整部作品的高度给出深具启发性的解答。
+
+1. **全书视角洞察**：你应站在整部作品的高度给出深具启发性的解答。
 2. **主动调用工具考证**：当需要引用全书某一处的精准对话或考证伏笔时，自主调用阅读工具（如 search_book_text、read_node_passage）查阅原文进行印证。
-3. **驱动阅读器协同**：当你引用了有价值的原文时，可调用 locate_in_reader 工具，主动带领读者翻页跳转到该处原文，实现真正的沉浸式伴读。
+3. **驱动阅读器协同**：当你引用了有价值的原文时，调用 locate_in_reader 工具。
+
 4. **语言风格**：沉稳、典雅、富有启发性，条理清晰，观点明确。`;
 }
 

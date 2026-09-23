@@ -25,6 +25,7 @@ import {
 } from '@/services/summary/summarizer';
 import { resolveCurrentNodeView, nodeKindLabel } from '@/services/bookNodes';
 import { providerReady } from '@/services/ai/providerReadiness';
+import { describeAIError } from '@/services/ai/errorMessages';
 import { useAISettingsStore } from '@/store/aiSettingsStore';
 import { useReaderStore } from '@/store/readerStore';
 
@@ -253,9 +254,12 @@ export function createSummaryStore({
           // Keep whatever streamed before the stop; user can restart.
           set({ phase: 'aborted', stageLabel: '' });
         } else {
+          // 设计文档 §6: classify before the reader sees it — the SDK's own
+          // English message (with an HTTP status buried in it) becomes one
+          // readable Chinese sentence (`services/ai/errorMessages`).
           set({
             phase: 'error',
-            error: error instanceof Error ? error.message : String(error),
+            error: describeAIError(error).message,
             stageLabel: '',
           });
         }

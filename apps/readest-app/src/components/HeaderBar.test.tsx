@@ -49,7 +49,7 @@ afterEach(() => {
 });
 
 describe('HeaderBar', () => {
-  it('renders the shelf header: brand, title + count, and the icon-only import action', () => {
+  it('renders the shelf header: non-interactive brand, title + count, and the icon-only import action', () => {
     useLibraryStore.setState({
       books: [
         {
@@ -74,6 +74,17 @@ describe('HeaderBar', () => {
     expect(screen.queryByRole('button', { name: '上一章' })).toBeNull();
     expect(screen.queryByRole('button', { name: '目录' })).toBeNull();
     expect(screen.queryByRole('button', { name: '阅读设置' })).toBeNull();
+  });
+
+  it('shows the brand as identity, not as a button that does nothing', () => {
+    render(<HeaderBar />);
+
+    // Regression: the logo was an icon-only <button> with no handler — a focus stop
+    // whose only outcome was a click that did nothing. 继续阅读 lives on the shelf
+    // itself now (Bookshelf's hero band).
+    expect(screen.getByTestId('header-brand').textContent).toContain('Readest+');
+    expect(screen.queryByRole('button', { name: 'Readest+' })).toBeNull();
+    expect(screen.getByTestId('header-brand').querySelector('button')).toBeNull();
   });
 
   it('routes picked files through importFiles', () => {

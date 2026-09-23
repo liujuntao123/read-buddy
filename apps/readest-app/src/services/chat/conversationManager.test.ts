@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ReadestPlusDatabase } from '@/services/db/database';
 import { ConversationRepository } from '@/services/db/repositories';
-import { createConversationManager } from './conversationManager';
+import type { ChatRole, Message } from '@/types/ai';
+import { createConversationManager, retryTargetIndex } from './conversationManager';
 
 let db: ReadestPlusDatabase;
 let managerSeq = 0;
@@ -116,5 +117,49 @@ describe('listTopics', () => {
     // Other books stay isolated.
     const other = await manager.startConversation({ bookHash: 'book-e' });
     expect((await manager.listTopics('book-e')).map((t) => t.id)).toEqual([other.id]);
+  });
+});
+
+describe('message ordering', () => {
+  it('keeps same-millisecond messages in order instead of falling back to random ids', async () => {
+    // A frozen clock is the worst case: without a monotonic stamp the two
+    // messages share a `createdAt`, and `listMessages`' tie-break (id) decides
+    // the order — a coin flip on a topic whose order is the whole point.
+    const frozen = createConversationManager({
+      repository: new ConversationRepository(db),
+      idFactory: (() => {
+        let seq = 0;
+        return () => `frozen-${++seq}`;
+      })(),
+      now: () => 5_000,
+    });
+    const conversation = await frozen.startConversation({ bookHash: 'book-f' });
+    await frozen.sendMessage(conversation, { role: 'user', content: '问题' });
+    await frozen.sendMessage(conversation, { role: 'assistant', content: '回答' });
+
+    const messages = await frozen.loadMessages(conversation.id);
+    expect(messages.map((m) => m.content)).toEqual(['问题', '回答']);
+    expect(messages[1]!.createdAt).toBeGreaterThan(messages[0]!.createdAt);
+  });
+});
+
+describe('retryTargetIndex', () => {
+  const message = (role: ChatRole, id: string): Message => ({
+    id,
+    conversationId: 'c1',
+    role,
+    content: role === 'user' ? '问题' : '回答',
+    createdAt: 1,
+  });
+
+  it('points at the tail user message, and at nothing else', () => {
+    expect(retryTargetIndex([])).toBe(-1);
+    expect(retryTargetIndex([message('user', 'u1')])).toBe(0);
+    // A reply after the question means the turn completed — nothing to retry.
+    expect(retryTargetIndex([message('user', 'u1'), message('assistant', 'a1')])).toBe(-1);
+    // …but a *new* question after a reply is retryable again.
+    expect(
+      retryTargetIndex([message('user', 'u1'), message('assistant', 'a1'), message('user', 'u2')]),
+    ).toBe(2);
   });
 });

@@ -71,8 +71,7 @@
   - `Provider Type`：OpenAI Compatible（通用兼容）、DeepSeek；其余服务（自建网关、代理、其他厂商）统一走 OpenAI Compatible 并填自定义 Base URL；
   - `API Key`：鉴权秘钥（前端输入，以明文安全保存在客户端本地 IndexedDB，界面视觉掩码展示）；
   - `Model ID`：位于 `API Key` 下方，支持「拉取模型」一键读取服务端 `GET {baseUrl}/models` 后下拉选择，也可自由输入（如 `deepseek-chat`、`gpt-4o-mini`）；
-  - `Temperature` 与 `Max Tokens`：默认 `0.6`，支持进阶微调；
-  - `Turn Quota`：单话题对话轮数上限（默认 10 轮，可调整 5 ~ 20 轮）。
+  - `Temperature` 与 `Max Tokens`：**不暴露给用户，也不随请求发送**，一律使用服务端默认值（客户端不再为每个 Provider 猜默认温度）；
   - `Turn Quota`：单话题对话轮数上限（默认 10 轮，可调整 5 ~ 20 轮）。
 - **健康检测**：提供“测试连接”按钮，发送轻量级 ping 请求验证连通性与余额状态。
 
@@ -83,7 +82,7 @@
 考虑到并非所有电子书都有清晰规范的目录（如大单卷 TXT、转换后单页 HTML、未切分 EPUB）：
 
 1. **结构化书籍（标准 EPUB / 含完整 TOC 目录）**：
-   - 直接读取原生 TOC 导航节点及 spine `sectionIndex` 作为章节边界。
+   - 直接读取原生 TOC 导航节点及 spine 序号（`spineIndex`，ADR 0011）作为章节边界。
 2. **非结构化 / 无目录单体书籍（如大单卷 TXT、无 TOC 电子书）**：
    - **智能正则探测**：客户端加载书籍时检测目录有效性，若目录为空或仅单一单体节点，运行正则启发式扫描器：
      `/(第[0-9一二三四五六七八九十百千]+[章回节卷]|Chapter\s+\d+|SECTION\s+\d+)/i`
@@ -97,49 +96,78 @@
 
 ### 4.3 功能一：当前章节结构化总结 (Chapter Summarization)
 
+> **术语**：本节沿用「章节」作为读者语言；实现上总结的视角是**最小节点**（章 / 节 / 段），层级词一律取自节点模型（CONTEXT.md / ADR 0010），因此三段式标题与提示词里都不出现写死的「章节」。
+
 #### 4.3.1 严格手动触发机制 (Explicit Manual Trigger)
-- **触发逻辑**：翻至新章节时，系统**绝不自动发起模型调用**，防止用户翻页/选章时无效消耗 Token。
+- **触发逻辑**：翻至新节点时，系统**绝不自动发起模型调用**，防止用户翻页/选章时无效消耗 Token。
 - **界面行为**：
-  - 监听当前章节索引；
-  - 检查 IndexedDB 本地缓存：
+  - 监听当前视角节点（章 / 节 / 段）的索引；
+  - 检查 IndexedDB 本地缓存（`node_summaries` 表，主键 `${bookHash}:${nodeIndex}`）：
     - **若已缓存**：立即呈现总结卡片，并在右上角提供“🔄 重新生成”按钮；
-    - **若未缓存**：侧边栏呈现清晰的空状态操作卡：展示当前章节标题与字数，提供一个明显的 **“⚡ 生成本章总结”** 按钮。
-  - 用户点击后开始流式生成，并提供“⏹ 停止生成”按钮。
+    - **若未缓存**：侧边栏呈现清晰的空状态操作卡：展示当前节点标题与字数，提供一个明显的 **“总结当前{节点层级}”** 按钮（如「总结当前节」「总结当前章」）。
+  - 用户点击后开始流式生成，并提供“停止”按钮；中断后卡片保留「已停止生成」提示，可随时重新发起。
 
 #### 4.3.2 超长章节两阶段分块汇总 (Map-Reduce Pipeline)
-针对篇幅超过 12,000 字的大章节：
-1. **Map 阶段（分块摘要）**：
-   - 将章节拆分为若干逻辑块（每块约 6,000 ~ 8,000 字，块间 500 字重叠）；
-   - 并行或流水线提炼每个分块的关键要点；
-   - UI 阶段性反馈：*“正在提炼第 1/2 部分...”*。
+针对篇幅超过 12,000 字（`SUMMARY_SINGLE_PASS_MAX_CHARS`）的大节点：
+1. **Map 阶段（分块素材提炼）**：
+   - 按 `chunkNodeText` 切块：目标块长 7,000 字并夹取到 6,000 ~ 8,000 字，相邻块固定 500 字重叠，且完整覆盖 `[0, 长度)`、不丢字符；
+   - **逐块串行**提炼（一次请求一个片段）；Map 的产出不流式上屏，只累积为 Reduce 的输入；
+   - Map 只产出**素材**、不输出三段式结构，四类槽位：①事件与论点脉络（含因果骨架）②人物、地点、设定与专名 ③关键细节（时间、数量、身份、名称、关键表述）④概念与术语；原则是“素材越全越好：宁可多列几条，不要合并不同事件”——**Reduce 能保留多少细节，上限由 Map 决定**；
+   - UI 阶段性反馈：*“正在提炼第 1/2 部分...”*（`progress` 事件，形如 `(i / N)`）。
 2. **Reduce 阶段（整合提炼）**：
-   - 将各子块摘要合并送入总控 Prompt，提炼为统一权威的三段式 Markdown 总结；
-   - UI 阶段性反馈：*“正在合成整章脉络...”*。
+   - 将全部子块素材按片段顺序合并送入总控 Prompt，要求**逐一覆盖每个片段**、合并重复项时保留各自的细节，再按叙事/论证顺序重组，提炼为统一权威的三段式 Markdown 总结；
+   - 唯一流式上屏的调用（`delta` 事件）；UI 阶段性反馈：*“正在合成整章脉络...”*。
 
-#### 4.3.3 总结结构规范（Prompt Engineering）
-AI 输出需强制遵循以下三段式结构化 Markdown：
+#### 4.3.3 总结结构规范与保真契约（Prompt Engineering）
+
+**结构（产品契约，渲染与缓存都依赖它）**：AI 输出需强制遵循以下三段式结构化 Markdown（层级词随节点模型取值，见本节开头的术语说明）：
+
 ```markdown
-### 📌 章节核心要义
-（用 2~3 句话高度概括本章核心事件或主要论点）
+### 📌 核心要义
+- **[小标题一]**：一句话说明这条要点
+- **[小标题二]**：一句话说明这条要点
 
 ### 🗺️ 关键内容脉络
-1. **[阶段/论点一]**：具体事实或阐述推导...
-2. **[阶段/论点二]**：转折或深化...
-3. **[阶段/论点三]**：结论或留下的悬念...
+1. **[要点一]**：阐述该要点核心内容
+2. **[要点二]**：写法同第 1 条，接着原文的推进顺序写下一件事
+3. **[要点三]**：写法同第 1 条
+（以上是格式示意，不是条数：有几件独立的事实、机制或结论就写几条，短则 2~3 条，长则 10 条以上；脉络是一串并列的要点，不要写成一段连续叙述）
 
 ### 💡 核心概念与关键术语
-- **[概念/术语名]**：在书中的具体含义与作用
+- **[概念/术语名]**：在原文中的具体含义、语境与作用
 ```
+
+> 代码块内的括号文字是**写法说明**，不进入模型输出；条数由原文内容决定，与节点字数无关（早期版本按字数给条数，短而密的段落因此被压成 1~3 条）。
+
+**结构固定，行文不固定**：外层三节是产品契约（卡片渲染与缓存依赖它），但每一节**只给思路、不设固定句式**——尤其核心要义，不规定必须写哪几个标签。
+
+**核心要义小节思路（给方向，不固定模板）**：通常 2~4 条要点概括、每条一句话、独立成行，围绕「本节点讲了什么 / 作者最想让你记住的判断或结论 / 最终落到哪里」来写，但不必逐条对应、也不必凑满条数；**小标题由模型按内容自拟，不套用固定用词**；这一节只做概括，不展开脉络细节、也不写术语定义。
+
+**保真契约（首要）**：总结可以压缩措辞，**不可以压缩事实**。三小节共同受以下 8 个判据约束：
+
+1. **叙述视角**：采用与原书相同的叙述视角；
+2. **忠实原文**：只使用原文出现的事实、人物与专名，不补充、不推断、不评价；
+3. **表达易读**：语言通俗易懂，但通俗化只改措辞、不改事实；
+4. **逻辑完整**：每个要点按「起因或目的 → 核心内容或经过 → 结果或结论」交代完整，不得只写结论；
+5. **保留细节**：人名、地名、组织、时间、数量、称谓、专名与关键表述必须保留；并列枚举（反应、关联词、诱因等清单）逐项保留，不得压成「一系列反应」；反常与张力（意外、惊讶、「几乎相同」与「稍逊」这类并存说法）保留；机制方向（谁强化谁）不得写成「相互强化」；
+6. **分点粒度**：一个要点只讲一件事（一个独立的事实、观察、机制、论点、转折或结论），通常 1~3 句；一条里若用「并/同时/还/以及」串起两件以上不同的事，就拆成两条；原文里有几件可独立成立的事，就应有几条要点；
+7. **脉络连贯**：按原文推进顺序给要点排序、语气承接自然，但每条仍独立成条，不因「连贯」把整节写成一段连续叙述；
+8. **覆盖自查**：输出前对照原文确认每段都有落点，遗漏立即补入；篇幅随原文长度自适应，宁可写长，也不要为了简短丢掉要点。
+
+**术语小节收录准则**：只收录原文中给出定义、反复出现或影响理解的概念、术语与专名；原文没有可选术语时写「（无特别术语）」，不要凑数。
+
+> **防漂移约定（文档 ↔ 代码分工）**：本节持有**结构**（三段标题与要点数量这一产品契约）与**判据清单**（上列 8 个维度 + 核心要义思路 + 术语准则）；**逐字措辞**由 `apps/readest-app/src/services/summary/prompts.ts` 持有（`THREE_PART_TEMPLATE` / `CORE_RULE` / `CAUSALITY_RULE` / `TERMS_RULE` / `MAP_SYSTEM_PROMPT`），并由 `prompts.test.ts` 断言「每条规则每次调用只出现一次」。**只改措辞时不必回改本节；新增或删除判据维度时才同步。**
 
 ---
 
 ### 4.4 功能二：AI 伴读智能对话与轮数上限机制 (Turn Quota)
 
 #### 4.4.1 章节级上下文与防剧透设定
-- **系统预设（System Prompt）**：
-  - 角色设定：“你是一位渊博、敏锐且富有启发性的伴读助手。当前用户正在阅读《{bookTitle}》第 {chapterIndex} 章《{chapterTitle}》。”
-  - 边界防剧透：“请主要围绕当前章节的内容展开解答与剖析。除非用户明确要求透露后续情节，否则严禁主动剧透后续章节内容。”
-- **上下文拼装**：将当前章节核心文本、书本基础元数据以及本话题内的历史对话消息注入请求列表。
+- **系统预设（System Prompt）**（降级链路的实际措辞，`services/chat/promptAssembly.buildSystemPrompt`）：
+  - 角色设定：“你是一位伴读助手。当前用户正在阅读《{bookTitle}》的{节点层级}「{nodeTitle}」。”
+  - 范围约束：“请围绕当前{节点层级}的内容展开解答与剖析。”
+  - 边界防剧透（**开放项：当前代码已去掉该约束**，降级链路的测试明确断言其不存在）：“除非用户明确要求透露后续情节，否则严禁主动剧透后续内容。”
+- **上下文拼装**：将当前节点核心文本、书本基础元数据以及本话题内的历史对话消息注入请求列表。
 
 #### 4.4.2 显式轮数上限机制 (Turn Quota)
 - **拒绝隐蔽滑动窗口**：不采用后端静默截断历史消息的机制，避免用户看到屏幕上有某句话但模型却“失忆”。
@@ -176,7 +204,8 @@ interface AISettings {
   baseUrl: string;
   apiKey: string;
   model: string;
-  temperature: number;
+  /** 可选：应用默认不写入，且请求中不传该参数，一律使用服务端默认温度（见 §4.1）。 */
+  temperature?: number;
   maxTurnsPerTopic: number; // 单话题对话轮数上限，默认 10
 }
 ```
@@ -186,8 +215,6 @@ interface AISettings {
 interface BookSegmentation {
   bookHash: string;
   strategy: 'native' | 'regex' | 'fixed-length';
-  regexPattern?: string;
-  chunkLength?: number;
   virtualSections: Array<{
     virtualIndex: number;
     title: string;
@@ -196,28 +223,30 @@ interface BookSegmentation {
   }>;
 }
 ```
+> 早期草稿里的 `regexPattern` / `chunkLength` **已移除**：分段规则由分层分段器自己持有（`strategy` 只说明哪条规则跑过），存储层不再冗余记录。
 
-#### 3. `ChapterSummary` (章节总结缓存表)
+#### 3. `NodeSummary` (节点总结缓存表，Dexie 表名 `node_summaries`)
 ```typescript
-interface ChapterSummary {
-  id: string;             // 主键: `${bookHash}_${sectionIndex}`
+interface NodeSummary {
+  id: string;             // 主键: `${bookHash}:${nodeIndex}`
   bookHash: string;       // 书籍哈希标识
-  sectionIndex: number;   // 章节（或虚拟章节）索引
-  chapterTitle: string;   // 章节标题
+  nodeIndex: number;      // 视角节点（最小节点：章 / 节 / 段）序号
+  nodeTitle: string;      // 节点标题
   modelUsed: string;      // 生成该总结的模型
-  summaryContent: string; // Markdown 格式的总结正文
+  summaryContent: string; // Markdown 三段式总结正文
   pipeline: 'single' | 'map-reduce'; // 提炼管道类型
   createdAt: number;      // 创建时间戳
   updatedAt: number;      // 更新时间戳
 }
 ```
+> 词汇统一见 ADR 0010（`ChapterSummary`→`NodeSummary`、`sectionIndex`→`nodeIndex`、`chapterTitle`→`nodeTitle`；Dexie v5 重建为 `node_summaries`）。该主键与 `book_nodes` 的 `${bookHash}:n_${nodeIndex}` **有意不同**：总结缓存按需生成，多数节点没有行（ADR 0015）。
 
 #### 4. `Conversation` & `Message` (对话历史表)
 ```typescript
 interface Conversation {
   id: string;             // 对话 UUID
   bookHash: string;       // 关联书籍
-  sectionIndex?: number;  // 关联章节（可选）
+  spineIndex?: number;    // 话题起始的物理位置（spine 序号，ADR 0011；不是节点序号）
   title: string;          // 对话标题（默认取首句提问）
   turnCount: number;      // 当前轮数 (0 ~ maxTurnsPerTopic)
   isClosed: boolean;      // 是否已达轮数上限关闭
@@ -231,9 +260,13 @@ interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;        // 消息正文（Markdown）
   quoteText?: string;     // 划词引用的正文片段
+  quoteSource?: string;   // 引用所属章节（选区追踪解析出的归属）
   createdAt: number;
+  toolCalls?: ToolCallTrace[]; // 伴读 Agent 的工具调用轨迹（可选）
+  citations?: AgentCitation[]; // 整书检索证据引用（可选）
 }
 ```
+> `ToolCallTrace` / `AgentCitation` 的字段定义见 `apps/readest-app/src/types/readingAgent.ts`。
 
 ---
 
@@ -259,7 +292,7 @@ interface Message {
   - 实现非结构化书籍的正则/定长章节探测与虚拟章节划分；
   - 实现 `FoliateViewer` 当前章节文本提取与严格手动触发界面；
   - 接入单步提炼与超长章节 Map-Reduce 流水线；
-  - 完成 `ChapterSummary` 本地持久化与重生成能力。
+  - 完成 `NodeSummary` 本地持久化与重生成能力。
 - **Phase 3: 伴读对话与轮数配额管理**
   - 接入基于 `@assistant-ui/react` 或轻量流式对话组件；
   - 实现显式 Turn Quota 轮数胶囊指示器与满额换话题交互；

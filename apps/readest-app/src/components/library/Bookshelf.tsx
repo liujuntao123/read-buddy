@@ -101,10 +101,35 @@ const progressLabel = (book: LibraryBookMeta): string | undefined => {
   return `读至第 ${spineOrdinal + 1} 个位置`;
 };
 
+/**
+ * How far through the book the reader is, as a 0..1 fraction — the cover's
+ * progress bar and the hero's share one answer.
+ *
+ * Derived strictly inside the **node** coordinate space: a numerator
+ * (`lastNodeIndex`, resolved by the Reading Position owner) over its own total
+ * (`nodeShape.total`). A bare `lastSpineIndex` deliberately yields no fraction:
+ * a spine ordinal is a position in a different space (ADR 0011), and dividing it
+ * by a node total is the same confusion `progressLabel` exists to prevent —
+ * 《何为良好生活》 would sit at 7/81 for having 11 spine files. No fraction is
+ * better than a wrong one; the label still says where the reader is.
+ */
+const progressFraction = (book: LibraryBookMeta): number | undefined => {
+  const { nodeShape, lastNodeIndex } = book;
+  if (!nodeShape || nodeShape.total <= 0 || typeof lastNodeIndex !== 'number') return undefined;
+  // The reader is *in* the node, so the Nth node reads as N/total complete — the
+  // same convention as 「读至第 N 节」, where the ordinal is 1-based.
+  return Math.min(1, Math.max(0, (lastNodeIndex + 1) / nodeShape.total));
+};
+
+/** True once anything was recorded for this book — opened at least once. */
+const hasReadingProgress = (book: LibraryBookMeta): boolean =>
+  typeof book.lastSpineIndex === 'number' || typeof book.lastNodeIndex === 'number';
+
 export default function Bookshelf({ store = useLibraryStore }: BookshelfProps) {
   const books = store((s) => s.books);
   const importing = store((s) => s.importing);
   const error = store((s) => s.error);
+  const currentHash = store((s) => s.currentHash);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -161,6 +186,28 @@ export default function Bookshelf({ store = useLibraryStore }: BookshelfProps) {
 
     return result;
   }, [books, searchQuery, sortKey]);
+
+  /**
+   * The book the hero offers: the one still open behind the shelf when there is
+   * one (its reader state is live, so 继续阅读 re-enters it instantly), else the
+   * most recently read book that has a recorded position.
+   */
+  const continueBook = useMemo(() => {
+    const open = currentHash ? books.find((book) => book.hash === currentHash) : undefined;
+    if (open) return open;
+    const read = books.filter(hasReadingProgress);
+    return read.length > 0
+      ? read.reduce((newest, book) => (book.updatedAt > newest.updatedAt ? book : newest))
+      : undefined;
+  }, [books, currentHash]);
+
+  const continueReading = () => {
+    if (!continueBook) return;
+    // Re-enter the kept-open book rather than re-open it: `open` re-parses the
+    // stored bytes and rebuilds the engine, losing the live reading session.
+    if (continueBook.hash === currentHash) store.getState().resumeReading();
+    else void store.getState().open(continueBook.hash);
+  };
 
   const importButton = (testId: string) => (
     <Button
@@ -259,6 +306,18 @@ export default function Bookshelf({ store = useLibraryStore }: BookshelfProps) {
       )}
 
       <div className="modern-bookshelf-canvas" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+        {/* Continue-reading band: the shelf's primary action, said plainly at the
+            top of the library instead of hiding behind a header icon. It stands
+            down while a search is running — a filtered shelf answers a different
+            question, and the hero would sit above results it has nothing to do
+            with. */}
+        {continueBook && !searchQuery.trim() && (
+          <ShelfHero
+            book={continueBook}
+            fraction={progressFraction(continueBook)}
+            onContinue={continueReading}
+          />
+        )}
         {/* Empty State */}
         {books.length === 0 ? (
           <VStack data-testid="bookshelf-empty" height="100%" vAlign="center" hAlign="center" padding={8}>
@@ -451,6 +510,71 @@ export default function Bookshelf({ store = useLibraryStore }: BookshelfProps) {
   );
 }
 
+/**
+ * The continue-reading band at the top of the shelf: a small cover, whose book
+ * this is, how far in the reader is, and the one action that matters.
+ *
+ * A band, not a banner — a hairline under it and no card of its own, so the grid
+ * below stays the loudest thing on the shelf. It carries the same
+ * `progressLabel` and `progressFraction` a card does, so the two can never
+ * disagree about one book.
+ */
+function ShelfHero({
+  book,
+  fraction,
+  onContinue,
+}: {
+  book: LibraryBookMeta;
+  fraction?: number;
+  onContinue: () => void;
+}) {
+  const progress = progressLabel(book);
+
+  return (
+    <HStack data-testid="shelf-hero" gap={4} vAlign="center" className="shelf-hero">
+      <BookCover
+        cover={book.cover}
+        title={book.title}
+        author={book.author}
+        size="small"
+        progressFraction={fraction}
+      />
+      <VStack gap={1} style={{ flex: 1, minWidth: 0 }}>
+        <Text type="supporting" size="2xs" color="secondary" style={{ letterSpacing: '0.08em' }}>
+          上次读到
+        </Text>
+        <Text weight="semibold" maxLines={1} style={{ fontSize: '15px' }}>
+          {book.title}
+        </Text>
+        <HStack gap={2} vAlign="center" wrap="wrap" style={{ minWidth: 0 }}>
+          <Text type="supporting" color="secondary" maxLines={1}>
+            {book.author || '未知作者'}
+          </Text>
+          {progress && (
+            <Text
+              type="supporting"
+              size="2xs"
+              color="accent"
+              weight="medium"
+              data-testid="shelf-hero-progress"
+            >
+              {progress}
+            </Text>
+          )}
+        </HStack>
+      </VStack>
+      <Button
+        label="继续阅读"
+        variant="primary"
+        size="sm"
+        icon={<BookOpen size={16} aria-hidden />}
+        data-testid="shelf-hero-continue"
+        onClick={onContinue}
+      />
+    </HStack>
+  );
+}
+
 interface BookCardProps {
   book: LibraryBookMeta;
   layout: 'grid' | 'list';
@@ -459,17 +583,24 @@ interface BookCardProps {
 }
 
 /**
- * One book as an open trigger — cover-only card. The metadata (title,
- * author · date) is overlaid on the cover with a scrim gradient instead of
- * laid out below it; the format badge sits on the cover's top corner. When
- * the book has no cover image the typographic cover already carries the
- * title, so the overlay shows only the meta line (no duplicated title).
+ * One book as an open trigger — cover-only card. The metadata (author ·
+ * progress) is overlaid on the cover with a scrim gradient instead of laid out
+ * below it; the format badge sits on the cover's top corner. When the book has no
+ * cover image the typographic cover already carries the title, so the overlay
+ * shows only the meta line (no duplicated title). The delete ✕ appears on hover
+ * or keyboard focus; the import date lives in the list view, where the line is
+ * not clamped to one row.
  */
 function BookCard({ book, layout, onOpen, onRemove }: BookCardProps) {
   // Answered by the book's own row — no store lookup, no borrowing the open
   // book's levels (see `progressLabel`).
   const progress = progressLabel(book);
-  const metaLine = `${book.author || '未知作者'} · 导入于 ${formatDate(book.importedAt)}${progress ? ` · ${progress}` : ''}`;
+  const fraction = progressFraction(book);
+  // The grid overlay sits on the cover's scrim and is clamped to one line there,
+  // so it says the two things a shelf is scanned for: who wrote it and how far in
+  // the reader is. The import date belongs to the list view, where it has room.
+  const overlayLine = `${book.author || '未知作者'}${progress ? ` · ${progress}` : ''}`;
+  const listLine = `${book.author || '未知作者'} · ${formatSize(book.size)} · 导入于 ${formatDate(book.importedAt)}`;
   const hasCoverArt = Boolean(book.cover);
 
   if (layout === 'list') {
@@ -493,6 +624,7 @@ function BookCard({ book, layout, onOpen, onRemove }: BookCardProps) {
             title={book.title}
             author={book.author}
             size="small"
+            progressFraction={fraction}
           />
           <VStack gap={1} style={{ flex: 1, minWidth: 0 }}>
             <HStack gap={2} vAlign="center">
@@ -504,7 +636,7 @@ function BookCard({ book, layout, onOpen, onRemove }: BookCardProps) {
               />
             </HStack>
             <Text type="supporting" color="secondary" maxLines={1}>
-              {book.author || '未知作者'} · {formatSize(book.size)} · 导入于 {formatDate(book.importedAt)}
+              {listLine}
             </Text>
             {progress && (
               <Text type="supporting" size="2xs" color="accent" weight="medium">{progress}</Text>
@@ -547,6 +679,10 @@ function BookCard({ book, layout, onOpen, onRemove }: BookCardProps) {
           variant="secondary"
           size="sm"
           tooltip="从书架移除"
+          // Revealed by the card's hover / focus-within (globals.css): a permanent
+          // ✕ on every cover was noise, and the most mis-clicked control on the
+          // shelf was the one that deletes a book.
+          className="shelf-card-action"
           style={{
             position: 'absolute',
             insetInlineEnd: 'var(--spacing-2)',
@@ -577,6 +713,7 @@ function BookCard({ book, layout, onOpen, onRemove }: BookCardProps) {
           cover={book.cover}
           title={book.title}
           author={book.author}
+          progressFraction={fraction}
         />
 
         {/* Modern archival cover overlay */}
@@ -603,13 +740,14 @@ function BookCard({ book, layout, onOpen, onRemove }: BookCardProps) {
             type="supporting"
             size="2xs"
             maxLines={1}
+            data-testid={`book-meta-${book.hash}`}
             style={{
               color: 'rgba(255, 255, 255, 0.92)',
               letterSpacing: '0.01em',
               textShadow: '0 1px 1px rgba(0, 0, 0, 0.75)',
             }}
           >
-            {metaLine}
+            {overlayLine}
           </Text>
         </VStack>
       </VStack>

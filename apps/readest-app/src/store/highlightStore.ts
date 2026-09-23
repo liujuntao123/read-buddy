@@ -47,6 +47,12 @@ export interface HighlightState {
    */
   add: (input: NewReaderHighlight) => Promise<ReaderHighlight | null>;
   remove: (id: string) => Promise<void>;
+  /**
+   * Put a deleted row back (the 划线 tab's undo). Not `add`: an undo must keep the
+   * row's identity and its place in document order, and `add` would mint a new id
+   * and re-derive the anchor from whatever is at hand.
+   */
+  restore: (row: ReaderHighlight) => Promise<void>;
   /** The rows belonging to one physical section, in document order. */
   forSection: (spineIndex: number) => ReaderHighlight[];
 }
@@ -141,6 +147,20 @@ export function createHighlightStore({
     remove: async (id) => {
       await repository.remove(id);
       set((state) => ({ highlights: state.highlights.filter((row) => row.id !== id) }));
+    },
+
+    restore: async (row) => {
+      await repository.put(row);
+      // Another book's row is stored and picked up by that book's own `load`,
+      // exactly as `add` does. The id is dropped first so an undo after a double
+      // delete cannot list the same mark twice.
+      if (get().bookHash !== row.bookHash) return;
+      set((state) => ({
+        highlights: [...state.highlights.filter((existing) => existing.id !== row.id), row].sort(
+          compareHighlights,
+        ),
+        error: null,
+      }));
     },
 
     forSection: (spineIndex) => get().highlights.filter((row) => row.spineIndex === spineIndex),

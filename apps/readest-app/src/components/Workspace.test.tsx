@@ -163,8 +163,8 @@ describe('Workspace split-screen shell', () => {
     expect(useAISidebarStore.getState().expanded).toBe(true);
     expect(screen.getByTestId('sidebar-shelf-empty')).toBeTruthy();
     expect(useReaderStore.getState().bookHash).toBe(hash);
-    // "继续阅读" button is available
-    expect(screen.getByRole('button', { name: '继续阅读' })).toBeTruthy();
+    // "继续阅读" is available — as the shelf's own hero action since ticket 14.
+    expect(screen.getByTestId('shelf-hero-continue')).toBeTruthy();
   });
 
   it('renders engine books through the Foliate pane instead of the scroll reader', async () => {

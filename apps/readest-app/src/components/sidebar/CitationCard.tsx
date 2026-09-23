@@ -47,7 +47,8 @@ export default function CitationCard({ citation }: CitationCardProps) {
           />
           {citation.parentNodeTitle && (
             <Text type="supporting" color="secondary" maxLines={1} style={{ flexShrink: 0 }}>
-              {`《${citation.parentNodeTitle}》 ›`}
+              {/* 「」 quotes the node title; 《》 belongs to book titles alone. */}
+              {`「${citation.parentNodeTitle}」 ›`}
             </Text>
           )}
           <Text type="supporting" weight="medium" maxLines={1} style={{ minWidth: 0 }}>
@@ -72,8 +73,10 @@ export default function CitationCard({ citation }: CitationCardProps) {
           {`"${citation.quoteSnippet}"`}
         </Text>
         <HStack justify="end">
+          {/* No 📍 in the label: the button already carries a MapPin icon, and
+              a second location glyph next to the first one is just noise. */}
           <Button
-            label="📍 定位到原文"
+            label="定位到原文"
             variant="secondary"
             size="sm"
             data-testid="citation-jump"

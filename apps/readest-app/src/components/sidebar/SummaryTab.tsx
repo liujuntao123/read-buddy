@@ -18,10 +18,11 @@
  * shown, and the summary content card appears only when content exists.
  */
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Clock, RefreshCw, Sparkles, Square } from 'lucide-react';
+import { Clock, RefreshCw, Settings2, Sparkles, Square } from 'lucide-react';
 import { Banner } from '@astryxdesign/core/Banner';
 import { Button } from '@astryxdesign/core/Button';
 import { Card } from '@astryxdesign/core/Card';
+import { Collapsible } from '@astryxdesign/core/Collapsible';
 import { IconButton } from '@astryxdesign/core/IconButton';
 import { HStack, VStack } from '@astryxdesign/core/Stack';
 import { Spinner } from '@astryxdesign/core/Spinner';
@@ -29,6 +30,9 @@ import { Text } from '@astryxdesign/core/Text';
 import { Token } from '@astryxdesign/core/Token';
 import { useSummaryStore, type SummaryStore } from '@/store/summaryStore';
 import { useReaderStore } from '@/store/readerStore';
+import { useAISettingsStore } from '@/store/aiSettingsStore';
+import { useAISidebarStore } from '@/store/aiSidebarStore';
+import { providerReady } from '@/services/ai/providerReadiness';
 import { getOpenedBook } from '@/services/library/contentRegistry';
 import { nodeKindLabel, resolveCurrentNodeView, type NodeView } from '@/services/bookNodes';
 import {
@@ -38,22 +42,139 @@ import {
 } from '@/services/bookNodes/nodeContent';
 import { SUMMARY_SINGLE_PASS_MAX_CHARS } from '@/types/ai';
 import MarkdownView from '@/components/common/MarkdownView';
+import CopyButton from '@/components/common/CopyButton';
+import AIProviderSetupCard from '@/components/common/AIProviderSetupCard';
 
 /** How often the async text warm-up is re-checked before giving up. */
 const TEXT_RETRY_LIMIT = 4;
 const TEXT_RETRY_DELAY_MS = 700;
 
+/** What the setup card promises *this* panel will do once a model exists. */
+const SETUP_DESCRIPTION = '配置模型后，可以为当前节点生成三段式总结：核心要义、内容脉络与关键术语。';
+
+/**
+ * Parses markdown into three-part sections if headings are present.
+ */
+export interface SummarySection {
+  id: string;
+  heading: string;
+  content: string;
+}
+
+export function parseSummarySections(markdown: string): {
+  preface?: string;
+  sections: SummarySection[];
+} {
+  if (!markdown) {
+    return { sections: [] };
+  }
+  const lines = markdown.split(/\r?\n/);
+  const sections: SummarySection[] = [];
+  let currentHeading = '';
+  let currentLines: string[] = [];
+  let prefaceLines: string[] = [];
+
+  for (const line of lines) {
+    const match = line.match(/^#{2,4}\s+(.+)$/);
+    if (match) {
+      if (!currentHeading) {
+        prefaceLines = currentLines;
+      } else {
+        sections.push({
+          id: `section-${sections.length}`,
+          heading: currentHeading,
+          content: currentLines.join('\n').trim(),
+        });
+      }
+      currentHeading = match[1].trim();
+      currentLines = [];
+    } else {
+      currentLines.push(line);
+    }
+  }
+
+  if (currentHeading) {
+    sections.push({
+      id: `section-${sections.length}`,
+      heading: currentHeading,
+      content: currentLines.join('\n').trim(),
+    });
+  } else {
+    prefaceLines = currentLines;
+  }
+
+  const preface = prefaceLines.join('\n').trim();
+  return { preface: preface || undefined, sections };
+}
+
+/** Classifies a section heading into one of the canonical summary roles. */
+const getSectionKind = (heading: string): 'core' | 'outline' | 'terms' | 'general' => {
+  if (heading.includes('核心要义') || heading.includes('主旨')) return 'core';
+  if (heading.includes('脉络') || heading.includes('内容')) return 'outline';
+  if (heading.includes('概念') || heading.includes('术语')) return 'terms';
+  return 'general';
+};
+
 /**
  * Rich Markdown renderer for the three-part chapter summary.
  *
+ * Renders sections in collapsible accordion panels (核心要义 / 关键内容脉络 / 核心概念与关键术语).
  * Type size and leading are set by the surrounding `.summary-markdown-wrapper`
- * rules in globals.css (same place the summary's reading typography lives), so
- * this element only marks what is being rendered.
+ * rules in globals.css (same place the summary's reading typography lives).
  */
 export function SummaryBody({ content, streaming = false }: { content: string; streaming?: boolean }) {
+  const { preface, sections } = useMemo(() => parseSummarySections(content), [content]);
+
+  if (sections.length === 0) {
+    return (
+      <div data-testid="summary-body">
+        <MarkdownView content={content} streaming={streaming} />
+      </div>
+    );
+  }
+
   return (
-    <div data-testid="summary-body">
-      <MarkdownView content={content} streaming={streaming} />
+    <div data-testid="summary-body" className="summary-accordion-group">
+      {preface && (
+        <div style={{ marginBottom: 'var(--spacing-3)' }}>
+          <MarkdownView content={preface} />
+        </div>
+      )}
+      {sections.map((section, idx) => {
+        const isLast = idx === sections.length - 1;
+        const kind = getSectionKind(section.heading);
+        return (
+          <Collapsible
+            key={section.heading}
+            defaultIsOpen={true}
+            className={`summary-accordion-item summary-section-${kind}`}
+            data-testid={`summary-accordion-${section.id}`}
+            trigger={
+              <Text
+                weight="semibold"
+                style={{
+                  // 小标题比总结正文（14px）大半档，层级靠字号而不是分割线。
+                  fontSize: 'calc(var(--font-size-base) * 0.9375)',
+                  lineHeight: 'calc(var(--text-body-leading) * 1.05)',
+                  color: 'var(--color-text-primary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                {section.heading}
+              </Text>
+            }
+          >
+            <div className={`summary-accordion-content summary-content-${kind}`}>
+              <MarkdownView
+                content={section.content}
+                streaming={streaming && isLast}
+              />
+            </div>
+          </Collapsible>
+        );
+      })}
     </div>
   );
 }
@@ -131,10 +252,15 @@ function ScopeHeader({
               maxLines={1}
               style={{ fontSize: 'var(--font-size-sm)' }}
             >
-              {`《${parentTitle}》 ›`}
+              {/* 「」 quotes a node title; 《》 is reserved for book titles. */}
+              {`「${parentTitle}」 ›`}
             </Text>
           )}
-          <Text weight="semibold" maxLines={1} style={{ fontSize: 'var(--font-size-base)', lineHeight: 1.35 }}>
+          <Text
+            weight="semibold"
+            maxLines={1}
+            style={{ fontSize: 'calc(var(--font-size-base) * 0.9375)', lineHeight: 1.35 }}
+          >
             {title}
           </Text>
         </div>
@@ -198,6 +324,11 @@ export default function SummaryTab({ store = useSummaryStore }: SummaryTabProps 
   const spineIndex = useReaderStore((s) => s.spineIndex);
   const anchor = useReaderStore((s) => s.anchor);
   const readerNodeTitle = useReaderStore((s) => s.nodeTitle);
+
+  // The one readiness rule (providerReadiness): without a key the CTA is
+  // replaced by the setup card, instead of failing on the reader's first click.
+  const providerConfigured = useAISettingsStore((s) => providerReady(s.settings));
+  const openSettings = useAISidebarStore((s) => s.openSettings);
 
   const view = useMemo(
     () => resolveCurrentNodeView(),
@@ -336,7 +467,7 @@ export default function SummaryTab({ store = useSummaryStore }: SummaryTabProps 
       <div data-testid="summary-tab-panel" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-3)' }}>
         {/* Hidden test/a11y descriptions */}
         <div style={{ display: 'none' }}>
-          {`当前${scopeLevel}《${scopeTitle}》暂无总结 提炼当前${scopeLevel}的核心内容与脉络`}
+          {`当前${scopeLevel}「${scopeTitle}」暂无总结 提炼当前${scopeLevel}的核心内容与脉络`}
         </div>
 
         <ScopeHeader
@@ -351,7 +482,9 @@ export default function SummaryTab({ store = useSummaryStore }: SummaryTabProps 
                 : { label: '未总结', tone: 'pending' }
           }
           action={
-            canGenerate ? (
+            // No provider ⇒ no CTA: the setup card below says what is missing
+            // and takes the reader to the fix (ticket 14 items 3 + 7).
+            canGenerate && providerConfigured ? (
               <Button
                 label={`总结当前${scopeLevel}`}
                 variant="primary"
@@ -363,6 +496,13 @@ export default function SummaryTab({ store = useSummaryStore }: SummaryTabProps 
             ) : null
           }
         />
+
+        {/* The setup card stands exactly where the CTA would: on a node that
+            cannot be summarized anyway (版权页 / 图像页), a model is not what is
+            missing, and the note below already says so. */}
+        {!providerConfigured && canGenerate && (
+          <AIProviderSetupCard testId="summary-setup" description={SETUP_DESCRIPTION} />
+        )}
 
         {/* 没有可总结的正文：说明为什么没有按钮，而不是让一个按钮消失得不明不白。
             这是「本页本来就不需要总结」的事实，不是错误，所以是 info 而不是 warning。 */}
@@ -409,26 +549,43 @@ export default function SummaryTab({ store = useSummaryStore }: SummaryTabProps 
   }
 
   if (phase === 'error') {
+    // 「没配模型」不是一次生成失败，只是缺 Key 的副作用：用引导卡替掉错误卡，
+    // 读者拿到的才是能解决问题的动作（重试在这里只会立刻再失败一次）。
+    const missingProvider = !providerConfigured;
+
     return (
       <div data-testid="summary-tab-panel" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-3)' }}>
         <ScopeHeader hierarchy={hierarchy} charCount={charCount} titleFallback={nodeTitle} />
-        <Card variant="red" role="alert" padding={4}>
-          <VStack gap={3}>
-            <Text data-testid="summary-error-text" weight="medium">{error || '生成失败'}</Text>
-            <HStack gap={2} vAlign="center" wrap="wrap">
-              <Button
-                label="重试"
-                variant="secondary"
-                size="sm"
-                data-testid="retry-summary"
-                onClick={() => void generate()}
-              />
-              <Text type="supporting" color="secondary" style={{ fontSize: 'var(--font-size-sm)' }}>
-                若持续失败，请在侧栏右上角 ⚙ 检查 AI 设置。
+        {missingProvider ? (
+          <AIProviderSetupCard testId="summary-setup" description={SETUP_DESCRIPTION} />
+        ) : (
+          <Card variant="red" role="alert" padding={4}>
+            <VStack gap={3}>
+              {/* 分类后的中文文案（设计文档 §6）：网络 / Key / 限流 / 模型 / 上下文 / 服务端。 */}
+              <Text data-testid="summary-error-text" weight="medium" style={{ lineHeight: 1.6 }}>
+                {error || '生成失败'}
               </Text>
-            </HStack>
-          </VStack>
-        </Card>
+              {/* 两个出口：原地重试，或去设置里改配置（Key、Model ID、Base URL）。 */}
+              <HStack gap={2} vAlign="center" wrap="wrap">
+                <Button
+                  label="重试"
+                  variant="secondary"
+                  size="sm"
+                  data-testid="retry-summary"
+                  onClick={() => void generate()}
+                />
+                <Button
+                  label="打开 AI 设置"
+                  variant="secondary"
+                  size="sm"
+                  data-testid="summary-error-settings"
+                  icon={<Settings2 size={14} aria-hidden />}
+                  onClick={openSettings}
+                />
+              </HStack>
+            </VStack>
+          </Card>
+        )}
       </div>
     );
   }
@@ -448,15 +605,24 @@ export default function SummaryTab({ store = useSummaryStore }: SummaryTabProps 
         status={{ label: '已生成', tone: 'done' }}
         updatedAt={cachedSummary?.updatedAt}
         action={
-          <IconButton
-            label="重新生成"
-            variant="secondary"
-            size="sm"
-            icon={<RefreshCw size={14} aria-hidden />}
-            data-testid="regenerate-summary"
-            tooltip="忽略缓存，用当前模型重新生成"
-            onClick={() => void generate(true)}
-          />
+          <HStack gap={1} vAlign="center">
+            {/* 复制与重新生成并列：刚生成完的总结通常正要被带走（笔记、文档）。 */}
+            <CopyButton
+              getText={() => content}
+              label="复制总结"
+              tooltip="复制这份总结"
+              testId="copy-summary"
+            />
+            <IconButton
+              label="重新生成"
+              variant="secondary"
+              size="sm"
+              icon={<RefreshCw size={14} aria-hidden />}
+              data-testid="regenerate-summary"
+              tooltip="忽略缓存，用当前模型重新生成"
+              onClick={() => void generate(true)}
+            />
+          </HStack>
         }
       />
       <div className="summary-markdown-wrapper">
