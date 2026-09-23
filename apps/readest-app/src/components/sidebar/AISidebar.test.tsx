@@ -5,6 +5,7 @@ import Workspace from '@/components/Workspace';
 import { useAISidebarStore } from '@/store/aiSidebarStore';
 import { useAISettingsStore } from '@/store/aiSettingsStore';
 import { useLibraryStore } from '@/store/libraryStore';
+import { useReaderStore } from '@/store/readerStore';
 import { DEFAULT_AI_SETTINGS } from '@/types/ai';
 
 const originalMatchMedia = window.matchMedia;
@@ -155,5 +156,28 @@ describe('AISidebar responsive drawer mode', () => {
     render(<AISidebar />);
 
     expect(screen.getByTestId('sidebar-model-chip').textContent).toBe('未配置模型');
+  });
+
+  it('keeps a long book title inside the pane: truncated visible text, full accessible name', () => {
+    // 《说理》's dc:title is 60+ characters — long titles are the norm in this
+    // library, not an edge case, so the resume button must never widen the pane.
+    const longTitle =
+      '说理【陈嘉映直面“哲学”的系统之作，“哲学问题”不是哲学家的问题，而是人人的问题】';
+    mockMatchMedia(false);
+    useAISidebarStore.setState({ expanded: true });
+    useLibraryStore.setState({ view: 'shelf', currentHash: 'shuoli' });
+    useReaderStore.setState({ bookTitle: longTitle });
+    render(<AISidebar />);
+
+    const resume = screen.getByTestId('sidebar-resume-reading') as HTMLElement;
+    // Accessible name keeps the whole title even though the visible text is clamped.
+    expect(resume.getAttribute('aria-label')).toBe(`继续阅读《${longTitle}》`);
+    // Visible text goes through Text, which owns single-line truncation (and the
+    // hover tooltip that reveals the rest), instead of a bare label that overflows.
+    const visible = resume.querySelector('.astryx-text');
+    expect(visible).not.toBeNull();
+    expect(visible!.textContent).toBe(`继续阅读《${longTitle}》`);
+    // … and the button itself is width-bounded, so the ellipsis can engage.
+    expect(resume.style.maxWidth).toBe('100%');
   });
 });

@@ -5,32 +5,20 @@
  *
  * Strictly manual trigger: the component only opens the chapter (cache check)
  * when the reader moves; every model call comes from an explicit button
- * (⚡ 生成本章总结 / 🔄 重新生成) or its retry.
+ * (总结当前节 / 重新生成) or its retry. The CTA itself is hidden for nodes that
+ * carry no summarizable prose — 版权页 / 目录页 / 封面 (ADR 0017, `nodeContent`).
  *
- * Scope clarity (user review): the summary always targets the **minimal node**
- * the reader currently has open (CONTEXT.md / ADR 0010) — the 节 of a 章/节
- * book, the 章 of a single-level book. The header states where the reader is
- * (章 › 节 breadcrumb + node title) and how big the viewpoint is (level word,
- * char count, long-document note); the level word always comes from the node
- * model (`nodeKindLabel`), never from a literal. Engine books whose section
- * text warms asynchronously get a bounded retry before the "no extractable
- * text" warning is shown.
- */
-'use client';
-
-/**
- * 章节总结 Tab (ticket 03, design doc 4.3, ADR 0004 + user review).
- *
- * Strictly manual trigger: the component only opens the chapter (cache check)
- * when the reader moves; every model call comes from an explicit button
- * (⚡ 总结当前章 / 🔄 重新生成) or its retry.
- *
- * Scope clarity: minimal node the reader currently has open (CONTEXT.md / ADR 0010).
- * High-density, single-line scope header with status & CTA in the primary card.
- * Summary content card is only shown when summary content actually exists.
+ * Scope clarity: the summary always targets the **minimal node** the reader
+ * currently has open (CONTEXT.md / ADR 0010) — the 节 of a 章/节 book, the 章 of
+ * a single-level book. The header states where the reader is (章 › 节 breadcrumb
+ * + node title) and how big the viewpoint is (level word, char count,
+ * long-document note); the level word always comes from the node model
+ * (`nodeKindLabel`), never from a literal. Engine books whose section text warms
+ * asynchronously get a bounded retry before the "no extractable text" warning is
+ * shown, and the summary content card appears only when content exists.
  */
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Clock, RefreshCw } from 'lucide-react';
+import { Clock, RefreshCw, Sparkles, Square } from 'lucide-react';
 import { Banner } from '@astryxdesign/core/Banner';
 import { Button } from '@astryxdesign/core/Button';
 import { Card } from '@astryxdesign/core/Card';
@@ -43,6 +31,11 @@ import { useSummaryStore, type SummaryStore } from '@/store/summaryStore';
 import { useReaderStore } from '@/store/readerStore';
 import { getOpenedBook } from '@/services/library/contentRegistry';
 import { nodeKindLabel, resolveCurrentNodeView, type NodeView } from '@/services/bookNodes';
+import {
+  NODE_CONTENT_LABEL,
+  assessNodeContent,
+  describeNonSummarizable,
+} from '@/services/bookNodes/nodeContent';
 import { SUMMARY_SINGLE_PASS_MAX_CHARS } from '@/types/ai';
 import MarkdownView from '@/components/common/MarkdownView';
 
@@ -251,6 +244,16 @@ export default function SummaryTab({ store = useSummaryStore }: SummaryTabProps 
 
   const scopeLevel = nodeKindLabel(hierarchy.kind);
   const scopeTitle = hierarchy.title || nodeTitle || '…';
+  /**
+   * 「这一节值不值得总结」——版权页 / 目录页 / 封面这类页面没有可提炼的正文，
+   * 总结按钮对它们只是噪音（用户反馈：版权信息页、目录页不该有总结按钮）。
+   * 判定是离线的纯规则（`services/bookNodes/nodeContent`），所以翻页时不会多出
+   * 一次模型调用；判不出来的一律按正文处理。
+   */
+  const worthSummarizing = useMemo(
+    () => assessNodeContent({ title: view.title, text: view.text }),
+    [view.title, view.text],
+  );
 
   if (!bookHash) {
     return (
@@ -293,10 +296,11 @@ export default function SummaryTab({ store = useSummaryStore }: SummaryTabProps 
           status={{ label: '生成中', tone: 'working' }}
           action={
             <Button
-              label="⏹ 停止"
+              label="停止"
               variant="secondary"
               size="sm"
               data-testid="stop-generation"
+              icon={<Square size={14} aria-hidden />}
               onClick={stop}
             />
           }
@@ -325,8 +329,8 @@ export default function SummaryTab({ store = useSummaryStore }: SummaryTabProps 
   }
 
   if (phase === 'idle' || phase === 'aborted') {
-    const isUnderLimit = charCount < 50 && retriesExhausted;
-    const canGenerate = charCount >= 50;
+    const isUnderLimit = worthSummarizing.summarizable && charCount < 50 && retriesExhausted;
+    const canGenerate = worthSummarizing.summarizable && charCount >= 50;
 
     return (
       <div data-testid="summary-tab-panel" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-3)' }}>
@@ -340,22 +344,38 @@ export default function SummaryTab({ store = useSummaryStore }: SummaryTabProps 
           charCount={charCount}
           titleFallback={nodeTitle}
           status={
-            charCount === 0 && !retriesExhausted
-              ? { label: '正在解析…', tone: 'working' }
-              : { label: '未总结', tone: 'pending' }
+            !worthSummarizing.summarizable
+              ? { label: NODE_CONTENT_LABEL[worthSummarizing.kind], tone: 'pending' }
+              : charCount === 0 && !retriesExhausted
+                ? { label: '正在解析…', tone: 'working' }
+                : { label: '未总结', tone: 'pending' }
           }
           action={
             canGenerate ? (
               <Button
-                label={`⚡ 总结当前${scopeLevel}`}
+                label={`总结当前${scopeLevel}`}
                 variant="primary"
                 size="sm"
                 data-testid="generate-summary"
+                icon={<Sparkles size={14} aria-hidden />}
                 onClick={() => void generate()}
               />
             ) : null
           }
         />
+
+        {/* 没有可总结的正文：说明为什么没有按钮，而不是让一个按钮消失得不明不白。
+            这是「本页本来就不需要总结」的事实，不是错误，所以是 info 而不是 warning。 */}
+        {!worthSummarizing.summarizable && (
+          <Banner
+            data-testid="summary-not-summarizable-note"
+            role="status"
+            status="info"
+            container="card"
+            collapsible={false}
+            title={describeNonSummarizable(worthSummarizing.kind)}
+          />
+        )}
 
         {isUnderLimit && (
           <Banner

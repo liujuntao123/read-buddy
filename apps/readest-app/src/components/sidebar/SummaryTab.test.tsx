@@ -31,12 +31,38 @@ const CHAPTER: SummaryNodeContext = {
   charCount: 71,
 };
 
+/**
+ * 《说理》's 版权信息 page shape (用户反馈：这类页面不该有总结按钮): a list of
+ * bibliographic fields, long enough to pass the 50-character gate — which is
+ * exactly why the character gate could never catch it.
+ */
+const COPYRIGHT_PAGE = `图书在版编目（CIP）数据
+
+说理 / 陈嘉映著. — 北京：华夏出版社，2011.1
+ISBN 978-7-5080-6234-5
+
+中国版本图书馆CIP数据核字（2010）第234567号
+
+责任编辑：李某某
+封面设计：某某某
+出版发行：华夏出版社
+经销：新华书店
+印刷：北京某某印刷有限公司
+开本：880×1230 1/32
+印张：12.5
+字数：300千字
+版次：2011年1月第1版
+印次：2011年1月第1次印刷
+定价：38.00元
+
+版权所有·侵权必究`;
+
+
 interface Setup {
   store: SummaryStore;
   factory: ReturnType<typeof vi.fn>;
   put: ReturnType<typeof vi.fn>;
 }
-
 /** The store the next ender(<SummaryTab …/>) should use; set by setup(). */
 let currentStore: SummaryStore;
 
@@ -141,7 +167,11 @@ describe('SummaryTab', () => {
     expect(panel.textContent).not.toContain('隶属《');
     // The viewpoint description names the leaf level explicitly.
     expect(panel.textContent).toContain('当前节《第一章 图书馆的密语》暂无总结');
-    expect(panel.textContent).toContain('⚡ 总结当前节');
+    // The CTA is a real labelled button whose icon is a design-system icon, not
+    // an emoji baked into the label (the sidebar's other actions read the same way).
+    expect(screen.getByRole('button', { name: '总结当前节' })).toBeTruthy();
+    expect(panel.textContent).toContain('总结当前节');
+    expect(panel.textContent).not.toContain('⚡');
     expect(panel.textContent).toContain('提炼当前节的核心内容与脉络');
     expect(factory).not.toHaveBeenCalled();
   });
@@ -158,7 +188,7 @@ describe('SummaryTab', () => {
     const panel = screen.getByTestId('summary-tab-panel');
     expect(panel.textContent).toContain('第二章 图书馆的密语');
     expect(panel.textContent).not.toContain('›');
-    expect(panel.textContent).toContain('⚡ 总结当前章');
+    expect(screen.getByRole('button', { name: '总结当前章' })).toBeTruthy();
     expect(panel.textContent).toContain('提炼当前章的核心内容与脉络');
     // demo chapter 2 extracted char count, resolved from the real nodeSource
     const chapterTwoChars = screen.getByText(/约 \d+ 字/);
@@ -183,6 +213,94 @@ describe('SummaryTab', () => {
     expect(await screen.findByTestId('summary-empty-text-warning')).toBeTruthy();
     expect(screen.queryByTestId('generate-summary')).toBeNull();
     expect(factory).not.toHaveBeenCalled();
+  });
+
+  it('hides the CTA on a 版权页 and says why, instead of offering a pointless summary', async () => {
+    // A 版权页 has plenty of extractable characters, so the old `charCount >= 50`
+    // gate offered to summarize it. The node-content rule is what knows better —
+    // and here the title is the node model's *placeholder* (「第 2 节」, what an
+    // unlabelled spine section gets), so this only passes if the panel really
+    // hands the node's text to the classifier.
+    const fullText = `${COPYRIGHT_PAGE}\n\n${CHAPTER.text}`;
+    const nodes: BookNode[] = [
+      {
+        nodeId: bookNodeId(DEMO_BOOK.bookHash, 0),
+        bookHash: DEMO_BOOK.bookHash,
+        nodeIndex: 0,
+        title: '第 2 节',
+        startOffset: 0,
+        endOffset: COPYRIGHT_PAGE.length,
+        charCount: COPYRIGHT_PAGE.length,
+        depth: 0,
+        spineIndex: 0,
+        indexStatus: 'ready',
+      },
+      {
+        nodeId: bookNodeId(DEMO_BOOK.bookHash, 1),
+        bookHash: DEMO_BOOK.bookHash,
+        nodeIndex: 1,
+        title: CHAPTER.nodeTitle,
+        startOffset: COPYRIGHT_PAGE.length + 2,
+        endOffset: fullText.length,
+        charCount: CHAPTER.text.length,
+        depth: 0,
+        spineIndex: 1,
+        indexStatus: 'ready',
+      },
+    ];
+    registerAgentBookContext(
+      createAgentBookContext({ bookHash: DEMO_BOOK.bookHash, nodes, fullText }),
+    );
+    const { factory } = setup();
+    useReaderStore.setState({ spineIndex: 0, anchor: undefined, nodeTitle: '第 2 节' });
+    render(<SummaryTab store={currentStore} />);
+
+    expect(await screen.findByTestId('summary-not-summarizable-note')).toBeTruthy();
+    // No button, but not a mystery either: the note names the page kind.
+    expect(screen.queryByTestId('generate-summary')).toBeNull();
+    expect(screen.getByTestId('summary-not-summarizable-note').textContent).toContain(
+      '本页是版权页，没有可提炼的正文内容，无需总结。',
+    );
+    // The scope row still reports where the reader is and how big the page is;
+    // the status token says what kind of page it is instead of 「未总结」.
+    const facts = screen.getByTestId('summary-scope-row').textContent ?? '';
+    expect(facts).toContain('版权页');
+    expect(facts).not.toContain('未总结');
+    expect(factory).not.toHaveBeenCalled();
+  });
+
+  it('keeps the CTA on prose front matter — 序言 is content, not furniture', async () => {
+    // The narrowest part of the rule: only structural pages lose the button.
+    // 《何为良好生活》's 「序言」 node even *opens* with a copyright page (the NCX
+    // points both entries at one anchor), so a title-based or text-prefix-only
+    // rule would silently remove the button from real preface prose.
+    const nodes: BookNode[] = [
+      {
+        nodeId: bookNodeId(DEMO_BOOK.bookHash, 0),
+        bookHash: DEMO_BOOK.bookHash,
+        nodeIndex: 0,
+        title: '序言',
+        startOffset: 0,
+        endOffset: CHAPTER.text.length,
+        charCount: CHAPTER.text.length,
+        depth: 0,
+        spineIndex: 0,
+        indexStatus: 'ready',
+      },
+    ];
+    registerAgentBookContext(
+      createAgentBookContext({
+        bookHash: DEMO_BOOK.bookHash,
+        nodes,
+        fullText: `${CHAPTER.text}${'x'.repeat(20)}`,
+      }),
+    );
+    setup();
+    useReaderStore.setState({ spineIndex: 0, anchor: undefined, nodeTitle: '序言' });
+    render(<SummaryTab store={currentStore} />);
+
+    expect(await screen.findByTestId('generate-summary')).toBeTruthy();
+    expect(screen.queryByTestId('summary-not-summarizable-note')).toBeNull();
   });
 
   it('streams a generation: stop button + content while generating, then cached with regenerate', async () => {

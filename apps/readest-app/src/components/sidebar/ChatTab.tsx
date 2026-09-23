@@ -332,7 +332,7 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
             </Text>
             <HStack gap={2}>
               <Button
-                label="➕ 开启新话题"
+                label="开启新话题"
                 variant="primary"
                 size="sm"
                 data-testid="start-new-topic"
@@ -388,8 +388,8 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
         >
           {streaming ? (
             <Button
-              label="⏹ 停止"
-              variant="destructive"
+              label="停止"
+              variant="secondary"
               size="sm"
               data-testid="stop-stream"
               icon={<Square size={14} aria-hidden />}

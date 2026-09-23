@@ -279,6 +279,10 @@ export default function AISidebar() {
                   打开书籍后，可在此查看章节总结与 AI 伴读。
                 </Text>
               </VStack>
+              {/* 书名可以很长（《说理》的 dc:title 就有 60+ 字），而侧栏最窄只有
+                  320px：按钮因此必须能被父级压窄——`maxWidth: 100%` 给出宽度上界，
+                  可见文本交给 `Text maxLines={1}`（单行截断 + 悬停显示完整书名）。
+                  `label` 仍是完整文案，所以无障碍名称不受截断影响。 */}
               {currentHash && (
                 <Button
                   label={`继续阅读《${bookTitle || '未命名'}》`}
@@ -286,8 +290,11 @@ export default function AISidebar() {
                   size="sm"
                   data-testid="sidebar-resume-reading"
                   icon={<History size={14} aria-hidden />}
+                  style={{ maxWidth: '100%' }}
                   onClick={resumeReading}
-                />
+                >
+                  <Text maxLines={1}>继续阅读《{bookTitle || '未命名'}》</Text>
+                </Button>
               )}
             </VStack>
           ) : activeTab === 'summary' ? (

@@ -4,7 +4,7 @@
  * Per-chapter UI state keyed by `${bookHash}:${nodeIndex}`:
  * - `openChapter` only checks the local cache — it NEVER starts a model call;
  * - `generate` is the only entry into the pipeline and is always user-fired
- *   (the ⚡ button or 🔄 regenerate); `force=true` bypasses the cache;
+ *   (the 总结当前节 button or 重新生成); `force=true` bypasses the cache;
  * - `stop` aborts the in-flight run; partial streamed content is kept.
  *
  * The factory injects the summarizer factory, the repository and the node resolver

@@ -8,7 +8,7 @@
  * users unsatisfied with the generated panorama / briefs.
  */
 import { useState } from 'react';
-import { ChevronRight, CircleDot, Compass, KeyRound, RotateCw } from 'lucide-react';
+import { ChevronRight, CircleDot, Compass, KeyRound, RotateCw, Sparkles } from 'lucide-react';
 import { AlertDialog } from '@astryxdesign/core/AlertDialog';
 import { Button } from '@astryxdesign/core/Button';
 import { HStack } from '@astryxdesign/core/Stack';
@@ -163,7 +163,7 @@ export default function IndexingStatusBar() {
         {failed || awaitingKey ? (
           <Button
             label={failed ? '重试' : configured ? '生成' : '去设置'}
-            variant={awaitingKey && configured ? 'secondary' : 'ghost'}
+            variant="secondary"
             size="sm"
             data-testid={
               failed ? 'index-retry-button' : configured ? 'index-start-button' : 'index-settings-button'
@@ -206,10 +206,11 @@ export default function IndexingStatusBar() {
         ) : (
           <Button
             label="生成画像"
-            variant="ghost"
+            variant="secondary"
             size="sm"
             data-testid="start-indexing-button"
             tooltip="生成全书画像与索引"
+            icon={<Sparkles size={12} aria-hidden />}
             onClick={(event: React.MouseEvent<HTMLButtonElement>) => {
               event.stopPropagation();
               void startIndexing({ currentSpineIndex: spineIndex });
