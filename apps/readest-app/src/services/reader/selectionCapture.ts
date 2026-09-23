@@ -37,6 +37,17 @@ export const SELECTION_EVENTS = ['mouseup', 'keyup', 'selectionchange'] as const
 export interface RawSelection {
   text: string;
   rect: DOMRect;
+  /**
+   * The live range the selection came from, when the document offered one.
+   *
+   * Reader highlights need it to know **which** occurrence of a repeated phrase
+   * was marked: the quote alone cannot tell two identical sentences apart, and
+   * the surrounding context can be read off the range's exact offsets. It is
+   * deliberately optional — a test adapter feeds a ready-made `{text, rect}`, and
+   * a range never outlives the document it came from (the engine recreates a
+   * chapter's document on every chapter change).
+   */
+  range?: Range;
 }
 
 /** The rect of a range, with a zero rect fallback for environments without one. */
@@ -70,7 +81,7 @@ export function readSelection(doc: Document, within?: Node | null): RawSelection
     if (!anchor || !within.contains(anchor)) return null;
   }
 
-  return { text, rect: rectOf(range) };
+  return { text, rect: rectOf(range), range };
 }
 
 /** Wipe a document's native selection (no visual residue after an action). */
@@ -125,5 +136,8 @@ export function toPageCoordinates(raw: RawSelection, doc: Document): RawSelectio
       raw.rect.width,
       raw.rect.height,
     ),
+    // The range still lives in the chapter's document — only its *rect* needs
+    // translating into page coordinates.
+    ...(raw.range ? { range: raw.range } : {}),
   };
 }

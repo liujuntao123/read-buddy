@@ -5,6 +5,7 @@ import {
   BookOpen,
   Cpu,
   GripVertical,
+  Highlighter,
   History,
   MessageSquare,
   Settings2,
@@ -17,7 +18,7 @@ import { Tab, TabList } from '@astryxdesign/core/TabList';
 import { HStack, VStack } from '@astryxdesign/core/Stack';
 import { Text } from '@astryxdesign/core/Text';
 import { Token } from '@astryxdesign/core/Token';
-import { useAISidebarStore } from '@/store/aiSidebarStore';
+import { useAISidebarStore, type AISidebarTab } from '@/store/aiSidebarStore';
 import { useAISettingsStore } from '@/store/aiSettingsStore';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useReaderStore } from '@/store/readerStore';
@@ -25,6 +26,7 @@ import { providerReady } from '@/services/ai/providerReadiness';
 import { useViewportWidth } from '@/hooks/useViewportWidth';
 import AISettingsPanel from '@/components/settings/AISettingsPanel';
 import SummaryTab from './SummaryTab';
+import HighlightsTab from './HighlightsTab';
 import ChatTab from './ChatTab';
 
 interface DragState {
@@ -181,12 +183,18 @@ export default function AISidebar() {
               role="tablist"
               aria-label="AI 侧边栏视图"
               value={activeTab}
-              onChange={(next) => setActiveTab(next as 'summary' | 'chat')}
+              onChange={(next) => setActiveTab(next as AISidebarTab)}
               size="sm"
               style={{ flexShrink: 0 }}
             >
               <Tab value="summary" label="总结" panelId="ai-panel-summary" icon={<Sparkles size={12} aria-hidden />} />
               <Tab value="chat" label="伴读" panelId="ai-panel-chat" icon={<MessageSquare size={12} aria-hidden />} />
+              <Tab
+                value="highlights"
+                label="划线"
+                panelId="ai-panel-highlights"
+                icon={<Highlighter size={12} aria-hidden />}
+              />
             </TabList>
           )}
           <HStack gap={2} vAlign="center" style={{ minWidth: 0 }}>
@@ -299,6 +307,8 @@ export default function AISidebar() {
             </VStack>
           ) : activeTab === 'summary' ? (
             <SummaryTab />
+          ) : activeTab === 'highlights' ? (
+            <HighlightsTab />
           ) : (
             <ChatTab />
           )}

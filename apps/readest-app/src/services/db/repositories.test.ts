@@ -3,11 +3,13 @@ import { ReadestPlusDatabase } from './database';
 import {
   AISettingsRepository,
   BookNodeRepository,
+  HighlightRepository,
   NodeSummaryRepository,
   ConversationRepository,
 } from './repositories';
 import { DEFAULT_AI_SETTINGS, nodeSummaryId } from '@/types/ai';
 import { bookNodeId, type BookNodeRecord } from '@/types/readingAgent';
+import type { ReaderHighlight } from '@/types/highlight';
 
 /**
  * Foundation smoke test: proves the Dexie + fake-indexeddb harness works
@@ -173,5 +175,44 @@ describe('ConversationRepository', () => {
     await repo.remove('c-old');
     expect(await repo.listMessages('c-old')).toEqual([]);
     expect((await repo.listByBook('book-a')).map((c) => c.id)).toEqual(['c-new']);
+  });
+});
+
+describe('HighlightRepository', () => {
+  it('lists one book’s marks in document order and removes by id', async () => {
+    const repo = new HighlightRepository(db);
+    const mark = (
+      id: string,
+      nodeIndex: number,
+      createdAt: number,
+      bookHash = 'hl-book',
+    ): ReaderHighlight => ({
+      id,
+      bookHash,
+      nodeIndex,
+      nodeTitle: `第${nodeIndex + 1}节`,
+      spineIndex: nodeIndex,
+      quote: `第 ${nodeIndex} 处划线`,
+      createdAt,
+    });
+
+    // Written out of order on purpose: the list is document order, not insert order.
+    await repo.put(mark('hl-book:h_c', 5, 1));
+    await repo.put(mark('hl-book:h_a', 1, 9));
+    await repo.put(mark('hl-book:h_b', 1, 4));
+    await repo.put(mark('other:h_x', 0, 1, 'other-book'));
+
+    expect((await repo.listByBook('hl-book')).map((row) => row.id)).toEqual([
+      'hl-book:h_b',
+      'hl-book:h_a',
+      'hl-book:h_c',
+    ]);
+    expect((await repo.listByBook('other-book')).map((row) => row.id)).toEqual(['other:h_x']);
+
+    await repo.remove('hl-book:h_a');
+    expect((await repo.listByBook('hl-book')).map((row) => row.id)).toEqual([
+      'hl-book:h_b',
+      'hl-book:h_c',
+    ]);
   });
 });

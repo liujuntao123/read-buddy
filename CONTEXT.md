@@ -88,6 +88,14 @@ The whole-Book portrait — genre, theme summary, world setting, main characters
 A continuous fragment of textual content explicitly highlighted by the user within the main reading view. It is captured by one set of rules (minimum length, gesture events, containment) shared by both places it can occur: the host reading article and a chapter's own document inside the engine's iframe.
 _Avoid_: highlight (that is the reader's visual mark), quote (that is the fragment as it travels into a prompt), selection range (that is the DOM primitive)
 
+**Highlight (划线)**:
+A reader-made mark over a Text Selection, kept until the reader deletes it and painted again every time its chapter is displayed. It is identified by the Book Node it was made in plus a **text anchor** — the quoted text with its surrounding context — because the rendering engine rebuilds a chapter's document on every chapter change; it is not identified by a DOM offset, a Range or a CFI.
+_Avoid_: annotation, note, bookmark (all three mean something the reader edits or navigates by, not a mark over text), agent highlight (that is the transient breathing cue `locate_in_reader` produces, which clears itself)
+
+**Highlight Anchor (划线锚)**:
+The quoted text of a Highlight together with a short prefix and suffix from the same document. Whitespace is ignored when matching, because a selection that spans two paragraphs carries a block separator the rendered text does not have. The context is what tells two identical sentences in one chapter apart.
+_Avoid_: offset, coordinate, position (positions are the Reading Position's vocabulary, in a different coordinate space)
+
 **Floating Action Toolbar**:
 A contextual floating overlay rendered immediately adjacent to an active Text Selection, exposing instant actions: Explain, Translate, Summarize, and Ask AI.
 

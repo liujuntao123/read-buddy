@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Banner } from '@astryxdesign/core/Banner';
 import { VStack } from '@astryxdesign/core/Stack';
 import { Text } from '@astryxdesign/core/Text';
@@ -10,15 +10,33 @@ import { useLibraryStore } from '@/store/libraryStore';
 import { DEMO_MONOLITHIC_TXT, type DemoSection } from '@/services/reader/demoBook';
 import { type QuickAction } from '@/services/chat/quickActions';
 import { fontStackByKey, useReaderSettingsStore } from '@/store/readerSettingsStore';
-import { subscribeLocate } from '@/services/reader/readerLink';
+import { subscribeLocate, type LocateRequest } from '@/services/reader/readerLink';
 import { recordReadingPosition } from '@/services/reader/readingPosition';
 import { highlightSnippet } from '@/services/reader/highlight';
 import SelectionToolbar from './SelectionToolbar';
-import { readTextSelection, useTextSelection } from '@/hooks/useTextSelection';
+import { readTextSelection, useTextSelection, type TextSelection } from '@/hooks/useTextSelection';
 import { useQuickActions } from '@/hooks/useQuickActions';
+import { useReaderHighlights } from '@/hooks/useReaderHighlights';
 
 /** Article column: a capped measure keeps prose lines readable. */
 const ARTICLE_MEASURE = 672;
+
+/**
+ * Escape the one thing a book's text can contain that HTML would read as markup.
+ *
+ * The scroll article is handed to React as an **HTML string** rather than as
+ * `<p>{line}</p>` children on purpose: reader highlights wrap text nodes in
+ * `<mark>` elements, and a text node React believes it owns is a text node React
+ * will overwrite with `nodeValue` on the next re-render (a font-size change, a
+ * theme switch) — corrupting the line and orphaning the mark. `innerHTML` is
+ * outside React's diffing, which is why the demo branch below has always used it.
+ */
+const escapeHtml = (value: string): string =>
+  value.replace(
+    /[&<>"']/g,
+    (char) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] ?? char,
+  );
 
 /**
  * Scroll reading viewport for TXT / demo books. Chapter navigation lives in
@@ -44,6 +62,7 @@ export default function ReaderPane({
   const articleRef = useRef<HTMLElement | null>(null);
   const { selection, close, reset } = useTextSelection(articleRef);
   const runQuickAction = useQuickActions();
+  const { setMarkTarget, markSelection } = useReaderHighlights();
 
   // Reader typography (font size / family / line height / paragraph spacing)
   // applies to the TXT scroll article just like to engine chapters.
@@ -52,7 +71,6 @@ export default function ReaderPane({
     fontFamily: fontStackByKey(typography.fontFamily),
     lineHeight: typography.lineHeight,
   } as const;
-  const paragraphStyle = { marginTop: `${typography.paragraphSpacing}em` } as const;
 
   // Virtual-section mode: the segmentation belongs to the book being read.
   const virtualSections =
@@ -71,23 +89,43 @@ export default function ReaderPane({
       )
     : '';
 
+  /**
+   * The article's paragraphs as HTML (one `<p>` per non-blank line). Built as a
+   * string, not as React children, so highlight marks survive re-renders — see
+   * `escapeHtml`.
+   */
+  const paragraphsHtml = useMemo(() => {
+    const margin = `margin-top:${typography.paragraphSpacing}em;text-align:justify;text-indent:2em`;
+    return virtualText
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => `<p style="${margin}">${escapeHtml(line)}</p>`)
+      .join('');
+  }, [virtualText, typography.paragraphSpacing]);
+
   // Agent → reader jump (reading-agent doc §5.3 locate_in_reader): hop to the
   // target virtual section, then breathe-highlight the quoted snippet. For TXT
   // the virtual sections share the agent pipeline's node space (same layered
   // segmenter), so `request.nodeIndex` maps 1:1 onto the physical ordinal.
-  const [pendingHighlight, setPendingHighlight] = useState<string | null>(null);
+  const [pendingHighlight, setPendingHighlight] = useState<LocateRequest | null>(null);
   useEffect(() => {
     return subscribeLocate((request) => {
       if (request.bookHash !== bookHash) return;
-      const target = virtualSections[request.nodeIndex];
-      if (!target) return;
-      if (spineIndex !== request.nodeIndex) {
-        recordReadingPosition(
-          { bookHash, spineIndex: request.nodeIndex },
-          { titleFallback: target.title },
-        );
+      // A reader highlight carries the physical section it was made in; an agent
+      // citation carries only a node ordinal. For a TXT book the two coincide.
+      const target = request.spineIndex ?? request.nodeIndex;
+      const section = virtualSections[target];
+      if (section) {
+        if (spineIndex !== target) {
+          recordReadingPosition({ bookHash, spineIndex: target }, { titleFallback: section.title });
+        }
+      } else if (spineIndex !== target) {
+        // No segmentation for this book (demo / native TXT): the ordinal *is* the
+        // section, so the reader can still be moved there.
+        recordReadingPosition({ bookHash, spineIndex: target }, {});
       }
-      setPendingHighlight(request.quoteSnippet);
+      setPendingHighlight(request);
     });
   }, [bookHash, virtualSections, spineIndex]);
 
@@ -96,12 +134,28 @@ export default function ReaderPane({
   // rAF fires, and cancelling the frame would swallow the highlight.
   useEffect(() => {
     if (!pendingHighlight || !articleRef.current) return;
-    const snippet = pendingHighlight;
+    const snippet = pendingHighlight.quoteSnippet;
+    const anchor = pendingHighlight.anchor;
     setPendingHighlight(null);
     requestAnimationFrame(() => {
-      highlightSnippet(articleRef.current, snippet);
+      highlightSnippet(articleRef.current, snippet, anchor ? { anchor } : {});
     });
   }, [pendingHighlight, spineIndex, virtualText]);
+
+  /**
+   * Reader highlights (划线) are painted onto the article's HTML — never onto
+   * React's own text nodes (see `escapeHtml`). Repainting is therefore tied to
+   * the HTML string: React replaces it whenever the section or the typography
+   * changes, and the hook's store subscription repaints when the marks do.
+   */
+  useEffect(() => {
+    setMarkTarget(articleRef.current, spineIndex);
+  }, [setMarkTarget, spineIndex, paragraphsHtml, section]);
+
+  /** Selection 划线 — the mark belongs to this article's document. */
+  const handleHighlight = (selected: TextSelection) => {
+    void markSelection(selected).then(reset);
+  };
 
   /**
    * Selection AI quick action (design doc 4.4.3, ADR 0007) — shared with the
@@ -199,26 +253,33 @@ export default function ReaderPane({
           }}
           data-testid="reader-typography"
         >
+          {/* Both branches render as HTML strings, never as React children: 划线
+              marks live inside this subtree and React must not own its text nodes
+              (see `escapeHtml`). */}
           {isVirtual ? (
-            virtualText
-              .split('\n')
-              .map((line) => line.trim())
-              .filter(Boolean)
-              .map((line, i) => (
-                <p key={i} style={{ ...paragraphStyle, textAlign: 'justify', textIndent: '2em' }}>
-                  {line}
-                </p>
-              ))
+            <div
+              data-testid="reader-paragraphs"
+              dangerouslySetInnerHTML={{ __html: paragraphsHtml }}
+            />
           ) : (
             <>
               {/* Static fixture content owned by this app (demoBook.ts), not user input. */}
-              <div style={{ letterSpacing: '0.02em' }} dangerouslySetInnerHTML={{ __html: section!.html }} />
+              <div
+                data-testid="reader-paragraphs"
+                style={{ letterSpacing: '0.02em' }}
+                dangerouslySetInnerHTML={{ __html: section!.html }}
+              />
               <style>{`[data-testid="reader-typography"] p { margin-top: ${typography.paragraphSpacing}em; }`}</style>
             </>
           )}
         </div>
       </article>
-      <SelectionToolbar selection={selection} onAction={handleQuickAction} onClose={reset} />
+      <SelectionToolbar
+        selection={selection}
+        onAction={handleQuickAction}
+        onHighlight={handleHighlight}
+        onClose={reset}
+      />
     </VStack>
   );
 }

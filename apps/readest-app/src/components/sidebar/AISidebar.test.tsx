@@ -180,4 +180,26 @@ describe('AISidebar responsive drawer mode', () => {
     // … and the button itself is width-bounded, so the ellipsis can engage.
     expect(resume.style.maxWidth).toBe('100%');
   });
+
+  it('offers 划线 as a third tab and swaps the panel for it', () => {
+    mockMatchMedia(false);
+    useAISidebarStore.setState({ expanded: true, activeTab: 'summary' });
+    useLibraryStore.setState({ view: 'reader', currentHash: 'demo-book' });
+    useReaderStore.setState({ bookHash: 'demo-book', spineIndex: 0 });
+    render(<AISidebar />);
+
+    // Three views of the same book: 总结 / 伴读 / 划线.
+    expect(screen.getAllByRole('tab')).toHaveLength(3);
+    for (const name of ['总结', '伴读', '划线']) {
+      expect(screen.getByRole('tab', { name })).toBeTruthy();
+    }
+
+    fireEvent.click(screen.getByRole('tab', { name: '划线' }));
+    expect(useAISidebarStore.getState().activeTab).toBe('highlights');
+    expect(screen.getByTestId('highlights-tab-panel')).toBeTruthy();
+    expect(screen.queryByTestId('summary-tab-panel')).toBeNull();
+    // Exactly one panel is mounted at a time, tied to the selected tab.
+    const panel = screen.getByRole('tabpanel');
+    expect(panel.getAttribute('id')).toBe('ai-panel-highlights');
+  });
 });

@@ -1,6 +1,7 @@
 import Dexie, { type Table } from 'dexie';
 import type { AISettings, BookSegmentation, NodeSummary, Conversation, Message } from '@/types/ai';
 import type { LibraryBook } from '@/types/library';
+import type { ReaderHighlight } from '@/types/highlight';
 import type {
   AgentTurnTraceRecord,
   BookNodeRecord,
@@ -42,6 +43,9 @@ export const AI_SETTINGS_KEY = 'global';
  *   upgrade: no store is dropped, the rows are rewritten in place.
  * - v7 carries the same rename to `LibraryBook.lastNodeIndex` → `lastSpineIndex`,
  *   and reading progress gains the Node Anchor alongside the ordinal and CFI.
+ * - v8 adds `highlights` — the reader's own 划线 marks (CONTEXT.md 「Highlight」).
+ *   Purely additive: no existing store changes, and the rows are found again by
+ *   their text anchor rather than by anything the node model computed.
  */
 export class ReadestPlusDatabase extends Dexie {
   aiSettings!: Table<AISettingsRow, string>;
@@ -50,13 +54,14 @@ export class ReadestPlusDatabase extends Dexie {
   messages!: Table<Message, string>;
   books!: Table<LibraryBook, string>;
   // Dexie attaches a table property under the EXACT store name declared in
-  // `stores()` — these four must therefore stay snake_case, or the property
+  // `stores()` — these must therefore stay snake_case, or the property
   // type-checks while evaluating to `undefined` at runtime.
   node_summaries!: Table<NodeSummary, string>;
   book_nodes!: Table<BookNodeRecord, string>;
   book_panoramas!: Table<BookPanoramaRecord, string>;
   reading_entities!: Table<ReadingEntityRecord, string>;
   agent_turn_traces!: Table<AgentTurnTraceRecord, string>;
+  highlights!: Table<ReaderHighlight, string>;
 
   constructor(name = 'readest-plus') {
     super(name);
@@ -126,6 +131,12 @@ export class ReadestPlusDatabase extends Dexie {
             delete row.lastNodeIndex;
           });
       });
+    // v8: reader highlights (划线). Additive, no index on the anchor fields: the
+    // list is always "this book's highlights", and painting filters by
+    // `spineIndex` in memory (a book has tens of highlights, not thousands).
+    this.version(8).stores({
+      highlights: 'id, bookHash, nodeIndex, createdAt',
+    });
   }
 }
 

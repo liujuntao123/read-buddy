@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-export type AISidebarTab = 'summary' | 'chat';
+export type AISidebarTab = 'summary' | 'chat' | 'highlights';
 
 export const SIDEBAR_MIN_WIDTH = 320;
 /**

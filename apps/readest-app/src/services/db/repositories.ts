@@ -6,6 +6,7 @@ import type {
   Message,
 } from '@/types/ai';
 import { DEFAULT_AI_SETTINGS, nodeSummaryId } from '@/types/ai';
+import { compareHighlights, type ReaderHighlight } from '@/types/highlight';
 import type {
   AgentTurnTraceRecord,
   BookPanoramaRecord,
@@ -196,5 +197,29 @@ export class AgentTraceRepository {
       .equals(conversationId)
       .toArray();
     return rows.sort((a, b) => a.createdAt - b.createdAt);
+  }
+}
+
+/**
+ * Reader highlights (划线) — the reader's own persistent marks.
+ *
+ * Rows are always read **for one book**, in document order: the sidebar lists
+ * them in reading order and the panes paint the subset belonging to the chapter
+ * they are showing.
+ */
+export class HighlightRepository {
+  constructor(private readonly db: ReadestPlusDatabase = getDatabase()) {}
+
+  async put(highlight: ReaderHighlight): Promise<void> {
+    await this.db.highlights.put(highlight);
+  }
+
+  async remove(id: string): Promise<void> {
+    await this.db.highlights.delete(id);
+  }
+
+  async listByBook(bookHash: string): Promise<ReaderHighlight[]> {
+    const rows = await this.db.highlights.where('bookHash').equals(bookHash).toArray();
+    return rows.sort(compareHighlights);
   }
 }

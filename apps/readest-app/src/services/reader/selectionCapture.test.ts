@@ -39,9 +39,13 @@ const docWithSelection = (
 };
 
 describe('readSelection — the one eligibility rule', () => {
-  it('accepts a non-collapsed selection of at least the minimum length', () => {
+  it('accepts a non-collapsed selection of at least the minimum length, range included', () => {
     const doc = docWithSelection({ text: '灯火在雾中' });
-    expect(readSelection(doc)).toEqual({ text: '灯火在雾中', rect: expect.any(DOMRect) });
+    const selection = readSelection(doc);
+    expect(selection).toMatchObject({ text: '灯火在雾中', rect: expect.any(DOMRect) });
+    // The live range travels with the selection: a reader highlight needs it to
+    // tell two identical sentences apart (which occurrence was marked).
+    expect(selection?.range).toBe(doc.getSelection()?.getRangeAt(0));
   });
 
   it('rejects a collapsed selection, an empty range, and no selection at all', () => {

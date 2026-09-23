@@ -11,10 +11,24 @@ export interface LocateRequest {
   bookHash: string;
   /** Target chapter ordinal in the agent's unified chapter space. */
   nodeIndex: number;
+  /**
+   * Physical section the passage lives in, when the caller already knows it.
+   *
+   * A reader highlight carries its own `spineIndex` (it was recorded where the
+   * selection was made), so a jump can go straight there instead of resolving a
+   * node — and without the "scan every spine for the quote" fallback that an
+   * un-indexed book would otherwise need.
+   */
+  spineIndex?: number;
   /** Optional chapter-relative character offset. */
   charOffset?: number;
   /** Precise text fragment to highlight once there. */
   quoteSnippet: string;
+  /**
+   * Surrounding text of the quote. Two identical sentences in one chapter are
+   * otherwise indistinguishable, and the cue would breathe over the wrong one.
+   */
+  anchor?: { prefix?: string; suffix?: string };
 }
 
 export type LocateListener = (request: LocateRequest) => void;

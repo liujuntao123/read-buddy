@@ -85,6 +85,53 @@ class LegacyV5Database extends Dexie {
   }
 }
 
+/** The shipped v1~v7 declaration, before `highlights` was added. */
+class LegacyV7Database extends Dexie {
+  constructor(name: string) {
+    super(name);
+    this.version(1).stores(V1_STORES);
+    this.version(2).stores(V2_STORES);
+    this.version(3).stores(V3_AGENT_STORES);
+    this.version(4).stores({
+      chapter_nodes: 'chapterId, bookHash, sectionIndex, indexStatus',
+    });
+    this.version(5).stores({
+      chapterSummaries: null,
+      chapter_nodes: null,
+      book_nodes: 'nodeId, bookHash, nodeIndex, indexStatus',
+      node_summaries: 'id, bookHash, nodeIndex',
+    });
+    this.version(6)
+      .stores({})
+      .upgrade(async (tx) => {
+        await tx
+          .table('conversations')
+          .toCollection()
+          .modify((row: Record<string, unknown>) => {
+            if (row.nodeIndex !== undefined && row.spineIndex === undefined) {
+              row.spineIndex = row.nodeIndex;
+            }
+            delete row.nodeIndex;
+          });
+      });
+    // v7: the books field rename, exactly as shipped.
+    this.version(7)
+      .stores({})
+      .upgrade(async (tx) => {
+        await tx
+          .table('books')
+          .toCollection()
+          .modify((row: Record<string, unknown>) => {
+            if (row.lastNodeIndex !== undefined && row.lastSpineIndex === undefined) {
+              row.lastSpineIndex = row.lastNodeIndex;
+            }
+            delete row.lastNodeIndex;
+          });
+      });
+  }
+}
+
+
 /** The shipped v1~v6 declaration, before the `lastNodeIndex` rename. */
 class LegacyV6Database extends Dexie {
   constructor(name: string) {
@@ -276,6 +323,59 @@ describe('ReadestPlusDatabase schema migration', () => {
     await expect(bookNodes.get(node.nodeId)).resolves.toBeTruthy();
     await db.close();
     await Dexie.delete(name);
+  });
+
+  /**
+   * v8 is purely additive: `highlights` appears on a fresh install and on an
+   * upgrade from the previous version, and nothing else changes. There is no
+   * backfill — a reader who had no marks simply has none.
+   */
+  it('C2: fresh and upgraded databases both carry the v8 highlights store', async () => {
+    const name = dbName();
+    const db = new ReadestPlusDatabase(name);
+    await db.open();
+    expect(db.tables.map((table) => table.name)).toContain('highlights');
+
+    const mark = {
+      id: 'b:h_1',
+      bookHash: 'b',
+      nodeIndex: 2,
+      nodeTitle: '第二章',
+      spineIndex: 1,
+      quote: '穹顶上的星图亮了起来',
+      prefix: '她身后合上时，',
+      suffix: '，一行行微光',
+      createdAt: 10,
+    };
+    await db.highlights.put(mark);
+    await expect(db.highlights.get('b:h_1')).resolves.toMatchObject({ quote: mark.quote });
+    // Queryable by book, which is the list path.
+    await expect(db.highlights.where('bookHash').equals('b').toArray()).resolves.toHaveLength(1);
+    await db.close();
+    await Dexie.delete(name);
+
+    // The same store exists when a v7 database is opened by v8.
+    const upgradeName = dbName();
+    const legacy = new LegacyV7Database(upgradeName);
+    await legacy.open();
+    await legacy.table('books').put({
+      hash: 'b',
+      title: '灯塔之夜',
+      format: 'epub',
+      lastSpineIndex: 3,
+      updatedAt: 1,
+    });
+    await legacy.close();
+
+    const upgraded = new ReadestPlusDatabase(upgradeName);
+    await upgraded.open();
+    expect(upgraded.tables.map((table) => table.name)).toContain('highlights');
+    // …and the v7 row survived the additive upgrade.
+    await expect(upgraded.books.get('b')).resolves.toMatchObject({ lastSpineIndex: 3 });
+    await upgraded.highlights.put(mark);
+    await expect(upgraded.highlights.get('b:h_1')).resolves.toBeTruthy();
+    await upgraded.close();
+    await Dexie.delete(upgradeName);
   });
 
   /**

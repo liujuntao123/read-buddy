@@ -9,7 +9,7 @@ import { useLibraryStore } from '@/store/libraryStore';
 import type { EngineLocation, FoliateEngineHandle } from '@/services/library/foliateEngine';
 import { tocAnchorOf } from '@/services/library/foliateEngine';
 import { getAgentBookContext } from '@/services/agent/agentContext';
-import { subscribeLocate } from '@/services/reader/readerLink';
+import { subscribeLocate, type LocateRequest } from '@/services/reader/readerLink';
 import { recordReadingPosition } from '@/services/reader/readingPosition';
 import { highlightSnippet } from '@/services/reader/highlight';
 import { useReadingTheme } from '@/theme/readingTheme';
@@ -20,6 +20,7 @@ import {
 } from '@/store/readerSettingsStore';
 import { useQuickActions } from '@/hooks/useQuickActions';
 import { useIframeSelection, type IframeSelectionReader } from '@/hooks/useIframeSelection';
+import { useReaderHighlights } from '@/hooks/useReaderHighlights';
 import SelectionToolbar from './SelectionToolbar';
 
 /** Relocate-driven position records are debounced inside the position owner. */
@@ -58,8 +59,9 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
   const [openError, setOpenError] = useState<string | null>(null);
   const { selection, attach, close, reset } = useIframeSelection(readSelection);
   const runQuickAction = useQuickActions();
-  /** Quote awaiting highlight once the located chapter's iframe loads. */
-  const pendingHighlightRef = useRef<string | null>(null);
+  const { setMarkTarget, markSelection } = useReaderHighlights();
+  /** Locate request awaiting the chapter's iframe (queued before `goTo`). */
+  const pendingHighlightRef = useRef<LocateRequest | null>(null);
   /** Most recently loaded chapter document (same-section highlight path). */
   const latestDocRef = useRef<Document | null>(null);
 
@@ -118,22 +120,25 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- engine identity is the only dependency
   }, [engine]);
 
-  // Chapter loads → wire the selection capture onto the fresh iframe doc.
+  // Chapter loads → wire the selection capture onto the fresh iframe doc, and
+  // repaint the reader's own 划线 marks: the engine throws the previous chapter's
+  // document away, so a mark painted once would be gone forever.
   useEffect(() => {
     if (!engine) return;
-    return engine.onLoad(({ doc }) => {
+    return engine.onLoad(({ doc, index }) => {
       latestDocRef.current = doc;
       attach(doc);
-      // Apply an agent-located highlight onto the freshly painted chapter.
+      setMarkTarget(doc.body, index);
+      // Apply a located highlight onto the freshly painted chapter.
       const pending = pendingHighlightRef.current;
       if (pending) {
         pendingHighlightRef.current = null;
         window.setTimeout(() => {
-          highlightSnippet(doc.body, pending);
+          highlightSnippet(doc.body, pending.quoteSnippet, pending.anchor ? { anchor: pending.anchor } : {});
         }, 60);
       }
     });
-  }, [engine, attach]);
+  }, [engine, attach, setMarkTarget]);
 
   // Agent → reader jump (reading-agent doc §5.3 locate_in_reader): the request
   // names a book node, so the node model resolves the destination first — its
@@ -150,22 +155,38 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
       void (async () => {
         const highlightHereAndNow = (): boolean => {
           if (!latestDocRef.current) return false;
-          highlightSnippet(latestDocRef.current.body, request.quoteSnippet);
+          highlightSnippet(
+            latestDocRef.current.body,
+            request.quoteSnippet,
+            request.anchor ? { anchor: request.anchor } : {},
+          );
           return true;
         };
+
+        const current = engine.currentLocation();
+
+        // Path 0: the request already knows its physical section. A reader
+        // highlight records the section it was made in, so this needs neither the
+        // node model nor the "scan every spine for the quote" fallback — and an
+        // un-indexed book jumps just as precisely as an indexed one.
+        if (request.spineIndex !== undefined) {
+          if (current && current.index === request.spineIndex && highlightHereAndNow()) return;
+          pendingHighlightRef.current = request;
+          await engine.goTo(request.spineIndex);
+          return;
+        }
 
         // Path 1: the node model (authoritative — 章/节 with 目录锚点).
         const node = getAgentBookContext(request.bookHash)?.getNode(request.nodeIndex);
         if (node) {
           const target = node.href ?? node.spineIndex ?? request.nodeIndex;
-          const current = engine.currentLocation();
           if (current && node.spineIndex !== undefined && current.index === node.spineIndex) {
             // Same physical section: no fresh load event will fire.
             if (node.href) await engine.goTo(target);
             if (highlightHereAndNow()) return;
           }
           // Queue BEFORE navigating: the load event may fire mid-goTo.
-          pendingHighlightRef.current = request.quoteSnippet;
+          pendingHighlightRef.current = request;
           await engine.goTo(target);
           return;
         }
@@ -174,14 +195,13 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
         for (let index = 0; index < engine.spineCount; index++) {
           const text = await engine.getSpineText(index);
           if (text && text.includes(request.quoteSnippet)) {
-            const current = engine.currentLocation();
             if (current && current.index === index && latestDocRef.current) {
               // Same section: no fresh load event will fire — highlight now.
-              highlightSnippet(latestDocRef.current.body, request.quoteSnippet);
+              highlightHereAndNow();
               return;
             }
             // Queue BEFORE navigating: the load event may fire mid-goTo.
-            pendingHighlightRef.current = request.quoteSnippet;
+            pendingHighlightRef.current = request;
             await engine.goTo(index);
             return;
           }
@@ -367,6 +387,9 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
       <SelectionToolbar
         selection={selection}
         onAction={(action, text) => runQuickAction(action, text, reset)}
+        onHighlight={(selected) => {
+          void markSelection(selected).then(reset);
+        }}
         onClose={close}
       />
     </VStack>
