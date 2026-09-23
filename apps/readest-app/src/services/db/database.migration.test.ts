@@ -66,6 +66,58 @@ class LegacyChapterNodesV4Database extends Dexie {
   }
 }
 
+/** The shipped v1~v5 declaration, before the ADR 0011 field rename. */
+class LegacyV5Database extends Dexie {
+  constructor(name: string) {
+    super(name);
+    this.version(1).stores(V1_STORES);
+    this.version(2).stores(V2_STORES);
+    this.version(3).stores(V3_AGENT_STORES);
+    this.version(4).stores({
+      chapter_nodes: 'chapterId, bookHash, sectionIndex, indexStatus',
+    });
+    this.version(5).stores({
+      chapterSummaries: null,
+      chapter_nodes: null,
+      book_nodes: 'nodeId, bookHash, nodeIndex, indexStatus',
+      node_summaries: 'id, bookHash, nodeIndex',
+    });
+  }
+}
+
+/** The shipped v1~v6 declaration, before the `lastNodeIndex` rename. */
+class LegacyV6Database extends Dexie {
+  constructor(name: string) {
+    super(name);
+    this.version(1).stores(V1_STORES);
+    this.version(2).stores(V2_STORES);
+    this.version(3).stores(V3_AGENT_STORES);
+    this.version(4).stores({
+      chapter_nodes: 'chapterId, bookHash, sectionIndex, indexStatus',
+    });
+    this.version(5).stores({
+      chapterSummaries: null,
+      chapter_nodes: null,
+      book_nodes: 'nodeId, bookHash, nodeIndex, indexStatus',
+      node_summaries: 'id, bookHash, nodeIndex',
+    });
+    // v6: the conversation field rename, exactly as shipped.
+    this.version(6)
+      .stores({})
+      .upgrade(async (tx) => {
+        await tx
+          .table('conversations')
+          .toCollection()
+          .modify((row: Record<string, unknown>) => {
+            if (row.nodeIndex !== undefined && row.spineIndex === undefined) {
+              row.spineIndex = row.nodeIndex;
+            }
+            delete row.nodeIndex;
+          });
+      });
+  }
+}
+
 const sampleNode = (bookHash: string, index: number): BookNodeRecord => ({
   nodeId: bookNodeId(bookHash, index),
   bookHash,
@@ -222,6 +274,112 @@ describe('ReadestPlusDatabase schema migration', () => {
     const bookNodes = bookNodesOf(db);
     await bookNodes.put(node);
     await expect(bookNodes.get(node.nodeId)).resolves.toBeTruthy();
+    await db.close();
+    await Dexie.delete(name);
+  });
+
+  /**
+   * Scenario D is the first **data-preserving** upgrade: v6 renames
+   * `Conversation.nodeIndex` to `spineIndex` (it held a physical ordinal under a
+   * node-ordinal name — ADR 0011) without dropping the topic.
+   */
+  it('D: renames Conversation.nodeIndex to spineIndex and keeps the topic', async () => {
+    const name = dbName();
+    const legacy = new LegacyV5Database(name);
+    await legacy.open();
+    await legacy.table('conversations').put({
+      id: 'c1',
+      bookHash: 'b',
+      nodeIndex: 7,
+      title: '第一章讲了什么？',
+      turnCount: 2,
+      isClosed: false,
+      createdAt: 1,
+      updatedAt: 2,
+    });
+    // A topic that was never bound to a position must stay unbound.
+    await legacy.table('conversations').put({
+      id: 'c2',
+      bookHash: 'b',
+      title: '没有位置的话题',
+      turnCount: 0,
+      isClosed: false,
+      createdAt: 3,
+      updatedAt: 3,
+    });
+    await legacy.close();
+
+    const db = new ReadestPlusDatabase(name);
+    await db.open();
+
+    const migrated = await db.conversations.get('c1');
+    expect(migrated).toMatchObject({
+      id: 'c1',
+      spineIndex: 7,
+      title: '第一章讲了什么？',
+      turnCount: 2,
+      isClosed: false,
+    });
+    expect(migrated).not.toHaveProperty('nodeIndex');
+
+    // The upgrade must not invent a position of 0 for a topic that had none.
+    const unbound = await db.conversations.get('c2');
+    expect(unbound).not.toHaveProperty('nodeIndex');
+    expect(unbound?.spineIndex).toBeUndefined();
+
+    // v6 changed no index, so the conversations store is still readable by book.
+    const topics = await db.conversations.where('bookHash').equals('b').toArray();
+    expect(topics.map((topic) => topic.id).sort()).toEqual(['c1', 'c2']);
+
+    await db.close();
+    await Dexie.delete(name);
+  });
+
+  /**
+   * Scenario E carries the same rename to the shelf row: `LibraryBook`'s
+   * `lastNodeIndex` held a physical spine ordinal under a node-ordinal name
+   * (ADR 0011), and reading progress gains the Node Anchor.
+   */
+  it('E: renames LibraryBook.lastNodeIndex to lastSpineIndex, keeping reading progress', async () => {
+    const name = dbName();
+    const legacy = new LegacyV6Database(name);
+    await legacy.open();
+    await legacy.table('books').put({
+      hash: 'b',
+      title: '灯塔之夜',
+      format: 'epub',
+      size: 10,
+      importedAt: 1,
+      updatedAt: 2,
+      lastNodeIndex: 5,
+      lastCfi: 'epubcfi(/6/12!/2/2)',
+      data: new ArrayBuffer(0),
+    });
+    await legacy.close();
+
+    const db = new ReadestPlusDatabase(name);
+    await db.open();
+
+    const migrated = await db.books.get('b');
+    expect(migrated).toMatchObject({
+      hash: 'b',
+      lastSpineIndex: 5,
+      lastCfi: 'epubcfi(/6/12!/2/2)',
+    });
+    expect(migrated).not.toHaveProperty('lastNodeIndex');
+    // A book with no progress at all must stay without one — no invented 0.
+    await db.books.put({
+      hash: 'b2',
+      title: '未读',
+      format: 'txt',
+      size: 1,
+      importedAt: 1,
+      updatedAt: 1,
+      data: new ArrayBuffer(0),
+    });
+    const untouched = await db.books.get('b2');
+    expect(untouched?.lastSpineIndex).toBeUndefined();
+
     await db.close();
     await Dexie.delete(name);
   });

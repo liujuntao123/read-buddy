@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { waitFor } from '@testing-library/react';
 import { ReadestPlusDatabase } from '@/services/db/database';
 import {
@@ -10,12 +10,26 @@ import type { RunTurnInput, RunTurnResult } from '@/services/agent/agentOrchestr
 import type { AgentTurnEvent } from '@/services/agent/agentOrchestrator';
 import { DEFAULT_AI_SETTINGS, type AISettings } from '@/types/ai';
 import type { NodeKind, ToolCallTrace } from '@/types/readingAgent';
-import { createChatStore, turnLabel, type RunTurnFn } from './chatStore';
+import { createChatStore, type RunTurnFn } from './chatStore';
+import { turnQuotaLabel } from '@/services/chat/conversationManager';
+import { useReaderStore } from './readerStore';
 
 const databases: ReadestPlusDatabase[] = [];
 
 afterAll(async () => {
   await Promise.all(databases.map((db) => db.delete()));
+});
+
+afterEach(() => {
+  // The reader store is a module singleton shared by every test here.
+  useReaderStore.setState({
+    bookHash: '',
+    bookTitle: '',
+    spineIndex: 0,
+    anchor: undefined,
+    nodeTitle: '',
+    spineCount: 0,
+  });
 });
 
 interface Harness {
@@ -92,7 +106,6 @@ const makeStore = (
     traces,
     runTurn: makeRunTurn(requests, options.script),
     getSettings: () => settings,
-    getNodeText: () => ({ title: '第一章 迷雾之城', text: '灯火在雾中摇曳。' }),
     ...(options.locateQuote ? { locateQuote: options.locateQuote } : {}),
   });
   return { store, manager, requests, traces, setSettings: (next) => { settings = next; } };
@@ -114,22 +127,31 @@ describe('send', () => {
     expect(state.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
     expect(state.messages[0]).toMatchObject({ content: '第一章讲了什么？', quoteText: '灯火在雾中摇曳' });
     expect(state.messages[1]).toMatchObject({ role: 'assistant', content: '回答继续' });
-    expect(turnLabel(state.conversation, 10)).toBe('1 / 10');
+    expect(turnQuotaLabel(state.conversation, 10)).toBe('1 / 10');
 
     const persisted = await h.manager.loadMessages(state.conversation!.id);
     expect(persisted.map((m) => m.role)).toEqual(['user', 'assistant']);
   });
 
-  it('passes the whole-book turn context into the orchestrator', async () => {
+  it('passes the Reading Position into the orchestrator, not derived node facts', async () => {
     const h = makeStore();
-    await h.store.getState().openBook('book-a', 0);
+    useReaderStore.setState({
+      bookHash: 'book-a',
+      bookTitle: '迷雾之城',
+      spineIndex: 2,
+      anchor: 'sec1',
+      spineCount: 4,
+    });
+    await h.store.getState().openBook('book-a', 2);
     await h.store.getState().send('问题一');
 
     const request = h.requests[0]!;
-    expect(request.bookHash).toBe('book-a');
-    expect(request.currentSectionIndex).toBe(0);
-    expect(request.currentNodeTitle).toBe('第一章 迷雾之城');
-    expect(request.currentNodeText).toBe('灯火在雾中摇曳。');
+    // The seam speaks Reading Position only: the node, its title, its level
+    // and its text are the orchestrator's to resolve (CONTEXT.md "Node View").
+    expect(request.position).toEqual({ bookHash: 'book-a', spineIndex: 2, anchor: 'sec1' });
+    expect(request.bookTitle).toBe('迷雾之城');
+    expect(request).not.toHaveProperty('currentNodeTitle');
+    expect(request).not.toHaveProperty('currentNodeText');
     expect(request.quoteText).toBeUndefined();
     expect(request.history).toEqual([]);
 
@@ -137,6 +159,19 @@ describe('send', () => {
     const second = h.requests[1]!;
     // Full in-topic history rides along (no sliding window).
     expect(second.history.map((m) => m.content)).toEqual(['问题一', '回答继续']);
+  });
+
+  it('keeps a topic bound to its own position, and never invents an anchor for it', async () => {
+    const h = makeStore();
+    // The reader is at spine 3 with an anchor …
+    useReaderStore.setState({ bookHash: 'book-a', spineIndex: 3, anchor: 'live-anchor' });
+    // … but the topic was opened at spine 0.
+    await h.store.getState().openBook('book-a', 0);
+    await h.store.getState().send('问题');
+
+    // The topic's position wins; the live anchor is NOT borrowed, because it
+    // belongs to a different physical section (ADR 0011).
+    expect(h.requests[0]!.position).toEqual({ bookHash: 'book-a', spineIndex: 0 });
   });
 
   it('surfaces live tool traces and citations while streaming, then persists them', async () => {
@@ -266,16 +301,15 @@ function makeFailingStore() {
     manager,
     runTurn,
     getSettings: () => ({ ...DEFAULT_AI_SETTINGS }),
-    getNodeText: () => ({ title: '第一章', text: '正文' }),
   });
 }
 
 describe('topic lifecycle', () => {
   it('openBook resumes the newest still-open conversation and replays its messages', async () => {
     const h = makeStore({ now: (() => { let tick = 0; return () => ++tick; })() });
-    const older = await h.manager.startConversation({ bookHash: 'book-f', nodeIndex: 0, title: '旧话题' });
+    const older = await h.manager.startConversation({ bookHash: 'book-f', spineIndex: 0, title: '旧话题' });
     await h.manager.sendMessage(older, { role: 'user', content: '旧问题' });
-    const newer = await h.manager.startConversation({ bookHash: 'book-f', nodeIndex: 1, title: '新话题' });
+    const newer = await h.manager.startConversation({ bookHash: 'book-f', spineIndex: 1, title: '新话题' });
     await h.manager.sendMessage(newer, { role: 'user', content: '新问题' });
 
     await h.store.getState().openBook('book-f', 0);

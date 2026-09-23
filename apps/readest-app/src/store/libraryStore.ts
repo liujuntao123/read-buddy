@@ -31,23 +31,40 @@ import {
   type LibraryBookMeta,
 } from '@/services/library/bookLibrary';
 import { createFoliateEngine, type FoliateEngineHandle } from '@/services/library/foliateEngine';
+import {
+  flushReadingPosition,
+  recordReadingPosition,
+  resetReadingPosition,
+  setPositionPersister,
+} from '@/services/reader/readingPosition';
 import { useReaderStore } from '@/store/readerStore';
-import { useSegmentationStore } from '@/store/segmentationStore';
+import { useSegmentationStore, type SegmentationStoreHook } from '@/store/segmentationStore';
 import { useAISidebarStore } from '@/store/aiSidebarStore';
 const LAST_BOOK_KEY = 'readest-plus:last-book';
 
 interface LastBookRecord {
   hash: string;
-  nodeIndex: number;
+  /** Physical reading position (see ADR 0011). */
+  spineIndex: number;
+}
+
+/** Legacy shape written before ADR 0011 renamed the field. */
+interface LegacyLastBookRecord {
+  hash?: unknown;
+  spineIndex?: unknown;
+  nodeIndex?: unknown;
 }
 
 const readLastBook = (): LastBookRecord | null => {
   try {
     const raw = window.localStorage.getItem(LAST_BOOK_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<LastBookRecord>;
-    if (typeof parsed.hash !== 'string' || !parsed.hash) return null;
-    return { hash: parsed.hash, nodeIndex: parsed.nodeIndex ?? 0 };
+    const parsed = JSON.parse(raw) as LegacyLastBookRecord | null;
+    if (!parsed || typeof parsed.hash !== 'string' || !parsed.hash) return null;
+    // Tolerate the pre-v6 key so an existing install keeps its 继续阅读 pointer
+    // instead of silently losing it (ADR 0011).
+    const position = parsed.spineIndex ?? parsed.nodeIndex;
+    return { hash: parsed.hash, spineIndex: typeof position === 'number' ? position : 0 };
   } catch {
     return null;
   }
@@ -58,7 +75,7 @@ const writeLastBook = (record: LastBookRecord): void => {
     window.localStorage.setItem(LAST_BOOK_KEY, JSON.stringify(record));
   } catch {
     /* Storage unavailable (private mode): non-fatal, the book row still
-       keeps lastNodeIndex for the next open. */
+       keeps lastSpineIndex for the next open. */
   }
 };
 
@@ -110,7 +127,7 @@ export interface LibraryState {
   closeToShelf(): void;
   /** Re-enter the reader for the kept-open book (继续阅读): syncs the URL. */
   resumeReading(): void;
-  remove(hash: string): Promise<void>;
+  remove(hash: string, options?: { deleteArtifacts?: boolean }): Promise<void>;
   saveProgress(): Promise<void>;
   /** Hand the pending resume CFI to the reader pane exactly once. */
   consumeResumeCfi(): string | null;
@@ -126,6 +143,12 @@ export interface LibraryStoreDeps {
   createEngine?: typeof createFoliateEngine;
   /** Foliate cover extraction seam forwarded to imports (tests stub it). */
   extractCover?: (file: File) => Promise<string | undefined>;
+  /**
+   * The segmentation store this library drives. Injected rather than imported so a
+   * test can hand it one bound to an isolated database — the store used to be
+   * reached through a mutable module global (`setSegmentationRepository`).
+   */
+  segmentationStore?: SegmentationStoreHook;
 }
 
 const toMessage = (err: unknown): string =>
@@ -133,8 +156,48 @@ const toMessage = (err: unknown): string =>
 
 export function createLibraryStore(deps: LibraryStoreDeps = {}): LibraryStoreHook {
   const db = (): ReadestPlusDatabase => deps.db ?? getDatabase();
+  // Injected rather than imported so a test can hand this store one bound to an
+  // isolated database (候选 epilogue).
+  const segmentationStore = deps.segmentationStore ?? useSegmentationStore;
 
-  return create<LibraryState>()((set, get) => ({
+  return create<LibraryState>()((set, get) => {
+    // Bind the Reading Position owner to this store's database and live engines.
+    // The owner never imports a store, so there is no cycle — same seam pattern
+    // as `setSegmentationRepository`.
+    setPositionPersister({
+      save: async (record) => {
+        // Engine books persist the exact position CFI alongside the position;
+        // a caller that did not have it in hand falls back to the live engine.
+        const cfi = record.cfi ?? get().engines[record.bookHash]?.currentLocation()?.cfi;
+        await saveProgress(record.bookHash, record.spineIndex, {
+          db: db(),
+          ...(cfi ? { cfi } : {}),
+          ...(record.anchor ? { anchor: record.anchor } : {}),
+          ...(record.nodeIndex !== undefined ? { nodeIndex: record.nodeIndex } : {}),
+        });
+        writeLastBook({ hash: record.bookHash, spineIndex: record.spineIndex });
+      },
+      load: async (bookHash) => {
+        const row = await db().books.get(bookHash);
+        if (!row) return null;
+        if (
+          row.lastSpineIndex === undefined &&
+          row.lastAnchor === undefined &&
+          row.lastCfi === undefined
+        ) {
+          return null;
+        }
+        return {
+          bookHash,
+          spineIndex: row.lastSpineIndex ?? 0,
+          ...(row.lastNodeIndex !== undefined ? { nodeIndex: row.lastNodeIndex } : {}),
+          ...(row.lastAnchor ? { anchor: row.lastAnchor } : {}),
+          ...(row.lastCfi ? { cfi: row.lastCfi } : {}),
+        };
+      },
+    });
+
+    return {
     books: [],
     view: 'shelf',
     importing: false,
@@ -245,10 +308,19 @@ export function createLibraryStore(deps: LibraryStoreDeps = {}): LibraryStoreHoo
         // attaches the view and consumes `resumeCfi` after openIn.
         if (content.engine) {
           const engine = content.engine;
-          const target = Math.min(Math.max(row.lastNodeIndex ?? 0, 0), Math.max(spineCount - 1, 0));
+          const target = Math.min(Math.max(row.lastSpineIndex ?? 0, 0), Math.max(spineCount - 1, 0));
           const reader = useReaderStore.getState();
           reader.loadBook({ bookHash: hash, bookTitle: row.title, spineCount });
-          reader.setPosition(target, engine.getSpineTitle(target));
+          // Restore, do not re-record: the anchor comes back too, so the Node
+          // View resolves the 节 the reader was in rather than its owning 章.
+          recordReadingPosition(
+            {
+              bookHash: hash,
+              spineIndex: target,
+              ...(row.lastAnchor ? { anchor: row.lastAnchor } : {}),
+            },
+            { persist: false, titleFallback: engine.getSpineTitle(target) },
+          );
 
           set({
             view: 'reader',
@@ -257,18 +329,18 @@ export function createLibraryStore(deps: LibraryStoreDeps = {}): LibraryStoreHoo
             engines: nextEngines,
             resumeCfi: row.lastCfi ?? null,
           });
-          writeLastBook({ hash, nodeIndex: target });
+          writeLastBook({ hash, spineIndex: target });
           syncUrl(hash);
           return;
         }
 
         // Monolithic TXT: run the segmentation flow. `scanAndPrompt` loads a
-        // persisted segmentation (→ virtual chapter count) or shows the
-        // detection banner / applies the fixed-length fallback.
+        // persisted segmentation (→ virtual chapter count) or auto-applies the
+        // layered segmenter's result (regex scan, else fixed-length fallback).
         if (row.format === 'txt') {
-          const fullText = content.getMonolithicText?.() ?? '';
-          await useSegmentationStore.getState().scanAndPrompt(hash, fullText);
-          const segmentation = useSegmentationStore.getState().segmentation;
+          const fullText = content.getMonolithicText() ?? '';
+          await segmentationStore.getState().scanAndPrompt(hash, fullText);
+          const segmentation = segmentationStore.getState().segmentation;
           if (segmentation?.bookHash === hash && segmentation.virtualSections.length > 0) {
             spineCount = segmentation.virtualSections.length;
           }
@@ -276,14 +348,21 @@ export function createLibraryStore(deps: LibraryStoreDeps = {}): LibraryStoreHoo
 
         const reader = useReaderStore.getState();
         reader.loadBook({ bookHash: hash, bookTitle: row.title, spineCount });
-        const target = Math.min(Math.max(row.lastNodeIndex ?? 0, 0), Math.max(spineCount - 1, 0));
-        const segmentation = useSegmentationStore.getState().segmentation;
+        const target = Math.min(Math.max(row.lastSpineIndex ?? 0, 0), Math.max(spineCount - 1, 0));
+        const segmentation = segmentationStore.getState().segmentation;
         const virtualTitle =
           segmentation?.bookHash === hash ? segmentation.virtualSections[target]?.title : undefined;
-        reader.setPosition(target, virtualTitle ?? content.getSpineTitle(target));
+        recordReadingPosition(
+          {
+            bookHash: hash,
+            spineIndex: target,
+            ...(row.lastAnchor ? { anchor: row.lastAnchor } : {}),
+          },
+          { persist: false, titleFallback: virtualTitle ?? content.getSpineTitle(target) },
+        );
 
         set({ view: 'reader', currentHash: hash, error: null, engines: nextEngines, resumeCfi: null });
-        writeLastBook({ hash, nodeIndex: target });
+        writeLastBook({ hash, spineIndex: target });
         syncUrl(hash);
       } catch (err) {
         set({ error: toMessage(err) });
@@ -291,12 +370,14 @@ export function createLibraryStore(deps: LibraryStoreDeps = {}): LibraryStoreHoo
     },
 
     closeToShelf: () => {
+      // Land the pending position before dropping the pointer: closing the book
+      // is a pause, not a discard.
+      void flushReadingPosition();
       syncUrl(null);
       // The URL is now bookless: drop the last-book pointer too, so a
       // refresh restores the shelf rather than silently reopening the book
       // the reader just closed.
       clearLastBook();
-      useAISidebarStore.getState().setExpanded(false);
       set({ view: 'shelf' });
     },
 
@@ -305,14 +386,16 @@ export function createLibraryStore(deps: LibraryStoreDeps = {}): LibraryStoreHoo
       const { currentHash } = get();
       if (!currentHash) return;
       set({ view: 'reader' });
-      writeLastBook({ hash: currentHash, nodeIndex: useReaderStore.getState().spineIndex });
+      writeLastBook({ hash: currentHash, spineIndex: useReaderStore.getState().spineIndex });
       syncUrl(currentHash);
     },
 
-    remove: async (hash) => {
-      await removeBook(hash, { db: db() });
+    remove: async (hash, options) => {
+      await removeBook(hash, { db: db(), deleteArtifacts: options?.deleteArtifacts });
       const engine = get().engines[hash];
       engine?.close();
+      // Drop a pending write for the book that no longer exists.
+      if (get().currentHash === hash) resetReadingPosition();
       const { [hash]: _closed, ...remainingEngines } = get().engines;
       if (get().currentHash === hash) {
         syncUrl(null);
@@ -329,13 +412,10 @@ export function createLibraryStore(deps: LibraryStoreDeps = {}): LibraryStoreHoo
     },
 
     saveProgress: async () => {
-      const { currentHash, engines } = get();
-      if (!currentHash) return;
-      const { spineIndex } = useReaderStore.getState();
-      // Engine books persist the exact position CFI alongside the section.
-      const cfi = engines[currentHash]?.currentLocation()?.cfi;
-      await saveProgress(currentHash, spineIndex, { db: db(), cfi });
-      writeLastBook({ hash: currentHash, nodeIndex: spineIndex });
+      // Superseded by the Reading Position owner: a position change is recorded
+      // through `recordReadingPosition` and flushed by `flushReadingPosition`.
+      // Kept as an explicit flush for callers that need the write to land now.
+      await flushReadingPosition();
     },
 
     consumeResumeCfi: () => {
@@ -345,7 +425,8 @@ export function createLibraryStore(deps: LibraryStoreDeps = {}): LibraryStoreHoo
     },
 
     clearError: () => set({ error: null }),
-  }));
+    };
+  });
 }
 
 /** App-wide singleton (Workspace / HeaderBar / Bookshelf default binding). */

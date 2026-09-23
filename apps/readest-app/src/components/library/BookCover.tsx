@@ -39,9 +39,8 @@ const SIZE_STYLE: Record<NonNullable<BookCoverProps['size']>, React.CSSPropertie
 };
 
 /**
- * Editorial Book Cover component.
- * Displays the high-resolution cover image when available, or falls back to
- * a bespoke clothbound typographical cover with realistic book spine depth.
+ * Book cover component: the real cover image when the book carries one, else a
+ * clean typographic cover in the book's deterministic palette hue.
  */
 export default function BookCover({
   cover,
@@ -58,35 +57,19 @@ export default function BookCover({
   return (
     <div
       data-testid="book-cover"
-      className={className}
+      className={`skeuo-book-entity ${className}`}
       style={{
         position: 'relative',
         userSelect: 'none',
         overflow: 'hidden',
-        borderRadius: 'var(--radius-element)',
-        border: '1px solid var(--color-border)',
-        boxShadow: 'var(--shadow-low)',
         ...SIZE_STYLE[size],
         ...(showImage
           ? {}
-          : { background: `var(--color-background-${hue})` }),
+          : {
+              background: `var(--color-background-${hue})`,
+            }),
       }}
     >
-      {/* Physical book spine lighting simulation (left edge) */}
-      <div
-        aria-hidden="true"
-        style={{
-          position: 'absolute',
-          insetBlock: 0,
-          insetInlineStart: 0,
-          width: 10,
-          zIndex: 10,
-          pointerEvents: 'none',
-          background: 'var(--color-overlay)',
-          borderInlineEnd: '1px solid var(--color-border)',
-        }}
-      />
-
       {showImage ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
@@ -98,7 +81,7 @@ export default function BookCover({
           onError={() => setImgFailed(true)}
         />
       ) : (
-        /* Typographic cover fallback */
+        /* Typographic cover: modern, minimalist aesthetic */
         <div
           data-testid="book-cover-typographic"
           style={{
@@ -108,44 +91,62 @@ export default function BookCover({
             justifyContent: 'space-between',
             height: '100%',
             width: '100%',
-            padding: 'var(--spacing-3) var(--spacing-3) var(--spacing-3) var(--spacing-5)',
+            padding: size === 'mini' ? '4px' : 'var(--spacing-4) var(--spacing-3) var(--spacing-3) var(--spacing-5)',
+            background: `linear-gradient(145deg, rgba(255, 255, 255, 0.12) 0%, transparent 80%), var(--color-background-${hue})`,
           }}
         >
           {/* Center title & author */}
-          <VStack gap={1} justify="center" style={{ marginBlock: 'auto', paddingBlock: 'var(--spacing-1)' }}>
+          <VStack gap={1} justify="center" style={{ marginBlock: 'auto', paddingBlock: 'var(--spacing-1)', zIndex: 12 }}>
             <Text
               weight="bold"
               maxLines={3}
-              style={{ color: `var(--color-text-${hue})` }}
+              style={{
+                color: `var(--color-text-${hue})`,
+                fontSize: size === 'mini' ? '8px' : size === 'small' ? '11px' : '15px',
+                lineHeight: 1.35,
+                letterSpacing: '0.02em',
+              }}
             >
               《{title}》
             </Text>
             <div
               aria-hidden="true"
               style={{
-                width: 20,
+                width: size === 'mini' ? 12 : 20,
                 height: 2,
+                marginBlock: '2px',
                 borderRadius: 'var(--radius-full)',
                 background: `var(--color-border-${hue})`,
+                opacity: 0.8,
               }}
             />
             {author && (
               <Text
                 type="supporting"
                 maxLines={1}
-                style={{ color: `var(--color-icon-${hue})` }}
+                style={{
+                  color: `var(--color-icon-${hue})`,
+                  fontSize: size === 'mini' ? '7px' : size === 'small' ? '9px' : '11px',
+                  fontWeight: 500,
+                  opacity: 0.9,
+                }}
               >
                 著 · {author}
               </Text>
             )}
           </VStack>
 
-          {/* Bottom imprint */}
-          <HStack justify="between">
+          {/* Bottom brand imprint */}
+          <HStack justify="between" style={{ zIndex: 12, paddingInlineStart: size === 'mini' ? 0 : 'var(--spacing-1)' }}>
             <Text
               type="code"
               size="4xs"
-              style={{ letterSpacing: '0.2em', opacity: 0.4, color: `var(--color-text-${hue})` }}
+              style={{
+                letterSpacing: '0.18em',
+                opacity: 0.5,
+                color: `var(--color-text-${hue})`,
+                fontWeight: 600,
+              }}
             >
               READEST+
             </Text>
@@ -153,8 +154,7 @@ export default function BookCover({
         </div>
       )}
 
-      {/* Optional progress overlay on cover — a compact chip so it never
-          competes with the cover art or the card overlay below. */}
+      {/* Optional progress overlay on cover */}
       {progressText && (
         <HStack
           data-testid="book-cover-progress"
@@ -162,15 +162,23 @@ export default function BookCover({
           style={{
             position: 'absolute',
             insetInline: 'var(--spacing-2)',
-            bottom: 'var(--spacing-1)',
+            bottom: 'var(--spacing-2)',
             zIndex: 20,
             borderRadius: 'var(--radius-full)',
-            background: 'var(--color-background-popover)',
-            border: '1px solid var(--color-border)',
-            padding: '0 var(--spacing-2)',
+            background: 'rgba(18, 14, 12, 0.75)',
+            backdropFilter: 'blur(8px)',
+            border: '1px solid rgba(255, 255, 255, 0.2)',
+            boxShadow: '0 2px 4px rgba(0, 0, 0, 0.2)',
+            padding: '2px var(--spacing-2)',
           }}
         >
-          <Text type="supporting" size="2xs" maxLines={1} weight="medium">
+          <Text
+            type="supporting"
+            size="2xs"
+            maxLines={1}
+            weight="semibold"
+            style={{ color: '#ffffff' }}
+          >
             {progressText}
           </Text>
         </HStack>

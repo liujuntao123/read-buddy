@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { AISettingsRepository } from '@/services/db/repositories';
 import { validateAISettings, type AISettingsErrors } from '@/services/ai/validation';
 import { testConnection, type TestConnectionResult } from '@/services/ai/testConnection';
+import { listModels, type ListModelsResult } from '@/services/ai/listModels';
+import { normalizeBaseUrl } from '@/services/ai/modelsEndpoint';
 import { DEFAULT_AI_SETTINGS, type AISettings } from '@/types/ai';
 
 export type AISettingsStatus = 'idle' | 'loading' | 'ready';
@@ -11,10 +13,22 @@ export interface AISettingsToast {
   text: string;
 }
 
+/**
+ * The model ids a successful pull returned, tagged with the endpoint they came
+ * from: a list fetched from DeepSeek must not stay selectable after the reader
+ * edits the Base URL, so the tag — not a separate clear call — is what expires
+ * it. Not persisted; it is a snapshot of a live endpoint, not a setting.
+ */
+export interface AvailableModels {
+  baseUrl: string;
+  models: string[];
+}
+
 export interface AISettingsState {
   settings: AISettings;
   status: AISettingsStatus;
   toast: AISettingsToast | null;
+  availableModels: AvailableModels | null;
   /** Reads the persisted settings (IndexedDB) at app start. */
   load: () => Promise<void>;
   /**
@@ -24,6 +38,8 @@ export interface AISettingsState {
   save: (next: AISettings) => Promise<AISettingsErrors>;
   /** Probes the configured endpoint and surfaces the outcome as a toast. */
   testConnection: (settings?: AISettings) => Promise<TestConnectionResult>;
+  /** Pulls the endpoint's model list and surfaces the outcome as a toast. */
+  loadModels: (settings?: AISettings) => Promise<ListModelsResult>;
   clearToast: () => void;
 }
 
@@ -46,6 +62,7 @@ export function createAISettingsStore({
     settings: { ...DEFAULT_AI_SETTINGS },
     status: 'idle',
     toast: null,
+    availableModels: null,
     load: async () => {
       set({ status: 'loading' });
       try {
@@ -72,6 +89,22 @@ export function createAISettingsStore({
         toast: result.ok
           ? { type: 'success', text: result.message }
           : { type: 'error', text: result.message },
+      });
+      return result;
+    },
+    loadModels: async (settings) => {
+      const target = settings ?? get().settings;
+      const result = await listModels(target, fetchImpl);
+      set({
+        // A failed pull drops the previous list: the tag is the endpoint, and a
+        // list we could not refresh is not evidence for the endpoint on screen.
+        availableModels: result.ok
+          ? { baseUrl: normalizeBaseUrl(target.baseUrl), models: result.models }
+          : null,
+        toast: {
+          type: result.ok ? 'success' : 'error',
+          text: result.message,
+        },
       });
       return result;
     },

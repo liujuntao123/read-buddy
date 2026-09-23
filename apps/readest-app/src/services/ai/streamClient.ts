@@ -1,14 +1,14 @@
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { streamText } from 'ai';
 import type { AISettings } from '@/types/ai';
+import { chatModelOf, temperatureOption } from './providerTransport';
 
 /**
  * Streaming seam over the Vercel AI SDK.
  *
  * Features (summaries, chat) depend on the `StreamTextFn` signature only, so
  * unit tests inject a fake async-iterable producer and never touch the SDK.
- * This module is the single place that binds the real OpenAI-compatible
- * transport (DeepSeek, OpenAI, Claude via proxy, local Ollama, ...).
+ * The transport itself lives in `providerTransport` (shared with the agent
+ * stream); this module owns the text-delta shape alone.
  */
 
 export interface StreamRequest {
@@ -22,16 +22,11 @@ export type StreamTextFn = (req: StreamRequest, settings: AISettings) => AsyncIt
 
 export const createAiSdkStreamFn = (): StreamTextFn => {
   return ({ system, prompt, signal }, settings) => {
-    const provider = createOpenAICompatible({
-      name: settings.provider,
-      baseURL: settings.baseUrl.replace(/\/+$/, ''),
-      apiKey: settings.apiKey || undefined,
-    });
     const result = streamText({
-      model: provider.chatModel(settings.model),
+      model: chatModelOf(settings),
       system,
       prompt,
-      ...(typeof settings.temperature === 'number' ? { temperature: settings.temperature } : {}),
+      ...temperatureOption(settings),
       abortSignal: signal,
     });
     return result.textStream;

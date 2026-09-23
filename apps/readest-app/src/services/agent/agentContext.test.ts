@@ -126,36 +126,6 @@ describe('AgentBookContext', () => {
     expect(getAgentBookContext('reg')).toBeUndefined();
   });
 
-  it('getNodePath returns the leaf plus its 章 ancestor', () => {
-    const container: BookNode = {
-      nodeId: bookNodeId('h', 0),
-      bookHash: 'h',
-      nodeIndex: 0,
-      title: '第一卷 风云',
-      startOffset: 0,
-      endOffset: 10,
-      charCount: 10,
-      depth: 0,
-      indexStatus: 'ready',
-    };
-    const leaf: BookNode = {
-      nodeId: bookNodeId('h', 1),
-      bookHash: 'h',
-      nodeIndex: 1,
-      title: '第一章 风起',
-      startOffset: 10,
-      endOffset: FULL_TEXT.length,
-      charCount: FULL_TEXT.length - 10,
-      depth: 1,
-      parentNodeId: bookNodeId('h', 0),
-      indexStatus: 'ready',
-    };
-    const context = createAgentBookContext({ bookHash: 'h', nodes: [container, leaf], fullText: FULL_TEXT });
-    expect(context.getNodePath(1)).toEqual({ node: leaf, parent: container });
-    expect(context.getNodePath(0)).toEqual({ node: container });
-    expect(context.getNodePath(99)).toBeNull();
-  });
-
   it('outline entries carry the hierarchical depth, kind and parent title', () => {
     const container: BookNode = {
       nodeId: bookNodeId('h', 0),

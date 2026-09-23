@@ -23,8 +23,8 @@ import { Text } from '@astryxdesign/core/Text';
 import { TextArea } from '@astryxdesign/core/TextArea';
 import { Token } from '@astryxdesign/core/Token';
 import { type Message } from '@/types/ai';
-import { useAISettingsStore } from '@/store/aiSettingsStore';
-import { useChatStore, type ChatStoreHook } from '@/store/chatStore';
+import { useChatStore, turnQuotaLabel, type ChatStoreHook } from '@/store/chatStore';
+import { canSend } from '@/services/chat/conversationManager';
 import { useDismissOnWindowBlur } from '@/hooks/useDismissOnWindowBlur';
 import MarkdownView from '@/components/common/MarkdownView';
 import QuoteBlock from '@/components/common/QuoteBlock';
@@ -42,10 +42,22 @@ function UserMessage({ message }: { message: Message }) {
     <ChatMessage sender="user">
       {message.quoteText && (
         <ChatMessageBubble variant="ghost" width="100%">
-          <QuoteBlock text={message.quoteText} source={message.quoteSource} compact testId="user-quote" />
+          {/* Collapsible: a long quoted passage folds behind its
+              「引用原文 · N 字 · 出处」 trigger so the question and the answer
+              stay the visible content of the turn. */}
+          <QuoteBlock
+            text={message.quoteText}
+            source={message.quoteSource}
+            compact
+            collapsible
+            testId="user-quote"
+          />
         </ChatMessageBubble>
       )}
-      <ChatMessageBubble data-testid="user-bubble">{message.content}</ChatMessageBubble>
+      {/* `chat-question` = 「我问的那句话」的字号档位（小于模型正文，大于引用）。 */}
+      <ChatMessageBubble className="chat-question" data-testid="user-bubble">
+        {message.content}
+      </ChatMessageBubble>
     </ChatMessage>
   );
 }
@@ -101,7 +113,9 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
   const quoteDraft = store((s) => s.quoteDraft);
   const inputDisabled = store((s) => s.inputDisabled);
 
-  const maxTurns = useAISettingsStore((s) => s.settings.maxTurnsPerTopic);
+  // The quota the store enforces — not a second read of the settings store, so
+// the pill cannot disagree with the lock (候选 epilogue).
+  const maxTurns = store((s) => s.maxTurns);
 
   const [input, setInput] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -145,7 +159,7 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
   }, [quoteDraft]);
 
   const streaming = phase === 'streaming';
-  const isClosed = conversation?.isClosed ?? false;
+  const isClosed = !canSend(conversation);
 
   const submit = () => {
     const text = input.trim();
@@ -246,8 +260,11 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
         />
       </HStack>
 
-      {/* Message stream: user right, assistant left, live agent turn. */}
+      {/* Message stream: user right, assistant left, live agent turn.
+          The class is the reading-typography hook (globals.css) for every
+          bubble in the list — markdown replies and plain-text questions. */}
       <ChatMessageList
+        className="chat-message-list"
         data-testid="chat-messages"
         isStreaming={streaming}
         density="compact"
@@ -255,7 +272,7 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
       >
         {messages.length === 0 && !streaming && (
           <Text type="supporting" color="secondary" as="p">
-            向全书伴读智能体提问吧——可以聚焦当前章节，也可以纵览全书剧情、人物与伏笔。
+            可以针对当前章节或全书内容随时提问。
           </Text>
         )}
         {messages.map((message) =>
@@ -275,7 +292,7 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
       <HStack justify="between" gap={2} vAlign="center" style={{ borderTop: '1px solid var(--color-border)', paddingTop: 'var(--spacing-2)' }}>
         <Token
           data-testid="turn-quota"
-          label={`💬 ${conversation?.turnCount ?? 0} / ${maxTurns} 轮`}
+          label={`💬 ${turnQuotaLabel(conversation, maxTurns)} 轮`}
           size="sm"
         />
         {error && (
@@ -311,7 +328,7 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
         <Card data-testid="quota-exhausted-hint" variant="yellow" padding={3}>
           <VStack gap={2}>
             <Text as="p" style={{ lineHeight: 1.6 }}>
-              本轮话题探讨已达上限（{maxTurns}/{maxTurns}），建议开启新话题以保持解答精准度
+              当前话题已达轮数上限（{maxTurns}/{maxTurns}），建议开启新话题以保持回答质量。
             </Text>
             <HStack gap={2}>
               <Button
@@ -323,21 +340,24 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
                 onClick={() => store.getState().startNewTopic()}
               />
               <Button
-                label="导出/复制本轮对话"
+                label="复制对话"
                 variant="secondary"
                 size="sm"
                 data-testid="copy-transcript"
                 icon={copied ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />}
                 onClick={() => void copyTranscript()}
               >
-                {copied ? '已复制' : '导出/复制本轮对话'}
+                {copied ? '已复制' : '复制对话'}
               </Button>
             </HStack>
           </VStack>
         </Card>
       )}
 
-      {/* Composer: full width with inside-positioned action button and fixed height. */}
+      {/* Composer: full width with inside-positioned action button and a fixed
+          height. Sizing + the disabled native resize grip live in globals.css
+          (`textarea[data-testid='chat-input']`): TextArea hands `style` to its
+          wrapper div, never to the <textarea> itself. */}
       <div style={{ position: 'relative', width: '100%', flexShrink: 0 }}>
         <TextArea
           ref={inputRef}
@@ -348,7 +368,7 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
           rows={3}
           value={input}
           isDisabled={inputDisabled}
-          placeholder="输入你的疑问，或探讨全书剧情与伏笔…（Enter 发送，Shift+Enter 换行）"
+          placeholder="输入问题…（Enter 发送，Shift+Enter 换行）"
           onChange={setInput}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
@@ -356,16 +376,7 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
               submit();
             }
           }}
-          style={{
-            width: '100%',
-            height: '84px',
-            minHeight: '84px',
-            maxHeight: '84px',
-            resize: 'none',
-            paddingBottom: '32px',
-            paddingRight: '48px',
-            boxSizing: 'border-box',
-          }}
+          style={{ width: '100%' }}
         />
         <div
           style={{

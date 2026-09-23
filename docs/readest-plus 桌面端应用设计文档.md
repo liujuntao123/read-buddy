@@ -9,7 +9,7 @@
 - **readest-plus 核心定位**：**零门槛、零预处理、即开即读的沉浸式 AI 阅读伴侣**。
   - **即时感知**：用户翻至任意章节，无需全书向量化，按需提取当前章节正文并提供结构化摘要。
   - **伴读探讨**：主阅读区与 AI 辅助区双栏并列，支持“划词精准追问”与“基于当前章节的上下文自由探讨”。
-  - **开箱即用**：支持兼容 OpenAI 协议的任意主流/本地大模型（DeepSeek、OpenAI、Claude、Ollama 等）。
+  - **开箱即用**：支持兼容 OpenAI 协议的任意主流大模型与自建/代理网关（DeepSeek、OpenAI，以及凭 Base URL 接入的任意兼容端点）。
 
 ---
 
@@ -57,7 +57,7 @@
 1. **展开/折叠控制**：
    - 顶部工具栏设有专门的 `AI 侧栏切换` 按钮；
    - 支持全局快捷键：`Cmd + /` (macOS) 或 `Ctrl + /` (Windows) 快速切换侧边栏状态；
-   - 侧边栏支持通过边缘拖拽把手（Resize Handle）在 `320px ~ 600px` 之间自由调节宽度，宽度状态本地记忆。
+   - 侧边栏支持通过边缘拖拽把手（Resize Handle）在 `320px ~ 900px` 之间自由调节宽度，宽度状态本地记忆。
 2. **主题跟随**：
    - AI 侧边栏背景色、文字对比度与正文阅读器完全保持同调（跟随日间白、羊皮纸护眼黄、夜间深色等主题）。
 
@@ -68,9 +68,9 @@
 ### 4.1 初始就绪态（AI Provider 配置中心）
 - **功能目标**：允许用户零依赖接入任意 LLM。
 - **配置项**：
-  - `Provider Type`：OpenAI Compatible（通用兼容）、DeepSeek、Claude、Ollama（本地模型）等；
+  - `Provider Type`：OpenAI Compatible（通用兼容）、DeepSeek；其余服务（自建网关、代理、其他厂商）统一走 OpenAI Compatible 并填自定义 Base URL；
   - `API Key`：鉴权秘钥（前端输入，以明文安全保存在客户端本地 IndexedDB，界面视觉掩码展示）；
-  - `Model ID`：支持下拉预设或自由输入（如 `deepseek-chat`、`gpt-4o-mini`、`claude-3-5-sonnet`）；
+  - `Model ID`：位于 `API Key` 下方，支持「拉取模型」一键读取服务端 `GET {baseUrl}/models` 后下拉选择，也可自由输入（如 `deepseek-chat`、`gpt-4o-mini`）；
   - `Temperature` 与 `Max Tokens`：默认 `0.6`，支持进阶微调；
   - `Turn Quota`：单话题对话轮数上限（默认 10 轮，可调整 5 ~ 20 轮）。
   - `Turn Quota`：单话题对话轮数上限（默认 10 轮，可调整 5 ~ 20 轮）。
@@ -172,7 +172,7 @@ AI 输出需强制遵循以下三段式结构化 Markdown：
 #### 1. `AISettings` (配置表)
 ```typescript
 interface AISettings {
-  provider: 'openai' | 'deepseek' | 'claude' | 'ollama' | 'custom';
+  provider: 'openai-compatible' | 'deepseek';
   baseUrl: string;
   apiKey: string;
   model: string;

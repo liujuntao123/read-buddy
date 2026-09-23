@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ChatTab from './ChatTab';
+import { QUOTE_AUTO_COLLAPSE_CHARS } from '@/components/common/QuoteBlock';
 import { createChatStore, type ChatStoreHook } from '@/store/chatStore';
 import { createConversationManager } from '@/services/chat/conversationManager';
 import { ConversationRepository } from '@/services/db/repositories';
@@ -57,7 +58,6 @@ const makeStore = (options: { maxTurnsPerTopic?: number; script?: ScriptStep[] }
       return { content, toolCalls, citations };
     },
     getSettings: () => settings,
-    getNodeText: () => ({ title: '第一章 迷雾之城', text: '灯火在雾中摇曳。' }),
   });
   return { store, setSettings: (next: AISettings) => { settings = next; } };
 };
@@ -167,7 +167,7 @@ describe('ChatTab', () => {
     // The reply carries a collapsed trace accordion (1 tool) and one jump card.
     await waitFor(() => expect(screen.getByTestId('assistant-bubble').textContent).toContain('在第三章形成呼应'));
     const accordion = screen.getByTestId('agent-trace-accordion');
-    expect(accordion.textContent).toContain('Agent 思考与工具调用轨迹 (1)');
+    expect(accordion.textContent).toContain('思考与检索过程 (1)');
     expect(screen.queryByTestId('agent-trace-body')).toBeNull();
 
     fireEvent.click(screen.getByTestId('agent-trace-toggle'));
@@ -179,7 +179,7 @@ describe('ChatTab', () => {
     expect(card.textContent).toContain('第三章 长夜漫漫');
     expect(screen.getByTestId('citation-node-kind').textContent).toBe('章');
     expect(card.textContent).not.toContain('《第 3 章');
-    expect(card.textContent).toContain('偏移量 4,321 字符');
+    expect(card.textContent).toContain('约第 4,321 字');
     expect(card.textContent).toContain('守夜人在第七次巡逻时发现星图移动');
 
     // The jump button re-dispatches the reader locate request.
@@ -223,7 +223,6 @@ describe('ChatTab', () => {
   });
 
   it('locks the input at the quota, offers new-topic + copy, and resets on a new topic', async () => {
-    useAISettingsStore.setState({ settings: { ...DEFAULT_AI_SETTINGS, maxTurnsPerTopic: 1 } });
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', {
       value: { writeText },
@@ -242,7 +241,7 @@ describe('ChatTab', () => {
     await waitFor(() => expect(inputElement().disabled).toBe(true));
     expect(screen.getByTestId('turn-quota').textContent).toBe('💬 1 / 1 轮');
     expect(screen.getByTestId('quota-exhausted-hint').textContent).toContain(
-      '本轮话题探讨已达上限（1/1），建议开启新话题以保持解答精准度',
+      '当前话题已达轮数上限（1/1），建议开启新话题以保持回答质量',
     );
     expect(screen.getByTestId('start-new-topic')).toBeTruthy();
     expect(screen.getByTestId('copy-transcript')).toBeTruthy();
@@ -267,8 +266,9 @@ describe('ChatTab', () => {
     await waitFor(() => expect(screen.getByTestId('user-bubble').textContent).toBe('唯一的问题'));
     await waitFor(() => expect(inputElement().disabled).toBe(true));
 
-    // Starting a fresh topic resets the quota pill and unlocks the input.
-    useAISettingsStore.setState({ settings: { ...DEFAULT_AI_SETTINGS, maxTurnsPerTopic: 10 } });
+    // Starting a fresh topic resets the quota pill and unlocks the input. Only
+    // the store's own settings matter now: ChatTab renders the cap the store
+    // enforces, so there is no second number to keep in sync (候选 epilogue).
     setSettings({ ...DEFAULT_AI_SETTINGS, maxTurnsPerTopic: 10 });
     fireEvent.click(screen.getByTestId('start-new-topic'));
     await waitFor(() => expect(screen.getByTestId('turn-quota').textContent).toBe('💬 0 / 10 轮'));
@@ -287,9 +287,39 @@ describe('ChatTab', () => {
     expect(quote.textContent).toContain('古老的钟楼敲响了第三声');
     // The quote renders inside the dedicated quote block with its own testid.
     expect(screen.getByTestId('quote-draft-block')).toBeTruthy();
+    // The pending draft never folds: the reader is about to send it.
+    expect(quote.querySelector('.astryx-collapsible-trigger')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: '清除引用' }));
     await waitFor(() => expect(screen.queryByTestId('quote-draft')).toBeNull());
+  });
+
+  it('folds a long quoted passage inside the sent message behind a trigger', async () => {
+    const { store } = makeStore();
+    await store.getState().openBook('demo-fog-city-0001', 0);
+    render(<ChatTab store={store} />);
+
+    const passage =
+      '这座城市的雾从来不是为了遮住什么，而是为了让人习惯看不见；久到没有人再追问雾从何而来，也没有人记得灯塔熄灭的那一夜究竟发生过什么，只有守夜人仍旧每晚点灯。';
+    // Only a long passage folds; short ones stay open (see QuoteBlock).
+    expect(passage.length).toBeGreaterThan(QUOTE_AUTO_COLLAPSE_CHARS);
+    act(() => { store.getState().setQuoteDraft(passage); });
+    fireEvent.change(inputElement(), { target: { value: '请解释下面这段文字的背景与含义。' } });
+    fireEvent.click(screen.getByTestId('send-message'));
+
+    const quoteBlock = await screen.findByTestId('user-quote');
+    const trigger = quoteBlock.querySelector('.astryx-collapsible-trigger') as HTMLElement;
+    // Long quote ⇒ folded, with the citation facts still on the trigger row.
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(trigger.textContent).toContain('引用原文');
+    expect(trigger.textContent).toContain(`${passage.length} 字`);
+    // The question — not the passage — is the bubble's own text.
+    expect(screen.getByTestId('user-bubble').textContent).toBe('请解释下面这段文字的背景与含义。');
+
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByTestId('user-quote-content').textContent).toContain('习惯看不见');
+    await waitFor(() => expect(screen.getByTestId('assistant-bubble')).toBeTruthy());
   });
 
   it('focuses the chat input with the caret at the end on the selection "ask" event', async () => {

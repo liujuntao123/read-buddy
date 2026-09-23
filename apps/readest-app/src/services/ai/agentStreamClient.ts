@@ -9,10 +9,10 @@
  * calls, tool results with durations) that both the chat store and the
  * trace persistence consume. Unit tests inject a fake `AgentStreamFn`.
  */
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { stepCountIs, streamText } from 'ai';
 import type { ToolSet } from '@ai-sdk/provider-utils';
 import type { AISettings } from '@/types/ai';
+import { chatModelOf, temperatureOption } from './providerTransport';
 
 export interface AgentStreamRequest {
   system: string;
@@ -43,18 +43,13 @@ const asRecord = (value: unknown): Record<string, unknown> =>
 
 export const createAgentStreamFn = (): AgentStreamFn => {
   return ({ system, prompt, tools, signal, maxSteps }, settings) => {
-    const provider = createOpenAICompatible({
-      name: settings.provider,
-      baseURL: settings.baseUrl.replace(/\/+$/, ''),
-      apiKey: settings.apiKey || undefined,
-    });
     const result = streamText({
-      model: provider.chatModel(settings.model),
+      model: chatModelOf(settings),
       system,
       prompt,
       tools,
       stopWhen: stepCountIs(maxSteps ?? DEFAULT_AGENT_MAX_STEPS),
-      ...(typeof settings.temperature === 'number' ? { temperature: settings.temperature } : {}),
+      ...temperatureOption(settings),
       abortSignal: signal,
     });
 

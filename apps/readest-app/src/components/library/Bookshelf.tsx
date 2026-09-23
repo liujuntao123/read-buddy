@@ -18,12 +18,15 @@ import {
   Plus,
   Search,
   Trash2,
+  Upload,
   X,
 } from 'lucide-react';
 import { Badge, type BadgeProps } from '@astryxdesign/core/Badge';
 import { Banner } from '@astryxdesign/core/Banner';
 import { Button } from '@astryxdesign/core/Button';
+import { CheckboxInput } from '@astryxdesign/core/CheckboxInput';
 import { ClickableCard } from '@astryxdesign/core/ClickableCard';
+import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog';
 import { EmptyState } from '@astryxdesign/core/EmptyState';
 import { Grid } from '@astryxdesign/core/Grid';
 import { IconButton } from '@astryxdesign/core/IconButton';
@@ -74,22 +77,28 @@ const formatSize = (bytes: number): string => {
 };
 
 /**
- * Reading-progress line, honest about what the shelf actually knows.
+ * Reading-progress line, answered by the book's own row.
  *
- * The shelf stores only an ordinal, and an ordinal is meaningless without a
- * node shape: "读至第 4 章" and "读至第 4 节" are different claims — only the node model may choose the word. A shape is
- * available only for the book the reader currently has indexed (the index
- * store holds exactly one book's shape), so:
- *   - shape known  → `formatProgress(shape, n)` picks the level word from the
- *     node model (最小节点: 有节就是节);
- *   - shape unknown → the neutral 「第 N 个节点」, never a guessed 章 / 节.
+ * It used to borrow the shape of whichever book the single index store happened
+ * to hold, and to feed a **spine** ordinal into node-model wording — so
+ * 《何为良好生活》 (11 spine files, 70 节) showed 「读至第 7 节」 for spine 7, and any
+ * other row wore the open book's levels. Now each row carries what the index
+ * pipeline computed for it (`nodeShape`) and the **node** ordinal the Reading
+ * Position owner resolved (`lastNodeIndex`), so the two coordinate spaces are
+ * never confused:
+ *   - both present → `formatProgress` picks the level word from the node model;
+ *   - otherwise → the neutral 「读至第 N 个位置」, never a guessed 章 / 节.
  */
-const progressLabel = (book: LibraryBookMeta, shape?: BookNodeShape): string | undefined => {
-  const ordinal = book.lastNodeIndex;
-  if (typeof ordinal !== 'number' || ordinal <= 0) return undefined;
-  return shape && shape.total > 0
-    ? formatProgress(shape, ordinal + 1)
-    : `读至第 ${ordinal + 1} 个节点`;
+const progressLabel = (book: LibraryBookMeta): string | undefined => {
+  const { nodeShape, lastNodeIndex } = book;
+  if (nodeShape && nodeShape.total > 0 && typeof lastNodeIndex === 'number') {
+    return formatProgress(nodeShape, lastNodeIndex + 1);
+  }
+  // No node answer for this book yet: fall back to the physical ordinal, said
+  // plainly.
+  const spineOrdinal = book.lastSpineIndex;
+  if (typeof spineOrdinal !== 'number' || spineOrdinal <= 0) return undefined;
+  return `读至第 ${spineOrdinal + 1} 个位置`;
 };
 
 export default function Bookshelf({ store = useLibraryStore }: BookshelfProps) {
@@ -101,6 +110,8 @@ export default function Bookshelf({ store = useLibraryStore }: BookshelfProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('recent');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [deletingBook, setDeletingBook] = useState<LibraryBookMeta | null>(null);
+  const [deleteArtifacts, setDeleteArtifacts] = useState(false);
 
   const pickFiles = () => inputRef.current?.click();
 
@@ -115,11 +126,15 @@ export default function Bookshelf({ store = useLibraryStore }: BookshelfProps) {
   };
 
   const removeBook = (book: LibraryBookMeta) => {
-    const ok =
-      typeof window.confirm === 'function'
-        ? window.confirm(`删除《${book.title}》？该书的总结与对话记录不会被清除。`)
-        : true;
-    if (ok) void store.getState().remove(book.hash);
+    setDeletingBook(book);
+    setDeleteArtifacts(false);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deletingBook) return;
+    const target = deletingBook;
+    setDeletingBook(null);
+    await store.getState().remove(target.hash, { deleteArtifacts });
   };
 
   const filteredBooks = useMemo(() => {
@@ -153,7 +168,7 @@ export default function Bookshelf({ store = useLibraryStore }: BookshelfProps) {
       variant="primary"
       size="sm"
       isLoading={importing}
-      icon={<BookOpen size={16} aria-hidden />}
+      icon={<Upload size={16} aria-hidden />}
       data-testid={testId}
       onClick={pickFiles}
     />
@@ -243,18 +258,18 @@ export default function Bookshelf({ store = useLibraryStore }: BookshelfProps) {
         />
       )}
 
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+      <div className="modern-bookshelf-canvas" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {/* Empty State */}
         {books.length === 0 ? (
           <VStack data-testid="bookshelf-empty" height="100%" vAlign="center" hAlign="center" padding={8}>
             <EmptyState
               icon={<BookOpen size={40} aria-hidden />}
-              title="开始您的深度阅读旅程"
-              description="书架还是空的，导入一本 EPUB 或 TXT 开始阅读"
+              title="书架暂无书籍"
+              description="导入电子书或直接将文件拖入此处开始阅读"
               actions={importButton('bookshelf-empty-import-button')}
             />
             <Text type="supporting" color="secondary">
-              支持 EPUB · MOBI · AZW3 · FB2 · CBZ · TXT 等电子书格式，也可直接拖入文件
+              支持 EPUB · MOBI · AZW3 · FB2 · CBZ · TXT 等格式
             </Text>
           </VStack>
         ) : filteredBooks.length === 0 ? (
@@ -263,7 +278,7 @@ export default function Bookshelf({ store = useLibraryStore }: BookshelfProps) {
             <Button label="清除搜索" variant="ghost" size="sm" onClick={() => setSearchQuery('')} />
           </VStack>
         ) : viewMode === 'grid' ? (
-          /* Grid View: cover cards, with the import action as the last cell. */
+          /* Grid View: modern flat-skeuomorphic cards */
           <Grid
             columns={{ minWidth: 160, max: 6 }}
             gap={4}
@@ -295,6 +310,143 @@ export default function Bookshelf({ store = useLibraryStore }: BookshelfProps) {
           </VStack>
         )}
       </div>
+
+      {deletingBook && (
+        <Dialog
+          isOpen
+          onOpenChange={(open) => !open && setDeletingBook(null)}
+          width={460}
+          padding={0}
+          aria-label="删除书籍"
+          data-testid="delete-book-dialog"
+        >
+          <VStack gap={0} style={{ minWidth: 0 }}>
+            <HStack
+              justify="between"
+              vAlign="center"
+              style={{
+                padding: 'var(--spacing-4) var(--spacing-5)',
+                borderBottom: '1px solid var(--color-border)',
+              }}
+            >
+              <HStack gap={3} vAlign="center">
+                <div
+                  style={{
+                    color: 'var(--color-danger)',
+                    background: 'rgba(239, 68, 68, 0.1)',
+                    width: 32,
+                    height: 32,
+                    borderRadius: 'var(--radius-container)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}
+                >
+                  <Trash2 size={16} aria-hidden />
+                </div>
+                <VStack gap={0} style={{ minWidth: 0 }}>
+                  <Text weight="semibold" type="large">
+                    删除书籍
+                  </Text>
+                  <Text type="supporting" color="secondary">
+                    从书架中移除此图书
+                  </Text>
+                </VStack>
+              </HStack>
+              <IconButton
+                icon={<X size={16} aria-hidden />}
+                label="关闭弹窗"
+                variant="ghost"
+                size="sm"
+                onClick={() => setDeletingBook(null)}
+              />
+            </HStack>
+
+            <VStack gap={4} style={{ padding: 'var(--spacing-5)' }}>
+              <HStack
+                gap={3}
+                vAlign="center"
+                style={{
+                  padding: 'var(--spacing-3) var(--spacing-4)',
+                  background: 'var(--color-background-muted)',
+                  borderRadius: 'var(--radius-container)',
+                  border: '1px solid var(--color-border)',
+                }}
+              >
+                <div style={{ flexShrink: 0 }}>
+                  <BookCover
+                    cover={deletingBook.cover}
+                    title={deletingBook.title}
+                    author={deletingBook.author}
+                    size="mini"
+                  />
+                </div>
+                <VStack gap={1} style={{ minWidth: 0, flex: 1 }}>
+                  <Text weight="semibold" maxLines={1}>
+                    《{deletingBook.title}》
+                  </Text>
+                  <HStack gap={2} vAlign="center" wrap="wrap">
+                    <Text type="supporting" color="secondary" maxLines={1}>
+                      {deletingBook.author || '未知作者'}
+                    </Text>
+                    <Badge variant="neutral" label={deletingBook.format.toUpperCase()} />
+                    <Text type="supporting" color="secondary">
+                      {formatSize(deletingBook.size)}
+                    </Text>
+                  </HStack>
+                </VStack>
+              </HStack>
+
+              <Text type="supporting" color="secondary" style={{ lineHeight: 1.6 }}>
+                确定从书架中移除该书籍吗？默认保留阅读进度与伴读数据。
+              </Text>
+
+              <div
+                style={{
+                  background: 'var(--color-background-surface)',
+                  borderRadius: 'var(--radius-container)',
+                  border: '1px solid var(--color-border)',
+                  padding: 'var(--spacing-3) var(--spacing-4)',
+                }}
+              >
+                <CheckboxInput
+                  label="同时删除阅读记录与 AI 伴读数据"
+                  description="删除后将无法恢复。"
+                  value={deleteArtifacts}
+                  onChange={(checked) => setDeleteArtifacts(checked)}
+                  data-testid="delete-artifacts-checkbox"
+                />
+              </div>
+            </VStack>
+
+            <HStack
+              justify="end"
+              gap={3}
+              style={{
+                padding: 'var(--spacing-3) var(--spacing-5)',
+                borderTop: '1px solid var(--color-border)',
+                background: 'var(--color-background-muted)',
+              }}
+            >
+              <Button
+                label="取消"
+                variant="ghost"
+                size="sm"
+                data-testid="cancel-delete-button"
+                onClick={() => setDeletingBook(null)}
+              />
+              <Button
+                label="确认删除"
+                variant="destructive"
+                size="sm"
+                data-testid="confirm-delete-button"
+                onClick={handleConfirmDelete}
+              />
+            </HStack>
+          </VStack>
+        </Dialog>
+      )}
     </VStack>
   );
 }
@@ -314,10 +466,9 @@ interface BookCardProps {
  * title, so the overlay shows only the meta line (no duplicated title).
  */
 function BookCard({ book, layout, onOpen, onRemove }: BookCardProps) {
-  // The index store knows the shape of the book it currently has indexed; any
-  // other shelf row only has an ordinal (see `progressLabel`).
-  const shape = useBookIndexStore((s) => (s.bookHash === book.hash ? s.shape : undefined));
-  const progress = progressLabel(book, shape);
+  // Answered by the book's own row — no store lookup, no borrowing the open
+  // book's levels (see `progressLabel`).
+  const progress = progressLabel(book);
   const metaLine = `${book.author || '未知作者'} · 导入于 ${formatDate(book.importedAt)}${progress ? ` · ${progress}` : ''}`;
   const hasCoverArt = Boolean(book.cover);
 
@@ -328,6 +479,12 @@ function BookCard({ book, layout, onOpen, onRemove }: BookCardProps) {
         label={`打开《${book.title}》`}
         padding={3}
         className="shelf-card"
+        style={{
+          borderRadius: 'var(--radius-container)',
+          border: '1px solid var(--color-border)',
+          background: 'var(--color-background-surface)',
+          boxShadow: 'var(--shadow-low)',
+        }}
         onClick={() => onOpen(book.hash)}
       >
         <HStack gap={4} vAlign="center">
@@ -337,10 +494,11 @@ function BookCard({ book, layout, onOpen, onRemove }: BookCardProps) {
             author={book.author}
             size="small"
           />
-          <VStack gap={0} style={{ flex: 1, minWidth: 0 }}>
+          <VStack gap={1} style={{ flex: 1, minWidth: 0 }}>
             <HStack gap={2} vAlign="center">
-              <Text weight="semibold" maxLines={1}>{book.title}</Text>
+              <Text weight="semibold" maxLines={1} style={{ fontSize: '15px' }}>{book.title}</Text>
               <Badge
+                data-testid={`book-format-${book.hash}`}
                 label={FORMAT_BADGES[book.format]?.label ?? book.format.toUpperCase()}
                 variant={FORMAT_BADGES[book.format]?.variant ?? 'neutral'}
               />
@@ -374,7 +532,13 @@ function BookCard({ book, layout, onOpen, onRemove }: BookCardProps) {
       label={`打开《${book.title}》`}
       padding={0}
       className="shelf-card"
-      style={{ position: 'relative', overflow: 'hidden', borderRadius: 'var(--radius-container)', border: 'none' }}
+      style={{
+        position: 'relative',
+        overflow: 'hidden',
+        borderRadius: '3px 8px 8px 3px',
+        border: 'none',
+        background: 'transparent',
+      }}
       onClick={() => onOpen(book.hash)}
     >
       <VStack gap={0} style={{ position: 'relative' }}>
@@ -383,19 +547,31 @@ function BookCard({ book, layout, onOpen, onRemove }: BookCardProps) {
           variant="secondary"
           size="sm"
           tooltip="从书架移除"
-          style={{ position: 'absolute', insetInlineEnd: 'var(--spacing-2)', insetBlockStart: 'var(--spacing-2)', zIndex: 30 }}
+          style={{
+            position: 'absolute',
+            insetInlineEnd: 'var(--spacing-2)',
+            insetBlockStart: 'var(--spacing-2)',
+            zIndex: 30,
+            background: 'rgba(18, 14, 12, 0.65)',
+            backdropFilter: 'blur(8px)',
+            color: '#ffffff',
+            borderRadius: 'var(--radius-full)',
+            border: '1px solid rgba(255, 255, 255, 0.2)',
+          }}
           icon={<X size={14} aria-hidden />}
           onClick={(event) => {
             event.stopPropagation();
             onRemove(book);
           }}
         />
-        <Badge
+
+        {/* Modern format badge */}
+        <div
           data-testid={`book-format-${book.hash}`}
-          label={FORMAT_BADGES[book.format]?.label ?? book.format.toUpperCase()}
-          variant={FORMAT_BADGES[book.format]?.variant ?? 'neutral'}
-          style={{ position: 'absolute', insetInlineStart: 'var(--spacing-2)', insetBlockStart: 'var(--spacing-2)', zIndex: 30 }}
-        />
+          className="modern-format-badge"
+        >
+          {FORMAT_BADGES[book.format]?.label ?? book.format.toUpperCase()}
+        </div>
 
         <BookCover
           cover={book.cover}
@@ -403,22 +579,23 @@ function BookCard({ book, layout, onOpen, onRemove }: BookCardProps) {
           author={book.author}
         />
 
-        {/* Scrim overlay: metadata rides on the cover, not below it. Stays
-            under the cover's progress chip (z 20) and the corner controls. */}
+        {/* Modern archival cover overlay */}
         <VStack
           gap={1}
-          style={{
-            position: 'absolute',
-            insetInline: 0,
-            bottom: 0,
-            zIndex: 15,
-            padding: 'var(--spacing-10) var(--spacing-4) var(--spacing-3)',
-            background:
-              'linear-gradient(to top, rgb(0 0 0 / 0.8) 0%, rgb(0 0 0 / 0.45) 62%, transparent 100%)',
-          }}
+          className="modern-cover-overlay"
         >
           {hasCoverArt && (
-            <Text size="sm" maxLines={1} weight="semibold" style={{ color: 'rgb(255 255 255)', lineHeight: 1.5 }}>
+            <Text
+              size="sm"
+              maxLines={1}
+              weight="semibold"
+              style={{
+                color: '#ffffff',
+                lineHeight: 1.4,
+                textShadow: '0 1px 2px rgba(0, 0, 0, 0.85)',
+                letterSpacing: '0.01em',
+              }}
+            >
               {book.title}
             </Text>
           )}
@@ -426,7 +603,11 @@ function BookCard({ book, layout, onOpen, onRemove }: BookCardProps) {
             type="supporting"
             size="2xs"
             maxLines={1}
-            style={{ color: 'rgb(255 255 255 / 0.85)', letterSpacing: '0.01em' }}
+            style={{
+              color: 'rgba(255, 255, 255, 0.92)',
+              letterSpacing: '0.01em',
+              textShadow: '0 1px 1px rgba(0, 0, 0, 0.75)',
+            }}
           >
             {metaLine}
           </Text>
@@ -437,7 +618,7 @@ function BookCard({ book, layout, onOpen, onRemove }: BookCardProps) {
 }
 
 /**
- * The shelf's last grid cell: a dashed "add book" card, same aspect as the
+ * The shelf's last grid cell: a modern flat-skeuomorphic slot, same aspect as the
  * covers, so importing stays one click away without a dedicated toolbar
  * button.
  */
@@ -449,35 +630,30 @@ function ImportCard({ onPick, testId }: { onPick: () => void; testId: string }) 
       padding={0}
       className="shelf-card"
       style={{
-        border: '2px dashed var(--color-border-emphasized)',
-        borderRadius: 'var(--radius-container)',
+        borderRadius: '3px 8px 8px 3px',
+        border: 'none',
+        background: 'transparent',
       }}
       onClick={onPick}
     >
-      <VStack
-        vAlign="center"
-        hAlign="center"
-        gap={2}
-        style={{ aspectRatio: '3 / 4', width: '100%', padding: 'var(--spacing-4)' }}
-      >
+      <div className="modern-import-card">
         <VStack
           vAlign="center"
           hAlign="center"
-          style={{
-            width: 48,
-            height: 48,
-            borderRadius: 'var(--radius-full)',
-            background: 'var(--color-background-muted)',
-            color: 'var(--color-text-secondary)',
-          }}
+          gap={2}
+          style={{ width: '100%', padding: 'var(--spacing-4)' }}
         >
-          <Plus size={22} aria-hidden />
+          <div className="modern-import-icon-bubble">
+            <Plus size={22} aria-hidden />
+          </div>
+          <Text type="supporting" weight="semibold" style={{ color: 'var(--color-text-primary)' }}>
+            导入书籍
+          </Text>
+          <Text type="supporting" size="2xs" color="secondary" style={{ textAlign: 'center' }}>
+            EPUB · MOBI · TXT 等
+          </Text>
         </VStack>
-        <Text type="supporting" color="secondary">导入书籍</Text>
-        <Text type="supporting" size="2xs" color="secondary" style={{ textAlign: 'center' }}>
-          EPUB · MOBI · TXT 等
-        </Text>
-      </VStack>
+      </div>
     </ClickableCard>
   );
 }

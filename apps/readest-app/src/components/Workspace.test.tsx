@@ -32,7 +32,7 @@ describe('Workspace split-screen shell', () => {
     render(<Workspace />);
     expand();
     expect(screen.getByTestId('ai-sidebar')).toBeTruthy();
-    expect(screen.getByTestId('summary-tab-panel')).toBeTruthy();
+    expect(screen.getByTestId('sidebar-shelf-empty')).toBeTruthy();
     expect(screen.getByTestId('sidebar-resize-handle')).toBeTruthy();
     expand();
     expect(screen.queryByTestId('ai-sidebar')).toBeNull();
@@ -58,6 +58,10 @@ describe('Workspace split-screen shell', () => {
   });
 
   it('switches between the summary and chat tabs', () => {
+    act(() => {
+      useLibraryStore.setState({ view: 'reader', currentHash: 'hash-test' });
+      useReaderStore.setState({ bookHash: 'hash-test', bookTitle: '测试书', spineIndex: 0 });
+    });
     render(<Workspace />);
     expand();
     expect(screen.getByTestId('summary-tab-panel')).toBeTruthy();
@@ -68,17 +72,22 @@ describe('Workspace split-screen shell', () => {
     fireEvent.click(screen.getByRole('tab', { name: '总结' }));
     expect(screen.getByTestId('summary-tab-panel')).toBeTruthy();
     expect(sidebarState().activeTab).toBe('summary');
+    act(() => {
+      useLibraryStore.setState({ view: 'shelf', currentHash: null });
+      useReaderStore.setState({ bookHash: undefined });
+    });
   });
 
-  it('clamps a left drag past 600px down to the sidebar max width', () => {
+  it('clamps a left drag past the sidebar max width', () => {
     render(<Workspace />);
     expand();
     const handle = screen.getByTestId('sidebar-resize-handle');
     fireEvent.pointerDown(handle, { pointerId: 1, clientX: 800 });
-    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 500 });
+    // 400 (default) + 800 of drag = 1200, clamped to the 900 max.
+    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 0 });
     fireEvent.pointerUp(handle, { pointerId: 1 });
-    expect(sidebarState().width).toBe(600);
-    expect((screen.getByTestId('ai-sidebar') as HTMLElement).style.width).toBe('600px');
+    expect(sidebarState().width).toBe(900);
+    expect((screen.getByTestId('ai-sidebar') as HTMLElement).style.width).toBe('900px');
   });
 
   it('clamps a right drag below 320px up to the sidebar min width', () => {
@@ -150,8 +159,9 @@ describe('Workspace split-screen shell', () => {
     expect(screen.queryByTestId('reader-pane')).toBeNull();
     // Breadcrumbs switched to shelf!
     expect(screen.getAllByText('我的书架').length).toBeGreaterThan(0);
-    // Auxiliary sidebar collapsed on returning to shelf!
-    expect(useAISidebarStore.getState().expanded).toBe(false);
+    // Auxiliary sidebar stays expanded and switches to empty prompt!
+    expect(useAISidebarStore.getState().expanded).toBe(true);
+    expect(screen.getByTestId('sidebar-shelf-empty')).toBeTruthy();
     expect(useReaderStore.getState().bookHash).toBe(hash);
     // "继续阅读" button is available
     expect(screen.getByRole('button', { name: '继续阅读' })).toBeTruthy();
@@ -180,10 +190,17 @@ describe('Workspace split-screen shell', () => {
       getCachedSpineText: () => '',
       getSpineTitle: () => '第一章',
       spineCount: 1,
-      tocItems: () => [],
       tocEntries: () => [],
       getSpineAnchors: () => [],
       currentLocation: () => null,
+      getCover: async () => undefined,
+      // One presentation entry point since 候选 4; the pane calls it on mount.
+      applyPresentation: () => {},
+      presentationDiagnostics: () => ({
+        viaElement: [],
+        viaRendererFallback: [],
+        unsupported: [],
+      }),
       close: () => {},
     } as unknown as FoliateEngineHandle;
 

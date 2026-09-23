@@ -47,11 +47,13 @@ export default function MarkdownView({
     <div
       data-testid={testId}
       className={`markdown-content ${className ?? ''}`}
+      // Typography (size, leading, rhythm) belongs to the context that renders
+      // the markdown — chat bubbles and the summary card want different
+      // measures — so it lives in globals.css, not in an inline value here that
+      // would silently win over those rules.
       style={{
         wordBreak: 'break-word',
         overflowWrap: 'break-word',
-        lineHeight: 1.6,
-        fontSize: 'inherit',
         color: 'inherit',
         ...style,
       }}

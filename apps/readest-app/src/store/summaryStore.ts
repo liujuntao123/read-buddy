@@ -7,10 +7,10 @@
  *   (the ⚡ button or 🔄 regenerate); `force=true` bypasses the cache;
  * - `stop` aborts the in-flight run; partial streamed content is kept.
  *
- * The factory injects the summarizer factory, the repository and the chapter
- * resolver so tests run hermetically; the app uses the singleton at the
- * bottom, and `SummaryTab` reaches the active store through
- * `getSummaryStore()` (swappable in tests via `setSummaryStore`).
+ * The factory injects the summarizer factory, the repository and the node resolver
+ * so tests run hermetically; the app uses the singleton at the bottom, and
+ * `SummaryTab` reaches it through a **store prop defaulted to that singleton** — the
+ * convention `ChatTab` and `Bookshelf` already use (候选 epilogue).
  */
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import type { AISettings, NodeSummary } from '@/types/ai';
@@ -23,9 +23,8 @@ import {
   type SummarizeInput,
   type SummarizerStage,
 } from '@/services/summary/summarizer';
-import { resolveCurrentNodeText } from '@/services/summary/nodeSource';
-import { getAgentBookContext } from '@/services/agent/agentContext';
-import { nodeKindLabel } from '@/services/bookNodes';
+import { resolveCurrentNodeView, nodeKindLabel } from '@/services/bookNodes';
+import { providerReady } from '@/services/ai/providerReadiness';
 import { useAISettingsStore } from '@/store/aiSettingsStore';
 import { useReaderStore } from '@/store/readerStore';
 
@@ -87,7 +86,7 @@ export interface SummaryStoreDeps {
 export const summaryNodeKey = (bookHash: string, nodeIndex: number): string =>
   `${bookHash}:${nodeIndex}`;
 
-export const MISSING_SETTINGS_ERROR = '请先在侧栏右上角 ⚙ 完成 AI Provider 配置';
+export const MISSING_SETTINGS_ERROR = '请先在侧栏右上角 ⚙ 完成 AI 设置';
 
 const stageLabelFor = (stage: SummarizerStage, kind: NodeKind): string => {
   if (stage === 'mapping') return '正在分块提炼...';
@@ -97,29 +96,20 @@ const stageLabelFor = (stage: SummarizerStage, kind: NodeKind): string => {
 
 /** 当前阅读位置的节点上下文（最小节点 = 总结视角）。 */
 export const resolveCurrentNodeContext = (): SummaryNodeContext => {
-  const { bookHash, bookTitle, spineIndex, nodeTitle } = useReaderStore.getState();
-  const { title, text, charCount, kind } = resolveCurrentNodeText();
+  const { bookTitle } = useReaderStore.getState();
+  // One resolver, one answer (CONTEXT.md「Node View」/ 候选 3): the second
+  // node-index lookup that used to live here existed only because
+  // `NodeSourceResult` carried no `nodeIndex`.
+  const view = resolveCurrentNodeView();
   return {
-    bookHash,
-    // 物理段序号是缓存键的兜底；建好索引时由节点模型给出节点序号。
-    nodeIndex: resolveNodeIndexForCache(spineIndex),
+    bookHash: view.bookHash,
+    nodeIndex: view.nodeIndex,
     bookTitle,
-    nodeTitle: nodeTitle || title,
-    kind,
-    text,
-    charCount,
+    nodeTitle: view.title,
+    kind: view.kind,
+    text: view.text,
+    charCount: view.charCount,
   };
-};
-
-/**
- * 缓存键里用的节点序号：优先取节点模型解析出的节点序号（目录比正文文件更细
- * 时物理段序号会与节点序号错位），没有索引时退回物理段序号。
- */
-const resolveNodeIndexForCache = (spineIndex: number): number => {
-  const { bookHash, anchor } = useReaderStore.getState();
-  const context = bookHash ? getAgentBookContext(bookHash) : undefined;
-  const node = context?.resolveNodeAt(spineIndex, anchor);
-  return node ? node.nodeIndex : spineIndex;
 };
 
 /**
@@ -190,7 +180,8 @@ export function createSummaryStore({
       const token = (runToken += 1);
 
       const settings = useAISettingsStore.getState().settings;
-      if (!settings.apiKey && settings.provider !== 'ollama') {
+      // The one readiness rule (providerReadiness): a non-blank API Key.
+      if (!providerReady(settings)) {
         set({ phase: 'error', error: MISSING_SETTINGS_ERROR, stageLabel: '' });
         return;
       }
@@ -282,6 +273,12 @@ export function createSummaryStore({
 /**
  * App-wide singleton. Uses the real AI SDK stream (lazily imported) and the
  * Dexie-backed NodeSummaryRepository.
+ *
+ * `SummaryTab` reaches it through a **prop defaulted to this value**, the same
+ * convention `ChatTab` and `Bookshelf` already use (候选 epilogue). It used to be
+ * reached through a module-global that tests mutated with `setSummaryStore`, which
+ * meant a component read a mutable global *inside render* — three ways to reach a
+ * store across the app, for no benefit over the one that already worked.
  */
 export const useSummaryStore: SummaryStore = createSummaryStore({
   summarizerFactory: (settings) => ({
@@ -289,13 +286,3 @@ export const useSummaryStore: SummaryStore = createSummaryStore({
   }),
   repository: new NodeSummaryRepository(),
 });
-
-let activeStore: SummaryStore = useSummaryStore;
-
-/** Store consumed by SummaryTab; tests swap in a factory-built store. */
-export const getSummaryStore = (): SummaryStore => activeStore;
-
-/** Test seam for the module-level store injection point. */
-export function setSummaryStore(store: SummaryStore): void {
-  activeStore = store;
-}

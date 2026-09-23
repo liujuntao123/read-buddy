@@ -108,7 +108,7 @@ describe('reading tools', () => {
     const tools = createReadingTools(context);
     const result = (await execute(tools, 'get_book_outline', {})) as {
       shape: Record<string, unknown>;
-      entries: Array<{ nodeKind: string; parentChapter?: string }>;
+      entries: Array<{ nodeKind: string; parentChapter?: string; isContainer: boolean; brief: string }>;
     };
     expect(result.shape).toMatchObject({
       chapter: 1,
@@ -119,6 +119,12 @@ describe('reading tools', () => {
     });
     expect(result.entries[0]!.nodeKind).toBe('章');
     expect(result.entries[1]).toMatchObject({ nodeKind: '节', parentChapter: '第一卷 风云' });
+    // The container 章 is a grouping, never briefed: it says so instead of
+    // claiming a brief is still pending (the reader sees no placeholder there).
+    expect(result.entries[0]!.isContainer).toBe(true);
+    expect(result.entries[0]!.brief).toBe('（结构分组节点，微简介见其下各级节点）');
+    expect(result.entries[1]!.isContainer).toBe(false);
+    expect(result.entries[1]!.brief).toBe('（待生成微简介）');
   });
 
   it('read_node_passage slices raw text and reports hasMore', async () => {

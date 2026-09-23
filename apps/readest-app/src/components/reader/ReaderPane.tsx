@@ -11,8 +11,8 @@ import { DEMO_MONOLITHIC_TXT, type DemoSection } from '@/services/reader/demoBoo
 import { type QuickAction } from '@/services/chat/quickActions';
 import { fontStackByKey, useReaderSettingsStore } from '@/store/readerSettingsStore';
 import { subscribeLocate } from '@/services/reader/readerLink';
+import { recordReadingPosition } from '@/services/reader/readingPosition';
 import { highlightSnippet } from '@/services/reader/highlight';
-import SegmentationBanner from './SegmentationBanner';
 import SelectionToolbar from './SelectionToolbar';
 import { readTextSelection, useTextSelection } from '@/hooks/useTextSelection';
 import { useQuickActions } from '@/hooks/useQuickActions';
@@ -36,7 +36,6 @@ export default function ReaderPane({
 }) {
   const bookHash = useReaderStore((s) => s.bookHash);
   const spineIndex = useReaderStore((s) => s.spineIndex);
-  const setPosition = useReaderStore((s) => s.setPosition);
   const loadBook = useReaderStore((s) => s.loadBook);
   const segmentation = useSegmentationStore((s) => s.segmentation);
   const typography = useReaderSettingsStore((s) => s.typography);
@@ -83,11 +82,14 @@ export default function ReaderPane({
       const target = virtualSections[request.nodeIndex];
       if (!target) return;
       if (spineIndex !== request.nodeIndex) {
-        setPosition(request.nodeIndex, target.title);
+        recordReadingPosition(
+          { bookHash, spineIndex: request.nodeIndex },
+          { titleFallback: target.title },
+        );
       }
       setPendingHighlight(request.quoteSnippet);
     });
-  }, [bookHash, virtualSections, spineIndex, setPosition]);
+  }, [bookHash, virtualSections, spineIndex]);
 
   // Highlight fires once the target section's paragraphs have painted.
   // NOTE: no cleanup here — clearing `pendingHighlight` re-renders before the
@@ -124,15 +126,15 @@ export default function ReaderPane({
     }, 0);
   };
 
-  // Segmentation feedback + reading-progress mapping: once the user answers
-  // the segmentation banner (or the fallback applies directly), switch the
-  // reader onto the generated Virtual Sections (design doc 4.2).
+  // Segmentation feedback + reading-progress mapping: `open` has already
+  // auto-applied the segmentation, so switch the reader onto the generated
+  // Virtual Sections and toast the count (design doc 4.2).
   useEffect(() => {
     if (!segmentation || segmentation.virtualSections.length === 0) return;
     const key = `${segmentation.bookHash}:${segmentation.strategy}:${segmentation.virtualSections.length}`;
     if (lastToastKey.current === key) return;
     lastToastKey.current = key;
-    setToast(`已生成 ${segmentation.virtualSections.length} 个虚拟章节`);
+    setToast(`已识别 ${segmentation.virtualSections.length} 个章节`);
     const timer = window.setTimeout(() => setToast(null), 5_000);
 
     const first = segmentation.virtualSections[0]!;
@@ -148,9 +150,12 @@ export default function ReaderPane({
       bookTitle,
       spineCount: segmentation.virtualSections.length,
     });
-    setPosition(0, first.title);
+    recordReadingPosition(
+      { bookHash: segmentation.bookHash, spineIndex: 0 },
+      { titleFallback: first.title },
+    );
     return () => window.clearTimeout(timer);
-  }, [segmentation, loadBook, setPosition]);
+  }, [segmentation, loadBook]);
 
   if (isVirtual ? !currentVirtual : !section) {
     return (
@@ -162,7 +167,6 @@ export default function ReaderPane({
 
   return (
     <VStack aria-label="阅读视窗" data-testid="reader-pane" height="100%" gap={0}>
-      <SegmentationBanner />
       {toast && (
         <Banner
           data-testid="segmentation-toast"

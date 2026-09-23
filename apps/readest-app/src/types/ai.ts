@@ -7,7 +7,15 @@
  * - CONTEXT.md domain glossary
  */
 
-export type AIProvider = 'openai-compatible' | 'deepseek' | 'claude' | 'ollama';
+/**
+ * The providers the settings center offers.
+ *
+ * Deliberately just two: every entry here is an OpenAI-compatible chat endpoint,
+ * so the list exists to prefill a Base URL, not to select a protocol. Anything
+ * else (a proxy, a self-hosted gateway) is reachable through
+ * `openai-compatible` with its own Base URL.
+ */
+export type AIProvider = 'openai-compatible' | 'deepseek';
 
 export interface AISettings {
   provider: AIProvider;
@@ -36,10 +44,6 @@ export const SUMMARY_SINGLE_PASS_MAX_CHARS = 12_000;
 export const SEGMENT_CHUNK_MIN_CHARS = 6_000;
 export const SEGMENT_CHUNK_MAX_CHARS = 8_000;
 
-/** Canonical chapter-heading heuristic (design doc 4.2). */
-export const NODE_HEADING_PATTERN =
-  /(第[0-9一二三四五六七八九十百千]+[章回节卷]|Chapter\s+\d+|SECTION\s+\d+)/i;
-
 export interface VirtualSection {
   virtualIndex: number;
   title: string;
@@ -47,11 +51,18 @@ export interface VirtualSection {
   charOffset: number;
 }
 
+/**
+ * A monolithic book's segmentation, as the reader sees it.
+ *
+ * `regexPattern` / `chunkLength` were removed (候选 10): they were written by the
+ * store and read by nothing, and `regexPattern` was actively wrong — it stamped
+ * the legacy `NODE_HEADING_PATTERN` even when the layered segmenter's own
+ * `HEADING_PATTERNS` had matched. The `strategy` says which rule ran; the
+ * layered segmenter owns the patterns and the target length.
+ */
 export interface BookSegmentation {
   bookHash: string;
   strategy: 'native' | 'regex' | 'fixed-length';
-  regexPattern?: string;
-  chunkLength?: number;
   virtualSections: VirtualSection[];
 }
 
@@ -68,6 +79,14 @@ export interface NodeSummary {
   updatedAt: number;
 }
 
+/**
+ * Primary key of a `node_summaries` row: `${bookHash}:${nodeIndex}` (CONTEXT.md).
+ *
+ * Deliberately **not** the same string as `bookNodeId` (`${bookHash}:n_${nodeIndex}`),
+ * which keys the independent `book_nodes` table: the summary cache is addressed by
+ * the Book Node ordinal but lives in its own table, filled on demand and absent for
+ * most nodes. Two identities for two tables; ADR 0015 records why they stay distinct.
+ */
 export const nodeSummaryId = (bookHash: string, nodeIndex: number): string =>
   `${bookHash}:${nodeIndex}`;
 
@@ -76,7 +95,13 @@ export type ChatRole = 'user' | 'assistant' | 'system';
 export interface Conversation {
   id: string;
   bookHash: string;
-  nodeIndex?: number;
+  /**
+   * The **physical** position the topic was started at: the reader's spine
+   * section ordinal (ADR 0011). Named `spineIndex` to match
+   * `readerStore.spineIndex` and CONTEXT.md's Reading Position — it is
+   * deliberately NOT a Book Node ordinal.
+   */
+  spineIndex?: number;
   title: string;
   turnCount: number;
   isClosed: boolean;

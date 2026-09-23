@@ -36,6 +36,25 @@ export const NODE_KIND_LABEL: Record<NodeKind, string> = {
   chunk: '段',
 };
 
+/**
+ * 微简介尚未生成时的占位语（界面与提示词共用一处，避免措辞漂移）。
+ *
+ * 只用于**可能**生成微简介的节点——即最小节点（叶子节点）。容器章（下含子节点的
+ * 第一层节点）永远不进入微简介队列（ADR 0010），对它说「待生成」是误导，应当用
+ * {@link CONTAINER_BRIEF_LABEL}。
+ */
+export const PENDING_BRIEF_LABEL = '（待生成微简介）';
+
+/**
+ * 容器章（结构分组节点）的微简介说明：它自己的内容由下级最小节点承载，因此
+ * 不存在「还没生成」的微简介。界面不显示占位，模型侧用它代替待生成占位语。
+ */
+export const CONTAINER_BRIEF_LABEL = '（结构分组节点，微简介见其下各级节点）';
+
+/** 给模型看的一行微简介文案：叶子未生成 → 待生成；容器 → 结构分组说明。 */
+export const briefLabelFor = (brief: string | undefined, isContainer: boolean): string =>
+  brief ?? (isContainer ? CONTAINER_BRIEF_LABEL : PENDING_BRIEF_LABEL);
+
 /** `depth` of each level: 0 = 章 (第一层节点), 1 = 节 (第二层节点). */
 export const NODE_DEPTH: Record<'chapter' | 'section', number> = {
   chapter: 0,
@@ -107,6 +126,17 @@ export interface BookNode {
   indexStatus: NodeIndexStatus;
 }
 
+/**
+ * Primary key of a `book_nodes` row: `${bookHash}:n_${nodeIndex}`.
+ *
+ * The `n_` prefix is load-bearing, not decoration: a **Node Summary** row uses
+ * `${bookHash}:${nodeIndex}` (`nodeSummaryId`), and the two tables are independent —
+ * one can exist while the other does not. The prefix makes the two identities
+ * distinguishable in a log, a trace or a stray string, so a Node Summary key can
+ * never be mistaken for a Book Node key. An architecture review proposed unifying
+ * the formats; that was examined and rejected (ADR 0015) because it would remove
+ * exactly this safety for no defect fixed — no code crosses the two.
+ */
 export const bookNodeId = (bookHash: string, nodeIndex: number): string =>
   `${bookHash}:n_${nodeIndex}`;
 

@@ -98,11 +98,19 @@ export class ConversationRepository {
     await this.db.messages.put(message);
   }
 
-  /** Oldest message first (chat display order). */
+  /**
+ * Oldest message first (chat display order).
+ *
+ * `createdAt` alone is not enough: `toArray()` on a `conversationId` index
+ * returns rows in primary-key order and `id` is a uuid, so two messages written
+ * in the same millisecond (a scripted turn, a fast local model) had **no defined
+ * order** — the assistant reply could render above the question. Ties now fall
+ * back to the id, which is at least stable across reads.
+ */
   async listMessages(conversationId: string): Promise<Message[]> {
     return (
       await this.db.messages.where('conversationId').equals(conversationId).toArray()
-    ).sort((a, b) => a.createdAt - b.createdAt);
+    ).sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
   }
 }
 

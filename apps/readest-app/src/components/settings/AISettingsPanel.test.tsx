@@ -6,14 +6,17 @@ import { AISettingsRepository } from '@/services/db/repositories';
 import { ReadestPlusDatabase } from '@/services/db/database';
 import { DEFAULT_AI_SETTINGS } from '@/types/ai';
 import { testConnection } from '@/services/ai/testConnection';
+import { listModels } from '@/services/ai/listModels';
 
 /**
  * The service layer is mocked so the panel test exercises UI wiring only;
  * the default store singleton picks up the mock at module-init time.
  */
 vi.mock('@/services/ai/testConnection', () => ({ testConnection: vi.fn() }));
+vi.mock('@/services/ai/listModels', () => ({ listModels: vi.fn() }));
 
 const testConnectionMock = vi.mocked(testConnection);
+const listModelsMock = vi.mocked(listModels);
 
 const input = (testId: string) => screen.getByTestId(testId) as HTMLInputElement;
 
@@ -22,8 +25,10 @@ beforeEach(() => {
     settings: { ...DEFAULT_AI_SETTINGS },
     status: 'idle',
     toast: null,
+    availableModels: null,
   });
   testConnectionMock.mockReset();
+  listModelsMock.mockReset();
 });
 
 /** Pick an option from the provider Selector popover. */
@@ -49,14 +54,17 @@ describe('AISettingsPanel', () => {
 
   it('prefills the base URL preset when the provider changes', async () => {
     render(<AISettingsPanel open onClose={vi.fn()} />);
-    await chooseProvider('Ollama（本地运行）');
-    expect(input('base-url-input').value).toBe('http://localhost:11434/v1');
     await chooseProvider('DeepSeek 官方 API');
     expect(input('base-url-input').value).toBe('https://api.deepseek.com/v1');
-    await chooseProvider('Claude（OpenAI 兼容代理）');
-    expect(input('base-url-input').value).toBe('https://api.openai.com/v1');
     await chooseProvider('OpenAI 兼容接口 (通用)');
     expect(input('base-url-input').value).toBe('https://api.openai.com/v1');
+  });
+
+  it('offers only the two OpenAI-compatible providers', async () => {
+    render(<AISettingsPanel open onClose={vi.fn()} />);
+    fireEvent.click(within(screen.getByTestId('provider-select')).getByRole('combobox'));
+    const labels = (await screen.findAllByRole('option')).map((option) => option.textContent);
+    expect(labels).toEqual(['OpenAI 兼容接口 (通用)', 'DeepSeek 官方 API']);
   });
 
   it('persists valid settings to IndexedDB on save and displays success toast feedback', async () => {
@@ -93,6 +101,70 @@ describe('AISettingsPanel', () => {
     expect(await screen.findByText('Model ID 不能为空')).toBeTruthy();
     expect(screen.getByText('API Key 不能为空')).toBeTruthy();
     expect(useAISettingsStore.getState().settings).toEqual(DEFAULT_AI_SETTINGS);
+  });
+
+  it('pulls the endpoint model list and selects one into Model ID', async () => {
+    listModelsMock.mockResolvedValue({
+      ok: true,
+      models: ['deepseek-chat', 'deepseek-reasoner'],
+      message: '已拉取 2 个模型，可在下方选择',
+    });
+    render(<AISettingsPanel open onClose={vi.fn()} />);
+    fireEvent.change(input('base-url-input'), { target: { value: 'https://api.deepseek.com/v1/' } });
+    fireEvent.change(input('api-key-input'), { target: { value: 'sk-live' } });
+
+    // Nothing to pick from until a pull happens: Model ID is free text first.
+    expect(screen.queryByTestId('model-select')).toBeNull();
+
+    // The pull is an icon-only button: no visible label, name from aria-label.
+    const pullButton = screen.getByTestId('fetch-models');
+    expect(pullButton.textContent?.trim()).toBe('');
+    expect(screen.getByRole('button', { name: '拉取模型列表' })).toBe(pullButton);
+
+    fireEvent.click(pullButton);
+
+    expect(await screen.findByText('已拉取 2 个模型，可在下方选择')).toBeTruthy();
+    // The trailing slash is normalised away, so the pull speaks the same URL
+    // the connection probe would.
+    expect(listModelsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ baseUrl: 'https://api.deepseek.com/v1/', apiKey: 'sk-live' }),
+      expect.any(Function),
+    );
+
+    fireEvent.click(within(screen.getByTestId('model-select')).getByRole('combobox'));
+    fireEvent.click(await screen.findByRole('option', { name: 'deepseek-reasoner' }));
+    expect(input('model-input').value).toBe('deepseek-reasoner');
+  });
+
+  it('keeps a pulled model list only for the endpoint it came from', async () => {
+    listModelsMock.mockResolvedValue({
+      ok: true,
+      models: ['deepseek-chat'],
+      message: '已拉取 1 个模型，可在下方选择',
+    });
+    render(<AISettingsPanel open onClose={vi.fn()} />);
+    fireEvent.click(screen.getByTestId('fetch-models'));
+    expect(await screen.findByTestId('model-select')).toBeTruthy();
+
+    // Same endpoint modulo a trailing slash: still the list that was pulled.
+    fireEvent.change(input('base-url-input'), { target: { value: 'https://api.openai.com/v1/' } });
+    expect(screen.getByTestId('model-select')).toBeTruthy();
+
+    // Another endpoint: the offer expires rather than serving another service's models.
+    fireEvent.change(input('base-url-input'), { target: { value: 'https://api.deepseek.com/v1' } });
+    expect(screen.queryByTestId('model-select')).toBeNull();
+  });
+
+  it('reports a failed pull and keeps the manual Model ID intact', async () => {
+    listModelsMock.mockResolvedValue({ ok: false, models: [], message: 'API Key 无效或未授权' });
+    render(<AISettingsPanel open onClose={vi.fn()} />);
+    fireEvent.change(input('model-input'), { target: { value: 'my-model' } });
+    fireEvent.click(screen.getByTestId('fetch-models'));
+
+    expect(await screen.findByText('API Key 无效或未授权')).toBeTruthy();
+    expect(screen.getByTestId('ai-settings-toast').getAttribute('data-tone')).toBe('error');
+    expect(screen.queryByTestId('model-select')).toBeNull();
+    expect(input('model-input').value).toBe('my-model');
   });
 
   it('shows a green toast for a successful connection test', async () => {

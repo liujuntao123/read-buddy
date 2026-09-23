@@ -16,23 +16,31 @@
  * character space: [startOffset, endOffset) slices of the cleaned full text
  * reproduce each node exactly. 章 / 节 wording is owned by
  * `@/services/bookNodes`, never hard-coded here.
+ *
+ * **Interface.** Production depends on exactly three names —
+ * `segmentMonolithic`, `segmentSpineBook` and `SpineSectionInput`. 候选 5 measured
+ * the old surface at 31 exports with 3 production consumers; the remaining
+ * exported names below are **internal seams** (the scan / score / TOC-page
+ * filter / snap-cut phases and their tuning constants) that exist so this
+ * module's own suite can drive one phase at a time. Nothing outside
+ * `services/segmentation` should import them. The 14 exports nothing imported at
+ * all were made private.
  */
 import {
   NODE_DEPTH,
-  NODE_KIND_LABEL,
   bookNodeId,
   type BookNode,
   type BookTocEntry,
   type NodeAnchor,
   type SegmentStrategy,
 } from '@/types/readingAgent';
-
-// 层级词表由类型层拥有；节点模型（@/services/bookNodes）从这里转出，
-// 避免「分段器 → 节点模型 → 分段器」的循环依赖。
-export { NODE_DEPTH, NODE_KIND_LABEL };
+// The level classifier is owned by the node model (ADR 0010 ¶1). Before 候选 5 it
+// lived here and `bookNodes` re-exported it back out to dodge a cycle; the
+// dependency now points one way: segmenter → node model.
+import { classifyHeadingLevel, placeholderTitle } from '@/services/bookNodes/nodeKind';
 
 /** Candidate heading found by the multi-pattern matrix. */
-export interface HeadingCandidate {
+interface HeadingCandidate {
   /** Trimmed heading line text. */
   title: string;
   /** Character offset of the line start inside the full text. */
@@ -43,92 +51,33 @@ export interface HeadingCandidate {
   patternIndex: number;
 }
 
-/**
- * Hierarchical node model (user-defined): the first-level nodes under a
- * book are 章 (chapters) — typically 卷/部/篇/部分 containers or standalone
- * 章/回 headings; nodes nested under them are 节 (leaf sections). Not every
- * book has both levels; the leaf node is always the summarizing viewpoint.
- */
-export type HeadingLevel = 'container' | 'leaf';
-
-/**
- * 章-level container suffixes (first-level nodes under the book). Entries may
- * be multi-character (`部分`), so they are matched as alternatives rather than
- * as one character class — 「第一部分」 ends in 分, which a bare `[卷部篇]`
- * class can never match.
- */
-export const CONTAINER_SUFFIXES: readonly string[] = ['部分', '卷', '部', '篇'];
-/** 节-level leaf suffixes (second-level nodes under a container). */
-export const LEAF_SUFFIXES: readonly string[] = ['章', '回', '节', '集', '幕'];
-
-/** Regex source alternating the container suffixes, longest first. */
-const CONTAINER_ALTERNATION = CONTAINER_SUFFIXES.join('|');
-
-/**
- * The Level-3 fixed-length segment title (`第 1 部分`, `第 2 / 5 部分`).
- * `buildFixedLengthNodes` names its synthetic chunks this way, so a bare
- * "第 N 部分" must stay a 分段节点 (no structural signal) even though
- * 「第一部分 系统1，系统2」 is a real container: the real one always carries a
- * name after the 部分, the synthetic one never does.
- */
-export const FIXED_PART_PATTERN = /^第\s*\d+(\s*\/\s*\d+)?\s*部分$/;
-
-/**
- * Classify a heading title into the hierarchy model. 卷/部/篇/部分 (and English
- * Part/Book) are containers (章); 章/回/节/集/幕 (and Chapter/Section) are
- * leaves (节 when nested, standalone 章 otherwise). Returns null when the
- * title carries no structural signal (ordinals, 序言/番外, …).
- */
-export function classifyHeadingLevel(title: string): HeadingLevel | null {
-  const trimmed = title.trim();
-  if (FIXED_PART_PATTERN.test(trimmed)) return null;
-  const numerals = '[0-9一二三四五六七八九十百千零两]+';
-  // NOTE: no \b — JS word boundaries are ASCII-only and never match CJK.
-  const boundary = '(?:\\s|\\u3000|:：、.。|\\s*$)';
-  if (
-    new RegExp(`第${numerals}(?:${CONTAINER_ALTERNATION})${boundary}`).test(trimmed) ||
-    new RegExp(`(?:${CONTAINER_ALTERNATION})\\s*$`).test(trimmed) ||
-    /^(Part|Book)\b/i.test(trimmed)
-  ) {
-    return 'container';
-  }
-  if (
-    new RegExp(`第${numerals}[${LEAF_SUFFIXES.join('')}]${boundary}`).test(trimmed) ||
-    new RegExp(`[${LEAF_SUFFIXES.join('')}]\\s*$`).test(trimmed) ||
-    /^(Chapter|Section)\b/i.test(trimmed)
-  ) {
-    return 'leaf';
-  }
-  return null;
-}
-
 /** Scan only the first N chars for the front TOC-page filter. */
-export const TOC_PAGE_SCAN_WINDOW = 12_000;
+const TOC_PAGE_SCAN_WINDOW = 12_000;
 /** ≥N consecutive candidates with tiny body spans form a TOC page. */
-export const TOC_PAGE_MIN_RUN = 5;
+const TOC_PAGE_MIN_RUN = 5;
 /** Body span between two TOC lines must be smaller than this. */
-export const TOC_PAGE_MAX_GAP = 100;
+const TOC_PAGE_MAX_GAP = 100;
 /** Adopt Level-2 results at or above this confidence. */
 export const CONFIDENCE_ADOPT_THRESHOLD = 0.75;
 /** Normal chapter length band for confidence scoring. */
-export const CHAPTER_LENGTH_BAND: readonly [number, number] = [1_500, 12_000];
+const CHAPTER_LENGTH_BAND: readonly [number, number] = [1_500, 12_000];
 /** Normal chapter-count band for confidence scoring. */
-export const CHAPTER_COUNT_BAND: readonly [number, number] = [10, 300];
+const CHAPTER_COUNT_BAND: readonly [number, number] = [10, 300];
 /** A spine this small with giant sections is a monolithic book. */
-export const DEGENERATE_SPINE_MAX_SECTIONS = 2;
-export const DEGENERATE_SPINE_MIN_CHARS = 25_000;
+const DEGENERATE_SPINE_MAX_SECTIONS = 2;
+const DEGENERATE_SPINE_MIN_CHARS = 25_000;
 /** Level-3 target chunk length (between 6,000 and 8,000). */
 export const LEVEL3_TARGET_CHARS = 7_000;
 /** How far back from the ideal cut to search a paragraph boundary. */
-export const LEVEL3_SNAP_WINDOW = 1_200;
+const LEVEL3_SNAP_WINDOW = 1_200;
 /** Non-blank preamble longer than this becomes its own 前言 chapter. */
-export const PREAMBLE_MIN_CHARS = 100;
+const PREAMBLE_MIN_CHARS = 100;
 
 /**
  * Multi-pattern heading regex matrix (design doc §3.2.2). Each pattern is
  * line-anchored; `matchAll` over the full text yields every candidate.
  */
-export const HEADING_PATTERNS: readonly RegExp[] = [
+const HEADING_PATTERNS: readonly RegExp[] = [
   // A: canonical Chinese chapters (第X章/回/节/卷/集/幕/篇/部 + optional title)
   /^[ \t]*(第[0-9一二三四五六七八九十百千零两]+[章回节卷集幕篇部])[ \t]*([^\n]{0,35})$/m,
   // B: ordinal + punctuation ("1. 风起之地" / "一、绪论")
@@ -292,7 +241,7 @@ export function detectTocPageEnd(
   return bestEnd;
 }
 
-export interface ConfidenceBreakdown {
+interface ConfidenceBreakdown {
   /** 0~1 weighted total. */
   total: number;
   monotonicity: number;
@@ -372,41 +321,6 @@ export function scoreConfidence(
   const density = densityScore(chapters.length);
   const total = monotonicity * 0.4 + lengthSanity * 0.3 + density * 0.3;
   return { total, monotonicity, lengthSanity, density };
-}
-
-/**
- * 标题分级器给出的结构层深：容器之后的**叶子**标题补出第二层（节）。
- * 只是 `stampDepths` 位置规则的语义化表达，供需要区分「有后缀的叶子」与
- * 「无信号的标题」的调用方使用。
- */
-export function semanticDepthOf(title: string, hasContainerAbove: boolean): number {
-  return classifyHeadingLevel(title) === 'leaf' && hasContainerAbove ? NODE_DEPTH.section : 0;
-}
-
-export interface DepthsStamped<T> {
-  row: T;
-  depth: number;
-}
-
-/**
- * 给一串**按文档顺序**的条目盖上层深：`max(声明的层深, 位置层深)`。
- * 目录自带的嵌套永不被丢弃；标题分级只用于补出目录漏掉的那一层——容器
- * （卷/部/篇/部分）之后的条目进第二层，因此《何为良好生活》的真两级 NCX 与
- * 《思考快与慢》的平铺 NCX 走同一条路径。
- *
- * 成员判定是**位置式**的（容器之后的都进第二层），不看后缀：《看见孩子》的
- * 「准则2…」「实战2…」自己没有章/节后缀，照样进第二层。
- */
-export function stampDepths<T extends { title: string; depth: number }>(
-  rows: readonly T[],
-): Array<DepthsStamped<T>> {
-  let hasContainerAbove = false;
-  return rows.map((row) => {
-    const isContainer = classifyHeadingLevel(row.title) === 'container';
-    const positional = !isContainer && hasContainerAbove ? NODE_DEPTH.section : 0;
-    if (isContainer) hasContainerAbove = true;
-    return { row, depth: Math.max(row.depth, positional) };
-  });
 }
 
 /** 一个节点在全局字符空间中的起点，以及它的物理归属。 */
@@ -523,7 +437,7 @@ function toBookNodes(bookHash: string, fullText: string, starts: readonly NodeSt
       nodeIndex: remap.get(index)!,
       title:
         draft.title ||
-        `第 ${levelCounts[level]} ${NODE_KIND_LABEL[level === 1 ? 'section' : 'chapter']}`,
+        placeholderTitle(level === 1 ? 'section' : 'chapter', levelCounts[level]),
       depth,
       ...(parentNodeIndex !== undefined
         ? { parentNodeId: bookNodeId(bookHash, parentNodeIndex) }
@@ -645,7 +559,7 @@ export interface SpineSegmentResult {
 export const SPINE_JOIN = '\n\n';
 
 /** 每个物理段在全局字符空间中的起点。 */
-export function spineStartOffsets(sections: readonly SpineSectionInput[]): number[] {
+function spineStartOffsets(sections: readonly SpineSectionInput[]): number[] {
   const starts: number[] = [];
   let cursor = 0;
   for (const section of sections) {
@@ -753,7 +667,7 @@ export function buildTocNodes(
  * spine titles are first-level 章 containers; everything after them nests as a
  * 节 until the next container.
  */
-export function buildSpineNodes(
+function buildSpineNodes(
   bookHash: string,
   sections: SpineSectionInput[],
   fullText: string,

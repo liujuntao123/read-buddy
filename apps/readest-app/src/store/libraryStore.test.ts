@@ -4,12 +4,21 @@ import { BookSegmentationRepository } from '@/services/db/repositories';
 import { getOpenedBook } from '@/services/library/contentRegistry';
 import type { FoliateEngineHandle } from '@/services/library/foliateEngine';
 import { DEMO_MONOLITHIC_TXT } from '@/services/reader/demoBook';
+import {
+  flushReadingPosition,
+  recordReadingPosition,
+  resetReadingPosition,
+} from '@/services/reader/readingPosition';
 import { useReaderStore } from '@/store/readerStore';
-import { setSegmentationRepository, useSegmentationStore } from '@/store/segmentationStore';
+import {
+  createSegmentationStore,
+  type SegmentationStoreHook,
+} from '@/store/segmentationStore';
 import { createLibraryStore, type LibraryStoreHook } from './libraryStore';
 
 let db: ReadestPlusDatabase;
 let store: LibraryStoreHook;
+let segmentationStore: SegmentationStoreHook;
 
 const resetStores = () => {
   useReaderStore.setState({
@@ -20,12 +29,7 @@ const resetStores = () => {
     nodeTitle: '',
     spineCount: 0,
   });
-  useSegmentationStore.setState({
-    segmentation: null,
-    banner: { visible: false, detectedCount: 0 },
-    applyDecision: null,
-    scanContext: null,
-  });
+  segmentationStore.setState({ segmentation: null });
 };
 
 const txtFile = (name = '风起之地.txt'): File =>
@@ -33,10 +37,12 @@ const txtFile = (name = '风起之地.txt'): File =>
 
 beforeEach(() => {
   db = new ReadestPlusDatabase(`library-store-test-${Math.random().toString(36).slice(2)}`);
-  // The segmentation flow persists through the shared segmentationStore seam;
-  // point it at the same injected database so the whole flow is isolated.
-  setSegmentationRepository(new BookSegmentationRepository(db));
-  store = createLibraryStore({ db });
+  // The segmentation flow is a dependency of the library store, so it is built
+  // against the same injected database — no module global to swap.
+  segmentationStore = createSegmentationStore({
+    repository: () => new BookSegmentationRepository(db),
+  });
+  store = createLibraryStore({ db, segmentationStore });
   resetStores();
   window.localStorage.clear();
   // ?book= state must not leak between tests (the store pushes it on open).
@@ -44,6 +50,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  resetReadingPosition();
   await db.delete();
 });
 
@@ -60,7 +67,7 @@ describe('createLibraryStore', () => {
     const hash = state.books[0]!.hash;
     expect(useReaderStore.getState().bookHash).toBe(hash);
     expect(useReaderStore.getState().bookTitle).toBe('风起之地');
-    expect(getOpenedBook(hash)?.getMonolithicText?.()).toBe(DEMO_MONOLITHIC_TXT);
+    expect(getOpenedBook(hash)?.getMonolithicText()).toBe(DEMO_MONOLITHIC_TXT);
   });
 
   it('surfaces import problems as toast copy without blocking good files', async () => {
@@ -68,7 +75,7 @@ describe('createLibraryStore', () => {
 
     const state = store.getState();
     expect(state.books).toHaveLength(1); // the txt made it in
-    expect(state.error).toContain('暂不支持该格式（待 Foliate 引擎接入）');
+    expect(state.error).toContain('暂不支持该文件格式');
     expect(state.view).toBe('reader'); // the good file still auto-opened
     expect(state.importing).toBe(false);
   });
@@ -76,10 +83,8 @@ describe('createLibraryStore', () => {
   it('auto-applies the layered segmentation for a txt with detectable chapter headings', async () => {
     await store.getState().importFiles([txtFile()]);
 
-    const segmentation = useSegmentationStore.getState();
-    // Reading-agent pipeline: no interactive banner, chapters ready at once.
-    expect(segmentation.banner.visible).toBe(false);
-    expect(segmentation.applyDecision).toBe('applied');
+    const segmentation = segmentationStore.getState();
+    // Fully automatic: no banner, chapters ready at once.
     expect(segmentation.segmentation?.strategy).toBe('regex');
     expect(segmentation.segmentation?.virtualSections.length).toBe(5);
     expect(useReaderStore.getState().spineCount).toBe(5);
@@ -88,15 +93,14 @@ describe('createLibraryStore', () => {
   it('reuses a persisted segmentation as virtual chapters without re-prompting', async () => {
     await store.getState().importFiles([txtFile()]);
     const hash = store.getState().books[0]!.hash;
-    await useSegmentationStore.getState().applyRegex(hash, DEMO_MONOLITHIC_TXT);
+    await segmentationStore.getState().scanAndPrompt(hash, DEMO_MONOLITHIC_TXT);
     store.getState().closeToShelf();
     expect(store.getState().view).toBe('shelf');
     expect(useReaderStore.getState().bookHash).toBe(hash); // reader context kept
 
     await store.getState().open(hash);
 
-    expect(useSegmentationStore.getState().banner.visible).toBe(false);
-    expect(useSegmentationStore.getState().segmentation?.strategy).toBe('regex');
+    expect(segmentationStore.getState().segmentation?.strategy).toBe('regex');
     expect(useReaderStore.getState().spineCount).toBe(5);
     expect(store.getState().view).toBe('reader');
   });
@@ -115,31 +119,86 @@ describe('createLibraryStore', () => {
     expect(await db.books.get(hash)).toBeUndefined();
   });
 
-  it('saves the current node as reading progress', async () => {
+  it('records the Reading Position and persists it on flush', async () => {
     await store.getState().importFiles([txtFile()]);
     const hash = store.getState().books[0]!.hash;
-    await useSegmentationStore.getState().applyRegex(hash, DEMO_MONOLITHIC_TXT);
+    await segmentationStore.getState().scanAndPrompt(hash, DEMO_MONOLITHIC_TXT);
     await store.getState().open(hash);
 
-    useReaderStore.getState().setPosition(3, '第四章 风起之地4');
-    await store.getState().saveProgress();
+    // One call: the caller supplies the physical position, not a title. The title
+    // here comes from the caller's fallback because this suite drives an *injected*
+    // segmentation store, while the Node View's app-edge binding reads the app
+    // singleton — in production those are the same object. Title derivation from
+    // the node model is covered by `nodeView.test.ts` and
+    // `readingPosition.test.ts`, where the model is reachable through the binding.
+    const title = recordReadingPosition(
+      { bookHash: hash, spineIndex: 3 },
+      { titleFallback: '第四章 风起之地4' },
+    );
+    await flushReadingPosition();
 
-    expect((await db.books.get(hash))?.lastNodeIndex).toBe(3);
+    expect(title).toBe('第四章 风起之地4');
+    expect(useReaderStore.getState().nodeTitle).toBe('第四章 风起之地4');
+    expect((await db.books.get(hash))?.lastSpineIndex).toBe(3);
     expect(JSON.parse(window.localStorage.getItem('readest-plus:last-book')!)).toEqual({
       hash,
-      nodeIndex: 3,
+      spineIndex: 3,
     });
+  });
+
+  it('persists the Node Anchor so a resumed session resolves the same Book Node', async () => {
+    await store.getState().importFiles([txtFile()]);
+    const hash = store.getState().books[0]!.hash;
+    await segmentationStore.getState().scanAndPrompt(hash, DEMO_MONOLITHIC_TXT);
+    await store.getState().open(hash);
+
+    recordReadingPosition({ bookHash: hash, spineIndex: 2, anchor: 'sigil_toc_id_7' });
+    await flushReadingPosition();
+
+    const row = await db.books.get(hash);
+    expect(row?.lastSpineIndex).toBe(2);
+    expect(row?.lastAnchor).toBe('sigil_toc_id_7');
+
+    // Re-open restores the anchor into the reading context, so the Node View
+    // resolves the anchored node rather than the section's first one.
+    resetStores();
+    store = createLibraryStore({ db });
+    await store.getState().open(hash);
+    expect(useReaderStore.getState().spineIndex).toBe(2);
+    expect(useReaderStore.getState().anchor).toBe('sigil_toc_id_7');
+  });
+
+  it('still honours a pre-v6 last-book pointer written with the legacy nodeIndex key', async () => {
+    await store.getState().importFiles([txtFile()]);
+    const hash = store.getState().books[0]!.hash;
+    await segmentationStore.getState().scanAndPrompt(hash, DEMO_MONOLITHIC_TXT);
+    await db.books.update(hash, { lastSpineIndex: 2 });
+    resetStores();
+    store = createLibraryStore({ db });
+
+    // ADR 0011: the pointer's field was renamed, but an existing install must
+    // not lose its 继续阅读 entry. The pointer supplies the *book*; the restored
+    // position comes from the book row itself.
+    window.localStorage.setItem(
+      'readest-plus:last-book',
+      JSON.stringify({ hash, nodeIndex: 2 }),
+    );
+    await store.getState().init();
+
+    expect(store.getState().view).toBe('reader');
+    expect(store.getState().currentHash).toBe(hash);
+    expect(useReaderStore.getState().spineIndex).toBe(2);
   });
 
   it('init restores the last opened book at its saved node', async () => {
     await store.getState().importFiles([txtFile()]);
     const hash = store.getState().books[0]!.hash;
-    await useSegmentationStore.getState().applyRegex(hash, DEMO_MONOLITHIC_TXT);
-    await db.books.update(hash, { lastNodeIndex: 3 });
+    await segmentationStore.getState().scanAndPrompt(hash, DEMO_MONOLITHIC_TXT);
+    await db.books.update(hash, { lastSpineIndex: 3 });
     resetStores(); // simulate an app restart
     store = createLibraryStore({ db });
 
-    window.localStorage.setItem('readest-plus:last-book', JSON.stringify({ hash, nodeIndex: 3 }));
+    window.localStorage.setItem('readest-plus:last-book', JSON.stringify({ hash, spineIndex: 3 }));
     await store.getState().init();
 
     expect(store.getState().view).toBe('reader');
@@ -179,12 +238,12 @@ describe('createLibraryStore', () => {
   it('init restores the book encoded in the URL (refresh keeps the reader)', async () => {
     await store.getState().importFiles([txtFile()]);
     const hash = store.getState().books[0]!.hash;
-    await useSegmentationStore.getState().applyRegex(hash, DEMO_MONOLITHIC_TXT);
-    await db.books.update(hash, { lastNodeIndex: 2 });
+    await segmentationStore.getState().scanAndPrompt(hash, DEMO_MONOLITHIC_TXT);
+    await db.books.update(hash, { lastSpineIndex: 2 });
 
     // Simulate a refresh on the reader: URL still carries ?book=<hash>, and
     // the URL wins over any stale localStorage pointer.
-    window.localStorage.setItem('readest-plus:last-book', JSON.stringify({ hash: 'other', nodeIndex: 0 }));
+    window.localStorage.setItem('readest-plus:last-book', JSON.stringify({ hash: 'other', spineIndex: 0 }));
     resetStores();
     store = createLibraryStore({ db });
     await store.getState().init();
@@ -245,9 +304,8 @@ describe('createLibraryStore', () => {
       getCachedSpineText: vi.fn(() => ''),
       getSpineTitle: vi.fn((index: number) => `第 ${index + 1} 章`),
       spineCount: opts.spineCount ?? 3,
-      tocItems: vi.fn(() => []),
       currentLocation: vi.fn(() => (current ? { index: 1, fraction: 0.5, cfi: current } : null)),
-      getCover: opts.cover ? vi.fn(async () => opts.cover) : undefined,
+      getCover: vi.fn(async () => opts.cover),
       close: vi.fn(() => {
         current = null;
       }),
@@ -298,10 +356,12 @@ describe('createLibraryStore', () => {
     const hash = store.getState().currentHash!;
 
     engine.__setCfi('epubcfi(/6/8!/2/2)');
-    useReaderStore.getState().setPosition(1, '第 2 章');
-    await store.getState().saveProgress();
+    // No CFI in hand: the owner falls back to the live engine's location at
+    // write time, exactly as the store used to.
+    recordReadingPosition({ bookHash: hash, spineIndex: 1 });
+    await flushReadingPosition();
 
-    expect((await db.books.get(hash))?.lastNodeIndex).toBe(1);
+    expect((await db.books.get(hash))?.lastSpineIndex).toBe(1);
     expect((await db.books.get(hash))?.lastCfi).toBe('epubcfi(/6/8!/2/2)');
 
     // Re-open (fresh store, same fake engine) resumes from the stored CFI.

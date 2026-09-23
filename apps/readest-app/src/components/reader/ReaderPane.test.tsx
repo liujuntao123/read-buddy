@@ -89,7 +89,7 @@ describe('ReaderPane selection toolbar integration', () => {
     expect(window.getSelection()?.toString()).toBe('');
   });
 
-  it('解释 sends the preset quick-action prompt with the selection quoted', () => {
+  it('解释 sends the instruction with the selection as the quote only', () => {
     render(<ReaderPane sections={DEMO_BOOK.sections} />);
     const selected = selectContents(article().querySelector('p')?.firstChild ?? null);
     fireEvent.mouseUp(article());
@@ -98,16 +98,18 @@ describe('ReaderPane selection toolbar integration', () => {
     fireEvent.click(screen.getByRole('button', { name: '解释' }));
 
     expect(sendSpy).toHaveBeenCalledTimes(1);
-    const [prompt, quoteText] = sendSpy.mock.calls[0];
-    expect(prompt).toContain('请解释');
-    expect(prompt).toContain(selected);
+    const [instruction, quoteText] = sendSpy.mock.calls[0];
+    expect(instruction).toContain('请解释');
+    // The passage is carried by the quote alone: repeating it in the bubble made
+    // the same text appear twice on screen (引用块 + 气泡).
+    expect(instruction).not.toContain(selected);
     expect(quoteText).toBe(selected);
     expect(sidebarState().expanded).toBe(true);
     expect(sidebarState().activeTab).toBe('chat');
     sendSpy.mockRestore();
   });
 
-  it('翻译 also sends a preset prompt with the selection as quote', () => {
+  it('翻译 also carries the selection as the quote alone', () => {
     render(<ReaderPane sections={DEMO_BOOK.sections} />);
     const selected = selectContents(article().querySelector('p')?.firstChild ?? null);
     fireEvent.mouseUp(article());
@@ -115,9 +117,9 @@ describe('ReaderPane selection toolbar integration', () => {
     const sendSpy = vi.spyOn(useChatStore.getState(), 'send').mockResolvedValue(undefined);
     fireEvent.click(screen.getByRole('button', { name: '翻译' }));
 
-    const [prompt, quoteText] = sendSpy.mock.calls[0];
-    expect(prompt).toContain('翻译');
-    expect(prompt).toContain(selected);
+    const [instruction, quoteText] = sendSpy.mock.calls[0];
+    expect(instruction).toContain('翻译');
+    expect(instruction).not.toContain(selected);
     expect(quoteText).toBe(selected);
     sendSpy.mockRestore();
   });
@@ -146,7 +148,7 @@ describe('ReaderPane selection toolbar integration', () => {
     expect(window.getSelection()?.toString()).toBe('');
   });
 
-  it('renders the article and segmentation banner wiring', () => {
+  it('renders the article, chrome-free', () => {
     render(<ReaderPane sections={DEMO_BOOK.sections} />);
     expect(screen.getByTestId('reader-article')).toBeTruthy();
     expect(screen.getByTestId('reader-pane')).toBeTruthy();

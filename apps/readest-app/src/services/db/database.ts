@@ -36,6 +36,12 @@ export const AI_SETTINGS_KEY = 'global';
  *   the unified vocabulary (`book_nodes` / `node_summaries`); the background
  *   index pipeline rebuilds them on the next book open. Shelf rows, reading
  *   progress, conversations and settings are untouched.
+ * - v6 renames `Conversation.nodeIndex` to `Conversation.spineIndex` — the one
+ *   field the v5 rename missed, because it was named after a node ordinal while
+ *   holding a physical one (ADR 0011). This is the first data-preserving
+ *   upgrade: no store is dropped, the rows are rewritten in place.
+ * - v7 carries the same rename to `LibraryBook.lastNodeIndex` → `lastSpineIndex`,
+ *   and reading progress gains the Node Anchor alongside the ordinal and CFI.
  */
 export class ReadestPlusDatabase extends Dexie {
   aiSettings!: Table<AISettingsRow, string>;
@@ -85,6 +91,41 @@ export class ReadestPlusDatabase extends Dexie {
       book_nodes: 'nodeId, bookHash, nodeIndex, indexStatus',
       node_summaries: 'id, bookHash, nodeIndex',
     });
+    // v6: data-only rename (ADR 0011) — `Conversation.nodeIndex` held a physical
+    // spine ordinal under a node-ordinal name. No index changes (the field was
+    // never indexed), so `stores({})` carries the v5 schema forward and only the
+    // upgrade runs. Idempotent: a row already carrying `spineIndex` is left
+    // alone, so a re-run cannot corrupt it.
+    this.version(6)
+      .stores({})
+      .upgrade(async (tx) => {
+        await tx
+          .table('conversations')
+          .toCollection()
+          .modify((row: Record<string, unknown>) => {
+            if (row.nodeIndex !== undefined && row.spineIndex === undefined) {
+              row.spineIndex = row.nodeIndex;
+            }
+            delete row.nodeIndex;
+          });
+      });
+    // v7: the same rename one table over (ADR 0011). `LibraryBook.lastNodeIndex`
+    // held a physical spine ordinal under a node-ordinal name; it becomes
+    // `lastSpineIndex`. Data-only again — the field was never indexed, so
+    // `stores({})` carries the v6 schema forward.
+    this.version(7)
+      .stores({})
+      .upgrade(async (tx) => {
+        await tx
+          .table('books')
+          .toCollection()
+          .modify((row: Record<string, unknown>) => {
+            if (row.lastNodeIndex !== undefined && row.lastSpineIndex === undefined) {
+              row.lastSpineIndex = row.lastNodeIndex;
+            }
+            delete row.lastNodeIndex;
+          });
+      });
   }
 }
 

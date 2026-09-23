@@ -178,17 +178,17 @@ foliate-view {
    prefers-reduced-motion. */
 .shelf-card {
   transition:
-    transform var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
+    transform 220ms cubic-bezier(0.23, 1, 0.32, 1),
+    box-shadow 220ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 .shelf-card:hover {
-  transform: translateY(-3px);
-  box-shadow: var(--shadow-med);
+  transform: translateY(-6px) scale(1.015);
+  box-shadow: 0 20px 28px -8px rgba(0, 0, 0, 0.38), 0 8px 14px -4px rgba(0, 0, 0, 0.22);
 }
 
 .shelf-card:active {
-  transform: translateY(-1px);
+  transform: translateY(-2px) scale(0.99);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -198,6 +198,369 @@ foliate-view {
     transition: none;
     transform: none;
   }
+}
+
+/* ==========================================================================
+   Modern Flat-Skeuomorphic Bookshelf System (现代扁平拟物化书架系统)
+   ========================================================================== */
+
+/* Bookshelf canvas: clean transparent canvas inheriting app theme surface */
+.modern-bookshelf-canvas {
+  position: relative;
+  min-height: 100%;
+  background: transparent;
+}
+
+/* Shelf grid cell */
+.shelf-grid-cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 3D Modern Flat-Skeuomorphic Book Entity */
+.skeuo-book-entity {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border-radius: 3px 8px 8px 3px;
+  background: var(--color-background-card);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.05),
+    0 8px 20px -4px rgba(0, 0, 0, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+  user-select: none;
+  transition:
+    transform 200ms cubic-bezier(0.2, 0.9, 0.3, 1),
+    box-shadow 200ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+[data-theme='dark'] .skeuo-book-entity {
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.4),
+    0 12px 24px -6px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* Sleek Modern Format Badge */
+.modern-format-badge {
+  position: absolute;
+  top: 8px;
+  inset-inline-start: 14px;
+  z-index: 25;
+  font-family: var(--font-family-code);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 2px 7px;
+  border-radius: var(--radius-container, 4px);
+  background: rgba(18, 14, 12, 0.65);
+  backdrop-filter: blur(8px);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+
+/* Modern Archival Scrim Overlay */
+.modern-cover-overlay {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 16;
+  padding: var(--spacing-6) var(--spacing-3) var(--spacing-2) var(--spacing-3);
+  background: linear-gradient(
+    to top,
+    rgba(10, 8, 7, 0.88) 0%,
+    rgba(10, 8, 7, 0.6) 55%,
+    transparent 100%
+  );
+  border-bottom-left-radius: 3px;
+  border-bottom-right-radius: 8px;
+}
+
+/* Modern Flat-Skeuomorphic Import Card */
+.modern-import-card {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  width: 100%;
+  border-radius: 3px 8px 8px 3px;
+  border: 1.5px dashed var(--color-border-emphasized);
+  background: var(--color-background-muted);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    transform 200ms cubic-bezier(0.2, 0.9, 0.3, 1),
+    box-shadow 200ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+.modern-import-card:hover {
+  border-color: var(--color-accent);
+  background: var(--color-background-surface);
+  transform: translateY(-4px);
+  box-shadow:
+    0 4px 8px rgba(0, 0, 0, 0.05),
+    0 16px 24px -6px rgba(0, 0, 0, 0.12);
+}
+
+.modern-import-card:active {
+  transform: translateY(-1px) scale(0.99);
+}
+
+.modern-import-icon-bubble {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-full);
+  background: var(--color-background-surface);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-accent);
+  transition: transform 160ms ease;
+}
+
+.modern-import-card:hover .modern-import-icon-bubble {
+  transform: scale(1.08);
+}
+
+/* 伴读输入框（ChatTab composer）：高度由布局固定，并关闭原生拖拽调节。
+   Astryx TextArea 把 `style` / `xstyle` / `className` 一律交给外层包裹 div，
+   真正的 <textarea> 在组件内部：`data-testid` 才是透传到它的钩子，所以这条
+   规则是唯一能命中原生拖拽手柄的地方（用户反馈输入框可被拖大拖小）。 */
+textarea[data-testid='chat-input'] {
+  height: 84px;
+  min-height: 84px;
+  max-height: 84px;
+  resize: none;
+  /* 给右下角的发送按钮留出位置。 */
+  padding-bottom: 32px;
+  padding-right: 48px;
+}
+
+/* 全书章节脉络手风琴（PanoramaDialog 全书脉络 tab）。
+   一节卡片的一行内边距只在这里定义一处：卡片用它做内边距，折叠触发器再用等量
+   负外边距把命中区撑回整张卡片——于是点击 / 悬停 / 聚焦的范围永远等于整个 item
+   行，而不只是文字那一窄条（用户反馈：交互区只有文本高度，不够协调）。
+   Collapsible 的触发器自带 `all: unset`，所以内边距与圆角要在这里补。 */
+.panorama-outline {
+  --panorama-row-padding-block: var(--spacing-3);
+  --panorama-row-padding-inline: var(--spacing-4);
+}
+
+.panorama-accordion .astryx-collapsible-trigger {
+  /* 触发器连同两侧负外边距一起铺满卡片。必须显式加宽：`width: 100%` 只是内容盒
+   宽度（负外边距会把盒子整体左移、右侧留空），而按钮的 `width: auto` 是
+   fit-content，会缩成文字宽度。 */
+  width: calc(100% + 2 * var(--panorama-row-padding-inline));
+  padding-block: var(--panorama-row-padding-block);
+  padding-inline: var(--panorama-row-padding-inline);
+  margin-block: calc(-1 * var(--panorama-row-padding-block));
+  margin-inline: calc(-1 * var(--panorama-row-padding-inline));
+  border-radius: var(--radius-tile);
+}
+
+.panorama-accordion .astryx-collapsible-trigger:hover {
+  background: var(--color-overlay-hover);
+}
+
+.panorama-accordion .astryx-collapsible-trigger:active {
+  background: var(--color-overlay-pressed);
+}
+
+/* 行已经贴到卡片边缘，光环朝外画会被列表滚动容器裁掉，改为画进行内。 */
+.panorama-accordion .astryx-collapsible-trigger:focus-visible {
+  outline-offset: calc(-1 * var(--focus-outline-width));
+}
+
+/* 触发器用负外边距把命中区撑满整行后，它的下内边距会压在第一个子行上：悬停底色
+   与子行背景重叠，那一小条也会变成折叠命中区。把内容区上内边距提到「一行内边距 +
+   子行间距」，子行就从悬停带下面让开，且间距与子行之间的间距一致。 */
+.panorama-accordion .astryx-collapsible-content {
+  padding-block-start: calc(var(--panorama-row-padding-block) + var(--spacing-2));
+}
+
+/* ==========================================================================
+   Summary Tab Refined Styling (辅助栏总结 Tab 高信息密度一体化样式)
+   ========================================================================== */
+
+/* Summary Main Scope Card */
+.summary-main-card {
+  background: var(--color-background-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-container);
+  padding: var(--spacing-3) var(--spacing-4);
+  box-shadow: var(--shadow-low);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+/* Status indicator badge */
+.summary-status-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-text-secondary);
+  opacity: 0.6;
+}
+
+/* Progress / stage pill */
+.summary-stage-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  background: rgba(var(--color-accent-rgb, 50, 117, 216), 0.1);
+  border: 1px solid rgba(var(--color-accent-rgb, 50, 117, 216), 0.2);
+  width: fit-content;
+}
+
+/* Markdown typography in summary tab.
+   阅读排版（用户反馈「辅助栏要读得舒服」）：总结常是长文，所以字号比正文略收
+   一点（16px × 0.9375 = 15px），行高则进一步放宽到 ~1.95（主题的
+   --text-body-leading 是 1.5，为 UI 文本设计，中文长段落远远不够）。
+   宽度**不设上限**：侧栏本身就是可拖拽调宽的，行宽由读者决定，正文占满可用宽度。
+
+   ⚠️ 字号/行高必须**逐个块级元素**声明，不能只写在容器上：主题的 `@layer reset`
+   里有 `:where(p) { font-size: var(--text-body-size); line-height: var(--text-body-leading) }`，
+   那是直接作用在 <p> 上的声明，而容器上的同名字号只是「继承」——继承永远输给直接
+   声明（与选择器特异性无关）。只改容器时，段落纹丝不动，只有 <li>（没有这条 reset）
+   跟着变，这就是「部分生效」的由来。 */
+.summary-markdown-wrapper {
+  background: var(--color-background-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-container);
+  padding: var(--spacing-4);
+  box-shadow: var(--shadow-low);
+}
+
+.summary-markdown-wrapper .markdown-content,
+.summary-markdown-wrapper .markdown-content p,
+.summary-markdown-wrapper .markdown-content li,
+.summary-markdown-wrapper .markdown-content blockquote,
+.summary-markdown-wrapper .markdown-content td,
+.summary-markdown-wrapper .markdown-content th {
+  font-size: calc(var(--font-size-base) * 0.9375);
+  line-height: calc(var(--text-body-leading) * 1.3);
+}
+
+.summary-markdown-wrapper .markdown-content {
+  letter-spacing: 0.01em;
+  /* 自适应：不设 max-width，占满侧栏可用宽度。 */
+  width: 100%;
+}
+
+.summary-markdown-wrapper .markdown-content p {
+  margin-block: 0 0.7em;
+}
+
+.summary-markdown-wrapper .markdown-content li {
+  margin-block: 0.35em;
+}
+
+.summary-markdown-wrapper .markdown-content h1,
+.summary-markdown-wrapper .markdown-content h2,
+.summary-markdown-wrapper .markdown-content h3 {
+  color: var(--color-text-primary);
+  border-bottom: none;
+}
+
+/* 三段式总结（核心要义 / 内容脉络 / 核心概念）每个小标题都开启一节：给足上方
+   留白，并用一条极轻的分隔线把「节」和「正文」分开。第一个标题不留白。 */
+.summary-markdown-wrapper .markdown-content h2,
+.summary-markdown-wrapper .markdown-content h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 1.35em;
+  margin-bottom: 0.55em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--color-border);
+  line-height: calc(var(--text-body-leading) * 1.05);
+}
+
+.summary-markdown-wrapper .markdown-content h2 {
+  font-size: 1.06em;
+}
+
+.summary-markdown-wrapper .markdown-content h3 {
+  font-size: 1em;
+}
+
+.summary-markdown-wrapper .markdown-content > :first-child,
+.summary-markdown-wrapper .markdown-content > div > :first-child {
+  margin-top: 0;
+}
+
+.summary-markdown-wrapper .markdown-content blockquote {
+  background: var(--color-background-muted);
+  border-inline-start: 3px solid var(--color-accent);
+  border-radius: 0 var(--radius-container) var(--radius-container) 0;
+  padding: var(--spacing-2) var(--spacing-3);
+  margin-block: 0.6em;
+}
+
+/* 伴读消息的阅读排版：气泡内正文与纯文本气泡统一放宽行高（消息密度高，行距是
+   可读性的主要来源），段落之间留出呼吸。同样必须逐个元素声明：`:where(p)` 的
+   reset 直接作用在段落上，只改容器对段落无效（见上方说明）。 */
+.chat-message-list .markdown-content,
+.chat-message-list .markdown-content p,
+.chat-message-list .markdown-content li,
+.chat-message-list .markdown-content blockquote,
+.chat-message-list .astryx-chat-message-bubble {
+  line-height: calc(var(--text-body-leading) * 1.15);
+}
+
+/* 一条消息里的三种信息，三种字号/字体档位（用户反馈：要能一眼区分）：
+     引用原文  14px 衬线阅读字体  ← 书里的话
+     我的提问  15px 无衬线 UI 字体
+     模型回答  16px 无衬线 UI 字体（.astryx-chat-message-bubble 的正文）
+   必须排在上面的 .chat-message-list 规则**之后**：两者特异性相同，靠顺序决出胜负；
+   字号同样要逐元素声明（reset 的 :where(p) 直接写在段落上）。 */
+.quote-block .markdown-content,
+.quote-block .markdown-content p,
+.quote-block .markdown-content li,
+.quote-block .markdown-content blockquote {
+  font-family: var(--font-family-heading);
+  font-size: calc(var(--font-size-base) * 0.875);
+  line-height: calc(var(--text-body-leading) * 1.1);
+  letter-spacing: 0.01em;
+}
+
+.chat-question {
+  font-size: calc(var(--font-size-base) * 0.9375);
+}
+
+/* 可折叠引用：触发器整行可点（Collapsible 自带 `all: unset`，所以命中区、
+   悬停底色、焦点环都补在这里）。左右不加内边距，让折叠标题和展开后的原文
+   左边缘对齐；纵向给一点内边距把命中区撑到 ~20px 高。 */
+.quote-block .astryx-collapsible-trigger {
+  padding-block: var(--spacing-1);
+  border-radius: var(--radius-tile);
+}
+
+.quote-block .astryx-collapsible-trigger:hover {
+  background: var(--color-overlay-hover);
+}
+
+.quote-block .astryx-collapsible-trigger:active {
+  background: var(--color-overlay-pressed);
+}
+
+.quote-block .astryx-collapsible-trigger:focus-visible {
+  outline-offset: calc(-1 * var(--focus-outline-width));
 }
 
 /* Slim token-colored scrollbars */

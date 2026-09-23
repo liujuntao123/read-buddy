@@ -46,11 +46,30 @@ const sectionNode = (
   indexStatus: 'pending',
 });
 
+/**
+ * A minimal **real** Book Node. `shapeOfNodes` takes the book's own node list
+ * since 候选 6 — a `{ depth, title }` projection no longer type-checks, which is
+ * the point: the shape must come from the model's list, never from whatever rows
+ * a caller happens to be holding.
+ */
+let fixtureIndex = 0;
+const shapeNode = (depth: number, title: string): BookNode => ({
+  nodeId: bookNodeId('shape', fixtureIndex),
+  bookHash: 'shape',
+  nodeIndex: fixtureIndex++,
+  title,
+  depth,
+  startOffset: 0,
+  endOffset: 0,
+  charCount: 0,
+  indexStatus: 'pending',
+});
+
 describe('shapeOfNodes', () => {
   it('reports a single-level book as chapters whose minimal node is a 章', () => {
     const shape = shapeOfNodes([
-      { depth: 0, title: '第一章 起点' },
-      { depth: 0, title: '第二章 转折' },
+      shapeNode(0, '第一章 起点'),
+      shapeNode(0, '第二章 转折'),
     ]);
 
     expect(shape).toMatchObject({ chapter: 2, section: 0, chunk: 0, total: 2, isNested: false });
@@ -59,9 +78,9 @@ describe('shapeOfNodes', () => {
 
   it('reports a 章/节 book with 节 as the minimal node', () => {
     const shape = shapeOfNodes([
-      { depth: 0, title: '第一部分 系统1，系统2' },
-      { depth: 1, title: '第1章 一张愤怒的脸' },
-      { depth: 1, title: '第2章 电影的主角与配角' },
+      shapeNode(0, '第一部分 系统1，系统2'),
+      shapeNode(1, '第1章 一张愤怒的脸'),
+      shapeNode(1, '第2章 电影的主角与配角'),
     ]);
 
     expect(shape).toMatchObject({ chapter: 1, section: 2, total: 3, isNested: true });
@@ -70,8 +89,8 @@ describe('shapeOfNodes', () => {
 
   it('reports fixed-length nodes as 段, not 章', () => {
     const shape = shapeOfNodes([
-      { depth: 0, title: '第 1 部分' },
-      { depth: 0, title: '第 2 部分' },
+      shapeNode(0, '第 1 部分'),
+      shapeNode(0, '第 2 部分'),
     ]);
 
     expect(shape).toMatchObject({ chapter: 0, section: 0, chunk: 2, total: 2 });
@@ -82,22 +101,22 @@ describe('shapeOfNodes', () => {
 describe('node-model formatters', () => {
   it('renders only the levels a book actually has', () => {
     expect(
-      formatNodeCounts(shapeOfNodes([{ depth: 0, title: '第一卷' }, { depth: 1, title: '第一章' }])),
+      formatNodeCounts(shapeOfNodes([shapeNode(0, '第一卷'), shapeNode(1, '第一章')])),
     ).toBe('1 章 · 1 节');
-    expect(formatNodeCounts(shapeOfNodes([{ depth: 0, title: '第一章' }]))).toBe('1 章');
+    expect(formatNodeCounts(shapeOfNodes([shapeNode(0, '第一章')]))).toBe('1 章');
     expect(formatNodeCounts(shapeOfNodes([]))).toBe('尚无节点');
   });
 
   it('prefixes the whole-book scale and names progress after the minimal node', () => {
     const nested = shapeOfNodes([
-      { depth: 0, title: '第一章 伦理与伦理学' },
-      { depth: 1, title: '§1 伦理学这个名称' },
-      { depth: 1, title: '§2 伦理与道德' },
+      shapeNode(0, '第一章 伦理与伦理学'),
+      shapeNode(1, '§1 伦理学这个名称'),
+      shapeNode(1, '§2 伦理与道德'),
     ]);
 
     expect(formatBookScale(nested)).toBe('全书 1 章 · 2 节');
     expect(formatProgress(nested, 3)).toBe('读至第 3 节');
-    expect(formatProgress(shapeOfNodes([{ depth: 0, title: '第一章' }]), 3)).toBe('读至第 3 章');
+    expect(formatProgress(shapeOfNodes([shapeNode(0, '第一章')]), 3)).toBe('读至第 3 章');
   });
 });
 

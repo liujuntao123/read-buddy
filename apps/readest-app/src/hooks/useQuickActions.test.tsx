@@ -35,7 +35,7 @@ describe('useQuickActions', () => {
     sendSpy.mockRestore();
   });
 
-  it('explain sends the preset prompt with the selection as quote', () => {
+  it('explain sends the instruction with the selection as quote only', () => {
     const sendSpy = vi.spyOn(useChatStore.getState(), 'send').mockResolvedValue(undefined);
     const dismiss = vi.fn();
 
@@ -43,9 +43,11 @@ describe('useQuickActions', () => {
     result.current('explain', '灯火在雾中摇曳', dismiss);
 
     expect(sendSpy).toHaveBeenCalledTimes(1);
-    const [prompt, quote] = sendSpy.mock.calls[0]!;
-    expect(prompt).toContain('请解释');
-    expect(prompt).toContain('灯火在雾中摇曳');
+    const [instruction, quote] = sendSpy.mock.calls[0]!;
+    expect(instruction).toContain('请解释');
+    // The passage is the quote, never repeated inside the message body — the
+    // bubble would otherwise show it a second time below the quote block.
+    expect(instruction).not.toContain('灯火在雾中摇曳');
     expect(quote).toBe('灯火在雾中摇曳');
     expect(useAISidebarStore.getState().activeTab).toBe('chat');
     expect(dismiss).toHaveBeenCalledTimes(1);

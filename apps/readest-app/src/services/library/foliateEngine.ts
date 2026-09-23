@@ -44,6 +44,49 @@ export interface FoliateViewElement extends HTMLElement {
   lastLocation?: FoliateLocation | null;
 }
 
+/**
+ * The subset of the vendored `<foliate-view>` this engine drives for presentation.
+ *
+ * **Declared, not asserted.** Every member is optional on purpose: the vendored
+ * `view.js` is not ours, and a Foliate bump may rename a setter or move it off
+ * `renderer`. Previously each call site probed with `?.` through its own
+ * `as unknown as { … }` cast, so such a bump produced a **silent no-op** — the
+ * reader simply kept the old layout, with no error and no test signal. Now the
+ * shape lives in one place and `presentationDiagnostics()` reports what actually
+ * reached the view.
+ */
+export interface FoliateVendorView {
+  setStyles?(styles: string): void;
+  renderer?: {
+    setStyles?(styles: string): void;
+    setAttribute?(name: string, value: string): void;
+    removeAttribute?(name: string): void;
+    render?(): void;
+  };
+  setMaxColumnCount?(count: number): void;
+  setFlow?(flow: string): void;
+  setMaxInlineSize?(px: number | string): void;
+  setMargin?(value: number | string): void;
+  setGap?(value: number | string): void;
+}
+
+/**
+ * How each presentation knob actually reached the vendored view.
+ *
+ * `unsupported` is the interesting list: a knob listed there means the reader is
+ * looking at stale presentation because neither the element setter nor the
+ * renderer-attribute fallback exists. It is empty for a view that honours either
+ * route, so it is a signal rather than noise.
+ */
+export interface PresentationDiagnostics {
+  /** Applied through the element's own setter. */
+  viaElement: string[];
+  /** Applied through `renderer.setAttribute` because no setter existed. */
+  viaRendererFallback: string[];
+  /** Reached neither route — stale presentation, silently, before this existed. */
+  unsupported: string[];
+}
+
 /** Section of a foliate book (spine item). */
 export interface FoliateSection {
   id?: string;
@@ -212,23 +255,53 @@ export interface FoliateEngineHandle {
   getCachedSpineText(index: number): string;
   getSpineTitle(index: number): string;
   readonly spineCount: number;
-  tocItems(): TocItem[];
   /** The book's own directory, resolved onto the physical spine. */
   tocEntries(): BookTocEntry[];
   /** Directory anchors located inside a spine section (empty when unknown). */
   getSpineAnchors(index: number): NodeAnchor[];
   currentLocation(): EngineLocation | null;
-  getCover?(): Promise<string | undefined>;
+  /**
+   * The book's cover as a data URL, or `undefined` when it has none. Required
+   * since 候选 4: whether a cover exists is a fact about the *book*, not about the
+   * engine's capabilities, and callers were testing for the method instead
+   * (`if (!book.cover && engine.getCover)`).
+   */
+  getCover(): Promise<string | undefined>;
   close(): void;
-  setTheme?(theme: ReaderTheme): void;
-  setPageMode?(mode: PageMode): void;
-  /** Apply page mode + column width + margins in one shot (see ReaderLayoutParams). */
-  setLayout?(params: ReaderLayoutParams): void;
-  /** Inject extra reader CSS (typography) — merged with the theme styles. */
-  setTypography?(css: string): void;
-  getTocIndex?(location: EngineLocation): number;
-  nextChapter?(): Promise<void>;
-  prevChapter?(): Promise<void>;
+  /**
+   * Apply the reader's presentation. **One** call replaces the four optional
+   * setters this handle used to carry (`setTheme` / `setPageMode` / `setLayout` /
+   * `setTypography`), which forced every caller to probe each one for existence and
+   * let the pane apply three of them in three separate effects — three render
+   * passes, and transient states where the theme had changed but the typography had
+   * not.
+   *
+   * Whether the vendored view can honour a knob is the engine's problem now, not
+   * the caller's: `presentationDiagnostics()` reports anything that reached
+   * neither the element setter nor the renderer fallback.
+   */
+  applyPresentation(patch: PresentationPatch): void;
+  /**
+   * What actually reached the vendored view on the last presentation apply.
+   * `unsupported` names the knobs that reached neither the element setter nor the
+   * renderer-attribute fallback — the reader is looking at stale presentation, and
+   * before this existed nothing said so.
+   */
+  presentationDiagnostics(): PresentationDiagnostics;
+}
+
+/**
+ * The presentation knobs, all optional: a patch updates what it names and leaves
+ * the rest of the engine's presentation state alone, so the reader can change the
+ * font size without re-stating the theme.
+ */
+export interface PresentationPatch {
+  /** Page mode + column width + margins (see `ReaderLayoutParams`). */
+  layout?: ReaderLayoutParams;
+  /** Reader typography CSS, merged with the theme stylesheet. */
+  typographyCss?: string;
+  /** Reading theme (light / sepia / dark). */
+  theme: ReaderTheme;
 }
 
 export interface FoliateEngineDeps {
@@ -509,6 +582,41 @@ export function createFoliateEngine(file: File, deps: FoliateEngineDeps = {}): F
   /** Theme + typography must share one stylesheet (paginator setStyles replaces it).
    *  App web fonts (LXGW WenKai) are prepended as absolute-url @font-face
    *  rules so chapter iframes can load them too (services/reader/webfonts). */
+  /**
+   * The one place a vendor cast happens. Everything the engine does to the
+   * vendored element's presentation goes through this accessor and the declared
+   * `FoliateVendorView` shape, so a renamed setter becomes a diagnostic instead of
+   * a mystery.
+   */
+  const vendor = (): FoliateVendorView | null => view as unknown as FoliateVendorView | null;
+
+  /** Latest presentation report, refreshed on every apply. */
+  let diagnostics: PresentationDiagnostics = {
+    viaElement: [],
+    viaRendererFallback: [],
+    unsupported: [],
+  };
+
+  /** Record which route carried one knob (idempotent per apply). */
+  const recordPresentation = (
+    knob: string,
+    viaElement: boolean,
+    viaFallback: boolean,
+  ): void => {
+    const keep = (list: string[]): string[] => list.filter((name) => name !== knob);
+    const viaElementList = keep(diagnostics.viaElement);
+    const viaFallbackList = keep(diagnostics.viaRendererFallback);
+    const unsupported = keep(diagnostics.unsupported);
+    if (viaElement) viaElementList.push(knob);
+    else if (viaFallback) viaFallbackList.push(knob);
+    else unsupported.push(knob);
+    diagnostics = { viaElement: viaElementList, viaRendererFallback: viaFallbackList, unsupported };
+  };
+
+  /**
+   * Theme + typography must share one stylesheet (paginator setStyles replaces it).
+   * App web fonts (LXGW WenKai) are prepended as absolute-url @font-face
+   * rules so chapter iframes can load them too (services/reader/webfonts). */
   const applyCurrentStyles = (): void => {
     const parts = [
       engineWebfontCss(),
@@ -516,12 +624,14 @@ export function createFoliateEngine(file: File, deps: FoliateEngineDeps = {}): F
       typographyCss,
     ].filter(Boolean);
     const css = parts.join('\n');
-    const anyView = view as unknown as {
-      setStyles?: (styles: string) => void;
-      renderer?: { setStyles?: (styles: string) => void };
-    };
-    anyView?.setStyles?.(css);
-    anyView?.renderer?.setStyles?.(css);
+    const v = vendor();
+    const viaElement = typeof v?.setStyles === 'function';
+    const viaRenderer = typeof v?.renderer?.setStyles === 'function';
+    if (viaElement) v!.setStyles!(css);
+    if (viaRenderer) v!.renderer!.setStyles!(css);
+    // Both routes are attempted (they differ by paginator build); the stylesheet
+    // counts as supported when either one accepted it.
+    recordPresentation('styles', viaElement, viaRenderer);
   };
 
   /** Backwards-compatible alias: theme only re-application. */
@@ -529,36 +639,44 @@ export function createFoliateEngine(file: File, deps: FoliateEngineDeps = {}): F
 
   const applyCurrentLayout = (): void => {
     const single = layout.pageMode === 'single';
-    const anyView = view as unknown as {
-      setMaxColumnCount?: (count: number) => void;
-      setFlow?: (flow: string) => void;
-      setMaxInlineSize?: (px: number | string) => void;
-      setGap?: (v: number | string) => void;
-      setMargin?: (v: number | string) => void;
-      renderer?: {
-        setAttribute?: (name: string, val: string) => void;
-        removeAttribute?: (name: string) => void;
-        render?: () => void;
-      };
-    };
     const columnCount = single ? 1 : 2;
     const flow = single ? 'scrolled' : 'paginated';
     const width = Math.round(layout.contentWidth);
     const margin = Math.round(layout.pageMargin);
     const gap = Math.round(layout.columnGap);
-    anyView?.setMaxColumnCount?.(columnCount);
-    anyView?.setFlow?.(flow);
-    anyView?.setMaxInlineSize?.(width);
-    anyView?.setMargin?.(margin);
-    anyView?.setGap?.(gap);
-    // Direct renderer fallback when the vendored View lacks the setters.
-    const r = anyView?.renderer;
-    r?.setAttribute?.('max-column-count', String(columnCount));
-    r?.setAttribute?.('flow', flow);
-    r?.setAttribute?.('max-inline-size', String(width));
-    r?.setAttribute?.('margin', String(margin));
-    r?.setAttribute?.('gap', String(gap));
-    r?.render?.();
+    const v = vendor();
+    const renderer = v?.renderer;
+    const viaRenderer = typeof renderer?.setAttribute === 'function';
+
+    /** Element setter when present, plus the renderer-attribute fallback. */
+    const applyKnob = (
+      attribute: string,
+      value: string | number,
+      setter: (() => void) | null,
+    ): void => {
+      if (setter) setter();
+      if (viaRenderer) renderer!.setAttribute!(attribute, String(value));
+      recordPresentation(attribute, setter !== null, viaRenderer);
+    };
+
+    applyKnob(
+      'max-column-count',
+      columnCount,
+      typeof v?.setMaxColumnCount === 'function' ? () => v!.setMaxColumnCount!(columnCount) : null,
+    );
+    applyKnob('flow', flow, typeof v?.setFlow === 'function' ? () => v!.setFlow!(flow) : null);
+    applyKnob(
+      'max-inline-size',
+      width,
+      typeof v?.setMaxInlineSize === 'function' ? () => v!.setMaxInlineSize!(width) : null,
+    );
+    applyKnob(
+      'margin',
+      margin,
+      typeof v?.setMargin === 'function' ? () => v!.setMargin!(margin) : null,
+    );
+    applyKnob('gap', gap, typeof v?.setGap === 'function' ? () => v!.setGap!(gap) : null);
+    renderer?.render?.();
   };
 
   const emitRelocate = (next: EngineLocation): void => {
@@ -688,96 +806,17 @@ export function createFoliateEngine(file: File, deps: FoliateEngineDeps = {}): F
     }
   };
 
-  const getTocIndex = (loc: EngineLocation): number => {
-    if (flatToc.length === 0) return -1;
-    if (loc.tocItemHref) {
-      const found = flatToc.findIndex((item) => item.href === loc.tocItemHref);
-      if (found >= 0) return found;
-    }
-    // Match by spine section index: find the first TOC entry matching loc.index
-    const firstMatch = flatToc.findIndex((_, idx) => tocIndexMap.get(idx) === loc.index);
-    if (firstMatch >= 0) return firstMatch;
-
-    // Fallback: latest TOC entry whose section <= loc.index
-    let best = -1;
-    for (let i = 0; i < flatToc.length; i++) {
-      const sIndex = tocIndexMap.get(i);
-      if (sIndex !== undefined && sIndex <= loc.index) {
-        best = i;
-      }
-    }
-    if (best >= 0) return best;
-    return 0;
-  };
-
-  const nextChapter = async () => {
-    if (!view || closed) return;
-    const currentLoc = location;
-    const currSec = currentLoc ? currentLoc.index : 0;
-    const currHref = currentLoc?.tocItemHref;
-
-    // 1. Try to advance via TOC items
-    if (flatToc.length > 0) {
-      const currTocIdx = currentLoc ? getTocIndex(currentLoc) : -1;
-      for (let i = Math.max(0, currTocIdx + 1); i < flatToc.length; i++) {
-        const item = flatToc[i]!;
-        const sIndex = tocIndexMap.get(i);
-        if (
-          (sIndex !== undefined && sIndex > currSec) ||
-          (item.href !== currHref && (!currHref || !item.href.startsWith(currHref.split('#')[0]!)))
-        ) {
-          await goToTarget(item.href);
-          return;
-        }
-      }
-    }
-
-    // 2. Otherwise advance spine section
-    const totalSec = book?.sections?.length ?? 0;
-    if (currSec < totalSec - 1) {
-      const nextSec = currSec + 1;
-      const tocItem = flatToc.find((_, idx) => tocIndexMap.get(idx) === nextSec);
-      if (tocItem) {
-        await goToTarget(tocItem.href);
-      } else {
-        await goToTarget(nextSec);
-      }
-    }
-  };
-
-  const prevChapter = async () => {
-    if (!view || closed) return;
-    const currentLoc = location;
-    const currSec = currentLoc ? currentLoc.index : 0;
-    const currHref = currentLoc?.tocItemHref;
-
-    // 1. Try to retreat via TOC items
-    if (flatToc.length > 0) {
-      const currTocIdx = currentLoc ? getTocIndex(currentLoc) : flatToc.length;
-      for (let i = Math.min(flatToc.length - 1, currTocIdx - 1); i >= 0; i--) {
-        const item = flatToc[i]!;
-        const sIndex = tocIndexMap.get(i);
-        if (
-          (sIndex !== undefined && sIndex < currSec) ||
-          (item.href !== currHref && (!currHref || !item.href.startsWith(currHref.split('#')[0]!)))
-        ) {
-          await goToTarget(item.href);
-          return;
-        }
-      }
-    }
-
-    // 2. Otherwise retreat spine section
-    if (currSec > 0) {
-      const prevSec = currSec - 1;
-      const tocItem = flatToc.find((_, idx) => tocIndexMap.get(idx) === prevSec);
-      if (tocItem) {
-        await goToTarget(tocItem.href);
-      } else {
-        await goToTarget(prevSec);
-      }
-    }
-  };
+  // `getTocIndex` used to live here: a three-step ladder (exact href → first row at
+  // this section → last row at or before it) that the reader dock duplicated. The
+  // ladder is now `resolveCurrentEntryIndex` in `services/reader/chapterNavigation`
+  // (候选 7), so the engine no longer exposes a second answer to "which row is the
+  // reader on".
+  //
+  // Chapter stepping is NOT re-exposed either (候选 4): 候选 7 moved the rule into
+  // the same module, and the reader dock drives it with this engine's
+  // `tocEntries()` + `currentLocation()` + `goTo()` as its adapter. An engine-side
+  // `nextChapter`/`prevChapter` had no callers left, and a second way to step is
+  // how the two rules drifted apart in the first place.
 
   return {
     get spineCount(): number {
@@ -836,30 +875,41 @@ export function createFoliateEngine(file: File, deps: FoliateEngineDeps = {}): F
     },
 
     goTo: goToTarget,
-    nextChapter,
-    prevChapter,
 
-    setTheme: (theme: ReaderTheme) => {
-      currentTheme = theme;
-      applyCurrentStyles();
+    /**
+     * One presentation apply. A patch updates only what it names, then re-applies
+     * the two halves that changed — styles (theme + typography, one stylesheet
+     * because the paginator replaces it wholesale) and layout (page mode +
+     * geometry). Callers no longer probe four optional setters, and the pane no
+     * longer applies them from three separate effects.
+     */
+    applyPresentation: (patch: PresentationPatch) => {
+      let restyle = false;
+      let relayout = false;
+      if (patch.theme !== currentTheme) {
+        currentTheme = patch.theme;
+        restyle = true;
+      }
+      if (patch.typographyCss !== undefined && patch.typographyCss !== typographyCss) {
+        typographyCss = patch.typographyCss;
+        restyle = true;
+      }
+      if (patch.layout) {
+        layout = { ...layout, ...patch.layout };
+        relayout = true;
+      }
+      // Styles first: a page-mode flip changes the geometry the column rules apply
+      // to, so the stylesheet should already be in place.
+      if (restyle) applyCurrentStyles();
+      if (relayout) applyCurrentLayout();
     },
 
-    setPageMode: (mode: PageMode) => {
-      layout = { ...layout, pageMode: mode };
-      applyCurrentLayout();
-    },
+    presentationDiagnostics: () => ({
+      viaElement: [...diagnostics.viaElement],
+      viaRendererFallback: [...diagnostics.viaRendererFallback],
+      unsupported: [...diagnostics.unsupported],
+    }),
 
-    setLayout: (params: ReaderLayoutParams) => {
-      layout = { ...layout, ...params };
-      applyCurrentLayout();
-    },
-
-    setTypography: (css: string) => {
-      typographyCss = css;
-      applyCurrentStyles();
-    },
-
-    getTocIndex,
 
     goToFraction: async (fraction: number) => {
       if (!view || closed) return;
@@ -891,7 +941,6 @@ export function createFoliateEngine(file: File, deps: FoliateEngineDeps = {}): F
 
     getSpineTitle: (index: number) => labelByIndex.get(index) ?? FALLBACK_SECTION_TITLE(index),
 
-    tocItems: () => flatToc.map((item) => ({ ...item })),
 
     tocEntries,
 
@@ -941,27 +990,29 @@ export function createFoliateEngine(file: File, deps: FoliateEngineDeps = {}): F
 
 /**
  * Adapt an (opened) engine into the OpenedBookContent shape consumed by the
- * AI features (nodeSource resolves through the registry).
+ * AI features (the Node View resolves through the registry).
  *
- * `getSpineHtml` is synchronous while section loading is async, so it
- * returns whatever the engine has cached — the current chapter is always
- * cached (the engine warms it on every `load`/`relocate`); a chapter the
- * user never visited yields '' and the summary guard shows its hint.
+ * `getSpineHtml` is the *display* path and stays synchronous, so it returns
+ * whatever the engine has cached — the current chapter is always cached (the
+ * engine warms it on every `load`/`relocate`); a chapter the reader never
+ * visited yields `''`. `getSpineText` is the *text* path and always loads, so a
+ * caller asking for a section's text gets it without having to know whether the
+ * reader has been there (候选 8).
  */
 export function engineToContent(engine: FoliateEngineHandle, hash: string): OpenedBookContent {
   return {
     bookHash: hash,
+    kind: 'engine',
     spineCount: engine.spineCount,
     getSpineTitle: (index) => engine.getSpineTitle(index),
     getSpineHtml: (index) => engine.getCachedSpineHtml(index),
-    getSpineText: (index) => engine.getCachedSpineText(index),
-    // Loads the section through the engine (prepare→createDocument) even
-    // when the reader has never visited it — the import pipeline needs the
-    // full spine text up front for segmentation and offsets.
-    getSpineTextAsync: (index) => engine.getSpineText(index),
-    // The directory + its intra-section anchors, for the node importer.
+    // Loads the section through the engine (prepare→createDocument) even when the
+    // reader has never visited it — the import pipeline needs the full spine text
+    // up front for segmentation and offsets.
+    getSpineText: (index) => engine.getSpineText(index),
+    // Engine books are never monolithic: the spine is real.
+    getMonolithicText: () => undefined,
     getTocEntries: () => engine.tocEntries(),
     getSpineAnchors: (index) => engine.getSpineAnchors(index),
-    // Engine books are never monolithic; segmentation stays TXT-only.
   };
 }

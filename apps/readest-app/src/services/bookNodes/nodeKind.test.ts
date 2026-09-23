@@ -1,11 +1,49 @@
 import { describe, expect, it } from 'vitest';
 import {
+  FIXED_PART_PATTERN,
+  classifyHeadingLevel,
   formatNavLabel,
   formatNodeOrdinal,
   nodeKindLabel,
+  placeholderTitle,
   resolveNodeKind,
+  semanticDepthOf,
   stampDepths,
 } from './nodeKind';
+
+describe('classifyHeadingLevel', () => {
+  it('classifies 卷/部/篇 as 章-level containers and 章/回/节 as leaves', () => {
+    expect(classifyHeadingLevel('第一卷 风云')).toBe('container');
+    expect(classifyHeadingLevel('第二部')).toBe('container');
+    expect(classifyHeadingLevel('上部')).toBe('container');
+    expect(classifyHeadingLevel('正篇')).toBe('container');
+    expect(classifyHeadingLevel('Part II')).toBe('container');
+    expect(classifyHeadingLevel('第一章 风起')).toBe('leaf');
+    expect(classifyHeadingLevel('第二回')).toBe('leaf');
+    expect(classifyHeadingLevel('第三节')).toBe('leaf');
+    expect(classifyHeadingLevel('Chapter 3')).toBe('leaf');
+    expect(classifyHeadingLevel('序言')).toBeNull();
+    expect(classifyHeadingLevel('1. 绪论')).toBeNull();
+    expect(classifyHeadingLevel('第 3 部分')).toBeNull();
+  });
+
+  it('treats a NAMED 部分 heading as a container (《看见孩子》/《思考快与慢》)', () => {
+    // 「第一部分」 ends in 分, so a bare [卷部篇] character class never matched
+    // it and these two books stayed flat at depth 0.
+    expect(classifyHeadingLevel('第一部分 系统1，系统2')).toBe('container');
+    expect(classifyHeadingLevel('第二部分 启发法与偏见')).toBe('container');
+    expect(classifyHeadingLevel('第1部分 贝姬医生的育儿准则')).toBe('container');
+    expect(classifyHeadingLevel('第2部分 建立亲密感，改善行为')).toBe('container');
+    expect(classifyHeadingLevel('第三部分')).toBe('container');
+    // Still leaf-ish / signals: 章 and the book-specific 准则/实战 series.
+    expect(classifyHeadingLevel('第1章 一张愤怒的脸和一道乘法题')).toBe('leaf');
+    expect(classifyHeadingLevel('准则2 真相不唯一')).toBeNull();
+    expect(classifyHeadingLevel('实战2 孩子不听话（或者说，不合作）怎么办？')).toBeNull();
+    // The Level-3 synthetic chunk title must NOT become a container.
+    expect(FIXED_PART_PATTERN.test('第 3 部分')).toBe(true);
+    expect(FIXED_PART_PATTERN.test('第1部分 贝姬医生的育儿准则')).toBe(false);
+  });
+});
 
 describe('resolveNodeKind', () => {
   it('maps depth 0 to 章 and depth 1 to 节', () => {
@@ -29,6 +67,24 @@ describe('level wording', () => {
     expect(formatNodeOrdinal('section', 3)).toBe('第 3 节');
     expect(formatNavLabel('section', 'prev')).toBe('上一节');
     expect(formatNavLabel('chapter', 'next')).toBe('下一章');
+  });
+
+  it('owns the placeholder title for a node the book never named', () => {
+    // The segmenter, the engine and the parsers all used to synthesize a level
+    // word for an unnamed node; the engine's version was even fed back into the
+    // classifier as if it were a directory title (ADR 0010 ¶1).
+    expect(placeholderTitle('section', 3)).toBe('第 3 节');
+    expect(placeholderTitle('chapter', 7)).toBe('第 7 章');
+    expect(placeholderTitle('chunk', 2)).toBe('第 2 段');
+  });
+});
+
+describe('semanticDepthOf', () => {
+  it('promotes a leaf title only when a container precedes it', () => {
+    expect(semanticDepthOf('第一章 风起', true)).toBe(1);
+    expect(semanticDepthOf('第一章 风起', false)).toBe(0);
+    expect(semanticDepthOf('第一卷 风云', true)).toBe(0);
+    expect(semanticDepthOf('序言', true)).toBe(0);
   });
 });
 

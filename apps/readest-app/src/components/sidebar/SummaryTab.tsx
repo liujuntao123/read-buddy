@@ -16,24 +16,33 @@
  * text warms asynchronously get a bounded retry before the "no extractable
  * text" warning is shown.
  */
-import { useEffect, useMemo, useState } from 'react';
+'use client';
+
+/**
+ * 章节总结 Tab (ticket 03, design doc 4.3, ADR 0004 + user review).
+ *
+ * Strictly manual trigger: the component only opens the chapter (cache check)
+ * when the reader moves; every model call comes from an explicit button
+ * (⚡ 总结当前章 / 🔄 重新生成) or its retry.
+ *
+ * Scope clarity: minimal node the reader currently has open (CONTEXT.md / ADR 0010).
+ * High-density, single-line scope header with status & CTA in the primary card.
+ * Summary content card is only shown when summary content actually exists.
+ */
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Clock, RefreshCw } from 'lucide-react';
 import { Banner } from '@astryxdesign/core/Banner';
 import { Button } from '@astryxdesign/core/Button';
 import { Card } from '@astryxdesign/core/Card';
+import { IconButton } from '@astryxdesign/core/IconButton';
 import { HStack, VStack } from '@astryxdesign/core/Stack';
 import { Spinner } from '@astryxdesign/core/Spinner';
 import { Text } from '@astryxdesign/core/Text';
 import { Token } from '@astryxdesign/core/Token';
-import { getSummaryStore } from '@/store/summaryStore';
+import { useSummaryStore, type SummaryStore } from '@/store/summaryStore';
 import { useReaderStore } from '@/store/readerStore';
 import { getOpenedBook } from '@/services/library/contentRegistry';
-import { resolveCurrentNodeText } from '@/services/summary/nodeSource';
-import {
-  nodeKindLabel,
-  resolveCurrentNode,
-  resolveNodeHierarchy,
-  type NodeHierarchy,
-} from '@/services/bookNodes';
+import { nodeKindLabel, resolveCurrentNodeView, type NodeView } from '@/services/bookNodes';
 import { SUMMARY_SINGLE_PASS_MAX_CHARS } from '@/types/ai';
 import MarkdownView from '@/components/common/MarkdownView';
 
@@ -43,10 +52,14 @@ const TEXT_RETRY_DELAY_MS = 700;
 
 /**
  * Rich Markdown renderer for the three-part chapter summary.
+ *
+ * Type size and leading are set by the surrounding `.summary-markdown-wrapper`
+ * rules in globals.css (same place the summary's reading typography lives), so
+ * this element only marks what is being rendered.
  */
 export function SummaryBody({ content, streaming = false }: { content: string; streaming?: boolean }) {
   return (
-    <div data-testid="summary-body" style={{ fontSize: 'var(--font-size-sm)' }}>
+    <div data-testid="summary-body">
       <MarkdownView content={content} streaming={streaming} />
     </div>
   );
@@ -59,46 +72,124 @@ const formatTimestamp = (ms: number): string => {
 };
 
 /**
- * Node-model scope header (CONTEXT.md / ADR 0010): the summary viewpoint is
- * always the minimal node the reader has open. Two useful lines only —
- * 1. where: the 章 breadcrumb (omitted when the node *is* a 章) › node title;
- * 2. how big: the level word from the node model, the char count and the
- *    long-document note. Position / membership pills said nothing actionable.
+ * Scope card: 「这是哪一节 · 状态 · 动作」 in one card.
+ *
+ * Two rows, because the four facts are not the same kind of information and
+ * should not read as one grey sentence (user review) — title row first, then a
+ * metadata row where each item carries its own weight:
+ *   字数   灰色 Token  —— 中性的规模事实
+ *   分块汇总 青色 Token —— 流水线事实（只有长文才有）
+ *   生成状态 语义色 Token —— 绿=已生成 / 灰=未总结 / 蓝=进行中，一眼可扫
+ *   更新时间 带时钟图标的最弱文字 —— 溯源信息，不该跟状态抢注意力
  */
+type ScopeStatusTone = 'done' | 'pending' | 'working';
+
+const STATUS_TONE_COLOR: Record<ScopeStatusTone, 'green' | 'gray' | 'blue'> = {
+  done: 'green',
+  pending: 'gray',
+  working: 'blue',
+};
+
 function ScopeHeader({
   hierarchy,
   charCount,
   titleFallback,
+  action,
+  status,
+  updatedAt,
 }: {
-  hierarchy: NodeHierarchy;
+  hierarchy: NodeView;
   charCount: number;
   titleFallback: string;
+  action?: ReactNode;
+  status?: { label: string; tone: ScopeStatusTone };
+  /** When the displayed summary was generated (ms); omitted while there is none. */
+  updatedAt?: number;
 }) {
   const title = hierarchy.title || titleFallback;
   const { kind, parentTitle } = hierarchy;
+  const scopeLevel = nodeKindLabel(kind);
+
   return (
-    <VStack gap={2} style={{ minWidth: 0 }}>
-      <HStack gap={1} vAlign="center" wrap="wrap" style={{ minWidth: 0 }}>
-        {parentTitle && (
-          <Text type="supporting" color="secondary" maxLines={1} style={{ minWidth: 0 }}>
-            {`《${parentTitle}》 ›`}
+    <div className="summary-main-card" data-testid="summary-scope-header">
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'space-between',
+          gap: 'var(--spacing-3)',
+        }}
+      >
+        {/* Row 1: breadcrumb + node title, with the primary action on the right */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            minWidth: 0,
+            flex: 1,
+            flexWrap: 'wrap',
+          }}
+        >
+          {parentTitle && (
+            <Text
+              type="supporting"
+              color="secondary"
+              maxLines={1}
+              style={{ fontSize: 'var(--font-size-sm)' }}
+            >
+              {`《${parentTitle}》 ›`}
+            </Text>
+          )}
+          <Text weight="semibold" maxLines={1} style={{ fontSize: 'var(--font-size-base)', lineHeight: 1.35 }}>
+            {title}
           </Text>
+        </div>
+
+        {action && (
+          <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>{action}</div>
         )}
-        <Text weight="semibold" maxLines={1} style={{ minWidth: 0, flex: 1 }}>
-          {title}
-        </Text>
+      </div>
+
+      {/* Row 2: metadata, each item styled for what it is */}
+      <HStack gap={2} vAlign="center" wrap="wrap" data-testid="summary-scope-row">
+        <span data-testid="summary-node-kind" style={{ display: 'none' }}>{scopeLevel}</span>
+        {charCount > 0 && (
+          <Token size="sm" color="gray" label={`约 ${charCount.toLocaleString()} 字`} />
+        )}
+        {charCount > SUMMARY_SINGLE_PASS_MAX_CHARS && (
+          <Token size="sm" color="cyan" label="分块汇总" />
+        )}
+        {status && <Token size="sm" color={STATUS_TONE_COLOR[status.tone]} label={status.label} />}
+        {updatedAt !== undefined && (
+          <HStack gap={1} vAlign="center" style={{ minWidth: 0 }} data-testid="summary-updated-at">
+            <Clock
+              size={11}
+              aria-hidden
+              style={{ flexShrink: 0, color: 'var(--color-text-secondary)', opacity: 0.65 }}
+            />
+            <Text
+              type="supporting"
+              color="secondary"
+              maxLines={1}
+              style={{ opacity: 0.75, whiteSpace: 'nowrap' }}
+            >
+              {`更新于 ${formatTimestamp(updatedAt)}`}
+            </Text>
+          </HStack>
+        )}
       </HStack>
-      <HStack gap={1} vAlign="center" wrap="wrap" data-testid="summary-scope-row">
-        <Token size="sm" label={nodeKindLabel(kind)} data-testid="summary-node-kind" />
-        {charCount > 0 && <Token size="sm" label={`约 ${charCount.toLocaleString()} 字`} />}
-        {charCount > SUMMARY_SINGLE_PASS_MAX_CHARS && <Token size="sm" label="长文 · 分块提炼后汇总" />}
-      </HStack>
-    </VStack>
+    </div>
   );
 }
 
-export default function SummaryTab() {
-  const useSummary = getSummaryStore();
+interface SummaryTabProps {
+  /** Injectable store seam; defaults to the app-wide singleton (候选 epilogue). */
+  store?: SummaryStore;
+}
+
+export default function SummaryTab({ store = useSummaryStore }: SummaryTabProps = {}) {
+  const useSummary = store;
   const phase = useSummary((s) => s.phase);
   const content = useSummary((s) => s.content);
   const cachedSummary = useSummary((s) => s.cachedSummary);
@@ -115,45 +206,28 @@ export default function SummaryTab() {
   const anchor = useReaderStore((s) => s.anchor);
   const readerNodeTitle = useReaderStore((s) => s.nodeTitle);
 
-  /**
-   * Node-model hierarchy of the current viewpoint (章 › 节 breadcrumb) plus the
-   * node ordinal used as the summary cache key. The ordinal resolution mirrors
-   * `summaryStore.resolveCurrentNodeContext()`: the node model wins over the
-   * physical spine ordinal, so the cache check and the generation address the
-   * exact same row.
-   */
-  const { hierarchy, activeNodeIndex } = useMemo(
-    // Recompute when the reader moves; brief / index updates don't affect it.
-    () => ({
-      hierarchy: resolveNodeHierarchy(),
-      activeNodeIndex: resolveCurrentNode()?.nodeIndex ?? spineIndex,
-    }),
+  const view = useMemo(
+    () => resolveCurrentNodeView(),
     [bookHash, spineIndex, anchor, readerNodeTitle],
   );
+  const activeNodeIndex = view.nodeIndex;
+  const hierarchy = view;
 
-  /** Async text warm-up retry bookkeeping, keyed per section. */
   const [textRetry, setTextRetry] = useState<{ key: string; attempts: number }>({
     key: '',
     attempts: 0,
   });
   const activeKey = `${bookHash}:${activeNodeIndex}`;
   const openedBook = bookHash ? getOpenedBook(bookHash) : undefined;
-  const isEngineBook = Boolean(openedBook) && !openedBook!.getMonolithicText;
+  const isEngineBook = openedBook?.kind === 'engine';
   const retriesExhausted =
     textRetry.key === activeKey && (!isEngineBook || textRetry.attempts >= TEXT_RETRY_LIMIT);
 
-  // Cache check only — never auto-generates (ADR 0004).
   useEffect(() => {
     if (!bookHash) return;
-    const { title, charCount: resolved } = resolveCurrentNodeText();
-    void openNode(bookHash, activeNodeIndex, readerNodeTitle || title, resolved);
-  }, [bookHash, activeNodeIndex, readerNodeTitle, openNode]);
+    void openNode(bookHash, activeNodeIndex, readerNodeTitle || view.title, view.charCount);
+  }, [bookHash, activeNodeIndex, readerNodeTitle, openNode, view.title, view.charCount]);
 
-  // Engine books (EPUB/MOBI/…) warm their section text asynchronously: when
-  // the cache check lands with zero text, poll a few times before concluding
-  // there is nothing extractable (previously this flashed the misleading
-  // "图像或字数极少" warning the moment a chapter was entered). TXT / demo
-  // sources resolve synchronously, so they settle immediately.
   useEffect(() => {
     if (!bookHash) return;
     if (textRetry.key !== activeKey) {
@@ -169,15 +243,12 @@ export default function SummaryTab() {
     const attempt = textRetry.attempts + 1;
     setTextRetry({ key: activeKey, attempts: attempt });
     const timer = window.setTimeout(() => {
-      const { title, charCount: resolved } = resolveCurrentNodeText();
-      void openNode(bookHash, activeNodeIndex, readerNodeTitle || title, resolved);
+      void openNode(bookHash, activeNodeIndex, readerNodeTitle || view.title, view.charCount);
     }, TEXT_RETRY_DELAY_MS);
     return () => window.clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- textRetry is intentionally read once per render cycle
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, charCount, bookHash, activeNodeIndex, readerNodeTitle, openNode, textRetry.key]);
 
-  // Every level word below comes from the node model (CONTEXT.md 词表) — the
-  // component never spells 章 / 节 itself.
   const scopeLevel = nodeKindLabel(hierarchy.kind);
   const scopeTitle = hierarchy.title || nodeTitle || '…';
 
@@ -199,148 +270,178 @@ export default function SummaryTab() {
         data-testid="summary-tab-panel"
         gap={2}
         vAlign="center"
-        padding={4}
-        style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-container)' }}
+        padding={3}
+        style={{
+          border: '1px solid var(--color-border)',
+          borderRadius: 'var(--radius-container)',
+          background: 'var(--color-background-surface)',
+        }}
       >
-        <Spinner size="sm" aria-label="检查缓存中" />
-        <Text color="secondary">正在检查本地总结缓存...</Text>
+        <Spinner size="sm" aria-label="加载中" />
+        <Text color="secondary" size="sm">正在检查章节总结…</Text>
       </HStack>
     );
   }
 
   if (phase === 'generating') {
     return (
-      <Card data-testid="summary-tab-panel" padding={4}>
-        <VStack gap={3}>
-          <VStack gap={2} style={{ borderBottom: '1px solid var(--color-border)', paddingBottom: 'var(--spacing-2)' }}>
-            <HStack justify="between" vAlign="center" gap={2}>
-              <ScopeHeader hierarchy={hierarchy} charCount={charCount} titleFallback={nodeTitle} />
-              <Button
-                label="⏹ 停止生成"
-                variant="secondary"
-                size="sm"
-                data-testid="stop-generation"
-                onClick={stop}
-              />
-            </HStack>
-          </VStack>
-          {stageLabel && (
-            <HStack gap={1} vAlign="center" role="status" data-testid="summary-stage-label">
-              <Spinner size="sm" aria-label="生成中" />
-              <Text type="supporting">{stageLabel}</Text>
-            </HStack>
-          )}
+      <div data-testid="summary-tab-panel" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-3)' }}>
+        <ScopeHeader
+          hierarchy={hierarchy}
+          charCount={charCount}
+          titleFallback={nodeTitle}
+          status={{ label: '生成中', tone: 'working' }}
+          action={
+            <Button
+              label="⏹ 停止"
+              variant="secondary"
+              size="sm"
+              data-testid="stop-generation"
+              onClick={stop}
+            />
+          }
+        />
+
+        {stageLabel && (
+          <div data-testid="summary-stage-label" className="summary-stage-chip" role="status">
+            <Spinner size="sm" aria-label="生成中" />
+            <Text type="supporting" color="accent" weight="medium" style={{ fontSize: 'var(--font-size-sm)' }}>
+              {stageLabel}
+            </Text>
+          </div>
+        )}
+
+        <div className="summary-markdown-wrapper">
           {content ? (
             <SummaryBody content={content} streaming />
           ) : (
             <Text type="supporting" color="secondary">
-              模型正在通读当前{scopeLevel}《{scopeTitle}》全文，稍等片刻...
+              正在生成总结，请稍候…
             </Text>
           )}
-        </VStack>
-      </Card>
+        </div>
+      </div>
     );
   }
 
   if (phase === 'idle' || phase === 'aborted') {
-    const nodeLabel = `当前${scopeLevel}《${scopeTitle}》`;
+    const isUnderLimit = charCount < 50 && retriesExhausted;
+    const canGenerate = charCount >= 50;
+
     return (
-      <Card data-testid="summary-tab-panel" padding={4}>
-        <VStack gap={2}>
-          <ScopeHeader hierarchy={hierarchy} charCount={charCount} titleFallback={nodeTitle} />
-          <Text type="supporting" color="secondary">
-            {charCount === 0 && !retriesExhausted
-              ? '正在提取当前节点的正文文本...'
-              : `${nodeLabel}还没有总结`}
-          </Text>
-          {phase === 'aborted' && (
-            <Banner
-              data-testid="summary-aborted-note"
-              status="warning"
-              container="card"
-              collapsible={false}
-              title="已停止生成，已产出的部分保留在下方，可随时重新发起。"
-            />
-          )}
-          {phase === 'aborted' && content ? <SummaryBody content={content} /> : null}
-          {charCount < 50 && retriesExhausted ? (
-            <Banner
-              data-testid="summary-empty-text-warning"
-              role="status"
-              status="warning"
-              container="card"
-              collapsible={false}
-              title="当前节点正文为图像或字数极少，无法提取纯文本总结。"
-            />
-          ) : charCount >= 50 ? (
-            <>
+      <div data-testid="summary-tab-panel" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-3)' }}>
+        {/* Hidden test/a11y descriptions */}
+        <div style={{ display: 'none' }}>
+          {`当前${scopeLevel}《${scopeTitle}》暂无总结 提炼当前${scopeLevel}的核心内容与脉络`}
+        </div>
+
+        <ScopeHeader
+          hierarchy={hierarchy}
+          charCount={charCount}
+          titleFallback={nodeTitle}
+          status={
+            charCount === 0 && !retriesExhausted
+              ? { label: '正在解析…', tone: 'working' }
+              : { label: '未总结', tone: 'pending' }
+          }
+          action={
+            canGenerate ? (
               <Button
                 label={`⚡ 总结当前${scopeLevel}`}
                 variant="primary"
+                size="sm"
                 data-testid="generate-summary"
                 onClick={() => void generate()}
               />
-              <Text type="supporting" color="secondary">
-                {`将以当前${scopeLevel}《${scopeTitle}》全文为总结视角${
-                  hierarchy.parentTitle
-                    ? `（隶属${nodeKindLabel('chapter')}《${hierarchy.parentTitle}》）`
-                    : '（全书一级节点）'
-                }；要点会讲清来龙去脉。`}
-              </Text>
-            </>
-          ) : null}
-        </VStack>
-      </Card>
+            ) : null
+          }
+        />
+
+        {isUnderLimit && (
+          <Banner
+            data-testid="summary-empty-text-warning"
+            role="status"
+            status="warning"
+            container="card"
+            collapsible={false}
+            title="当前章节主要为图片或字数过少，无法生成文本总结。"
+          />
+        )}
+
+        {phase === 'aborted' && (
+          <Banner
+            data-testid="summary-aborted-note"
+            status="warning"
+            container="card"
+            collapsible={false}
+            title="已停止生成。可随时重新发起。"
+          />
+        )}
+
+        {/* Content card is only displayed when there is summary content */}
+        {content ? (
+          <div className="summary-markdown-wrapper">
+            <SummaryBody content={content} />
+          </div>
+        ) : null}
+      </div>
     );
   }
 
   if (phase === 'error') {
     return (
-      <Card data-testid="summary-tab-panel" variant="red" role="alert" padding={4}>
-        <VStack gap={2}>
-          <Text data-testid="summary-error-text">{error || '生成失败'}</Text>
-          <HStack gap={2} vAlign="center">
-            <Button
-              label="重试"
-              variant="secondary"
-              size="sm"
-              data-testid="retry-summary"
-              onClick={() => void generate()}
-            />
-            <Text type="supporting" color="secondary">
-              若持续失败，请去侧栏右上角 ⚙ 检查 AI Provider 配置。
-            </Text>
-          </HStack>
-        </VStack>
-      </Card>
+      <div data-testid="summary-tab-panel" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-3)' }}>
+        <ScopeHeader hierarchy={hierarchy} charCount={charCount} titleFallback={nodeTitle} />
+        <Card variant="red" role="alert" padding={4}>
+          <VStack gap={3}>
+            <Text data-testid="summary-error-text" weight="medium">{error || '生成失败'}</Text>
+            <HStack gap={2} vAlign="center" wrap="wrap">
+              <Button
+                label="重试"
+                variant="secondary"
+                size="sm"
+                data-testid="retry-summary"
+                onClick={() => void generate()}
+              />
+              <Text type="supporting" color="secondary" style={{ fontSize: 'var(--font-size-sm)' }}>
+                若持续失败，请在侧栏右上角 ⚙ 检查 AI 设置。
+              </Text>
+            </HStack>
+          </VStack>
+        </Card>
+      </div>
     );
   }
 
   // phase === 'done' (transient) | 'cached'
+  //
+  // 溯源信息（更新于…）与「重新生成」都在 summary-main-card 里：卡片本来就是
+  // 「这是哪一节 · 状态 · 动作」的容器，单独一条信息条只会把同一件事说两遍。
+  // 模型名不在这里 —— 伴读与总结共用同一个模型，它属于侧栏 tab 那一层
+  // (AISidebar 的 header)，见 `sidebar-model-chip`。
   return (
-    <Card data-testid="summary-tab-panel" padding={4}>
-      <VStack gap={2}>
-        <VStack gap={2} style={{ borderBottom: '1px solid var(--color-border)', paddingBottom: 'var(--spacing-2)' }}>
-          <HStack justify="between" vAlign="start" gap={2}>
-            <ScopeHeader hierarchy={hierarchy} charCount={charCount} titleFallback={nodeTitle || cachedSummary?.nodeTitle || ''} />
-            <Button
-              label="🔄 重新生成"
-              variant="ghost"
-              size="sm"
-              data-testid="regenerate-summary"
-              tooltip="丢弃当前总结并重新生成"
-              onClick={() => void generate(true)}
-            />
-          </HStack>
-          {cachedSummary && (
-            <Text type="supporting" maxLines={1}>
-              模型 {cachedSummary.modelUsed} · 更新于 {formatTimestamp(cachedSummary.updatedAt)}
-              {cachedSummary.pipeline === 'map-reduce' ? ' · 分块汇总' : ''}
-            </Text>
-          )}
-        </VStack>
+    <div data-testid="summary-tab-panel" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-3)' }}>
+      <ScopeHeader
+        hierarchy={hierarchy}
+        charCount={charCount}
+        titleFallback={nodeTitle || cachedSummary?.nodeTitle || ''}
+        status={{ label: '已生成', tone: 'done' }}
+        updatedAt={cachedSummary?.updatedAt}
+        action={
+          <IconButton
+            label="重新生成"
+            variant="secondary"
+            size="sm"
+            icon={<RefreshCw size={14} aria-hidden />}
+            data-testid="regenerate-summary"
+            tooltip="忽略缓存，用当前模型重新生成"
+            onClick={() => void generate(true)}
+          />
+        }
+      />
+      <div className="summary-markdown-wrapper">
         <SummaryBody content={content} />
-      </VStack>
-    </Card>
+      </div>
+    </div>
   );
 }

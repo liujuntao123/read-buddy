@@ -4,7 +4,7 @@
  * fixed-length chunks, ticket 02) turns the monolithic text into virtual
  * chapters; the AI side consumes it through `getMonolithicText`.
  */
-import type { ParsedBook } from './epubParser';
+import type { BookTocEntry, NodeAnchor } from '@/types/readingAgent';
 
 /** Share of U+FFFD replacement chars above which we assume a non-UTF-8 encoding. */
 const REPLACEMENT_RATIO_THRESHOLD = 0.02;
@@ -30,6 +30,28 @@ export function decodeTxt(data: ArrayBuffer): string {
   } catch {
     return utf8;
   }
+}
+
+/**
+ * Book shape a text parser hands back: `OpenedBookContent` minus `bookHash`.
+ *
+ * It lives here because a TXT book is the only source that still goes through a
+ * parser at open time — EPUB/MOBI/FB2/CBZ are read by the Foliate engine and their
+ * import metadata comes from `readEpubMetadata` (候选 9).
+ */
+export interface ParsedBook {
+  title: string;
+  author?: string;
+  cover?: string;
+  spineCount: number;
+  getSpineTitle(index: number): string;
+  getSpineHtml(index: number): string;
+  /** Plain text of a section; always loads (see `OpenedBookContent`). */
+  getSpineText(index: number): Promise<string>;
+  /** The book's own directory, resolved onto the physical spine (may be empty). */
+  getTocEntries(): BookTocEntry[];
+  /** Directory anchors located inside a spine section (may be empty). */
+  getSpineAnchors(index: number): NodeAnchor[];
 }
 
 /** A TXT book: one raw section plus the monolithic full text. */
@@ -60,7 +82,7 @@ export function parseTxt(data: ArrayBuffer, hash: string, fallbackTitle: string)
         .filter(Boolean)
         .map((line) => `<p>${escapeHtml(line)}</p>`)
         .join('\n'),
-    getSpineText: () => fullText,
+    getSpineText: async () => fullText,
     getMonolithicText: () => fullText,
     // A TXT book ships no directory, so the node model falls back to regex /
     // fixed-length segmentation over the monolithic text.

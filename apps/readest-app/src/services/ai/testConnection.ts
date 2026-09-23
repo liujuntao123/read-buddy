@@ -1,4 +1,5 @@
 import type { AISettings } from '@/types/ai';
+import { modelsEndpointHeaders, modelsEndpointUrl } from './modelsEndpoint';
 
 export interface TestConnectionResult {
   ok: boolean;
@@ -17,19 +18,13 @@ export async function testConnection(
   settings: AISettings,
   fetchImpl: typeof fetch = fetch,
 ): Promise<TestConnectionResult> {
-  const base = settings.baseUrl.trim().replace(/\/+$/, '');
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TEST_CONNECTION_TIMEOUT_MS);
 
-  const headers: Record<string, string> = {};
-  if (settings.provider !== 'ollama' && settings.apiKey) {
-    headers.Authorization = `Bearer ${settings.apiKey}`;
-  }
-
   try {
-    const response = await fetchImpl(`${base}/models`, {
+    const response = await fetchImpl(modelsEndpointUrl(settings), {
       method: 'GET',
-      headers,
+      headers: modelsEndpointHeaders(settings),
       signal: controller.signal,
     });
     if (response.status === 200) {

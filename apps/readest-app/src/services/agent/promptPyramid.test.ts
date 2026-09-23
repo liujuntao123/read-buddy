@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { BookNodeShape } from '@/services/bookNodes';
 import {
   assembleAgentSystemPrompt,
   buildCurrentChapterExcerpt,
@@ -36,13 +37,38 @@ describe('renderTocMatrix', () => {
     ]);
     expect(matrix).toContain('• 第 1 段《第 1 / 3 部分》：第一段。');
   });
+
+  it('names a container 章 as a structural grouping instead of a pending brief', () => {
+    const matrix = renderTocMatrix([
+      { nodeIndex: 0, title: '第一卷 风云', brief: undefined, isContainer: true },
+      { nodeIndex: 1, title: '第一章 风起', brief: undefined, depth: 1, parentTitle: '第一卷 风云' },
+    ]);
+    expect(matrix).toContain('• 第 1 章《第一卷 风云》：（结构分组节点，微简介见其下各级节点）');
+    expect(matrix.split('\n')[0]).not.toContain('待生成微简介');
+    // Its 节 is a minimal node, so the pending wording still belongs there.
+    expect(matrix).toContain('└ • 第 2 节《第一章 风起》：（待生成微简介）');
+  });
+});
+
+/**
+ * A Book Node Shape built straight from counts — the field is required since
+ * 候选 6, because the shape must come from the book's own node list rather than
+ * from the micro-brief list the prompt happens to carry.
+ */
+const shapeOf = (chapter: number, section = 0): BookNodeShape => ({
+  chapter,
+  section,
+  chunk: 0,
+  total: chapter + section,
+  isNested: section > 0,
+  minimalKind: section > 0 ? 'section' : 'chapter',
 });
 
 describe('assembleAgentSystemPrompt', () => {
   it('embeds viewport, panorama, full TOC and behaviour rules', () => {
     const prompt = assembleAgentSystemPrompt({
       bookTitle: '灯塔之夜',
-      currentSectionIndex: 4,
+      currentNodeIndex: 4,
       currentNodeTitle: '第五章 远航',
       panorama: {
         genre: '悬疑',
@@ -51,12 +77,17 @@ describe('assembleAgentSystemPrompt', () => {
         mainCharacters: ['林远', '阿澈'],
       },
       allNodeBriefs: CHAPTERS,
+      shape: shapeOf(2),
     });
     expect(prompt).toContain('《灯塔之夜》');
-    expect(prompt).toContain('读者目前停留在：第 5 节点');
+    // The L1 viewport line names the level with the node model's word and uses
+    // the same global-node-ordinal numbering as the TOC matrix below it — one
+    // numbering system per prompt, not two.
+    expect(prompt).toContain('读者目前停留在：第 5 章');
+    expect(prompt).not.toContain('读者目前停留在：第 5 节点');
     expect(prompt).toContain('章《第五章 远航》（全书一级节点）');
-    expect(prompt).toContain('题材类型：悬疑');
-    expect(prompt).toContain('核心人物库：林远、阿澈');
+    expect(prompt).toContain('所属领域与体裁：悬疑');
+    expect(prompt).toContain('核心概念与关键主体：林远、阿澈');
     expect(prompt).toContain('【全书节点脉络（共 2 个：2 章，└ 缩进行为第二层节点）】');
     expect(prompt).toContain('search_book_text');
     expect(prompt).toContain('read_node_passage');
@@ -67,11 +98,12 @@ describe('assembleAgentSystemPrompt', () => {
   it('renders the hierarchical (章 › 节) breadcrumb for 节 viewpoints', () => {
     const prompt = assembleAgentSystemPrompt({
       bookTitle: '灯塔之夜',
-      currentSectionIndex: 1,
+      currentNodeIndex: 1,
       currentNodeTitle: '第一章 风起',
       parentNodeTitle: '第一卷 风云之始',
       currentNodeKind: 'section',
       allNodeBriefs: [],
+      shape: shapeOf(0),
     });
     expect(prompt).toContain('《第一卷 风云之始》 › 节《第一章 风起》');
   });
@@ -79,10 +111,11 @@ describe('assembleAgentSystemPrompt', () => {
   it('renders the flat single-level 章 breadcrumb when there is no container', () => {
     const prompt = assembleAgentSystemPrompt({
       bookTitle: '灯塔之夜',
-      currentSectionIndex: 2,
+      currentNodeIndex: 2,
       currentNodeTitle: '第三章 孤灯',
       currentNodeKind: 'chapter',
       allNodeBriefs: [],
+      shape: shapeOf(0),
     });
     expect(prompt).toContain('章《第三章 孤灯》（全书一级节点）');
     expect(prompt).not.toContain('›');
@@ -91,7 +124,7 @@ describe('assembleAgentSystemPrompt', () => {
   it('uses the supplied node shape for the outline heading counts', () => {
     const prompt = assembleAgentSystemPrompt({
       bookTitle: '灯塔之夜',
-      currentSectionIndex: 0,
+      currentNodeIndex: 0,
       currentNodeTitle: '第一章',
       allNodeBriefs: CHAPTERS,
       shape: {
@@ -109,12 +142,13 @@ describe('assembleAgentSystemPrompt', () => {
   it('tolerates a missing panorama and injects the L0 quote block', () => {
     const prompt = assembleAgentSystemPrompt({
       bookTitle: '灯塔之夜',
-      currentSectionIndex: 0,
+      currentNodeIndex: 0,
       currentNodeTitle: '第一章',
       allNodeBriefs: [],
+      shape: shapeOf(0),
       quoteText: '物理学不存在了',
     });
-    expect(prompt).toContain('题材类型：未标注');
+    expect(prompt).toContain('所属领域与体裁：未标注');
     expect(prompt).toContain('暂无全景概要');
     expect(prompt).toContain('【读者划选的原文片段（L0 焦点）】');
     expect(prompt).toContain('物理学不存在了');

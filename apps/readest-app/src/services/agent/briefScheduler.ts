@@ -101,10 +101,14 @@ export interface BriefSchedulerDeps {
 
 export interface BriefRunOptions {
   signal: AbortSignal;
-  /** Priority-0 node at run start. */
-  currentSectionIndex: number;
+  /**
+   * Priority-0 node at run start — a **Book Node ordinal**, the same coordinate
+   * space as `BookNode.nodeIndex`. The caller resolves it from the reader's
+   * Reading Position; a spine ordinal here would silently never match.
+   */
+  currentNodeIndex: number;
   /** Live priority source; consulted before each node pickup. */
-  getCurrentSectionIndex?: () => number;
+  getCurrentNodeIndex?: () => number;
   onProgress?: (progress: BriefProgress) => void;
 }
 
@@ -117,19 +121,19 @@ export interface BriefScheduler {
   run(bookHash: string, nodes: BookNode[], options: BriefRunOptions): Promise<void>;
 }
 
-const priorityOf = (nodeIndex: number, currentSectionIndex: number): number => {
-  if (nodeIndex === currentSectionIndex) return 0;
+const priorityOf = (nodeIndex: number, currentNodeIndex: number): number => {
+  if (nodeIndex === currentNodeIndex) return 0;
   if (nodeIndex <= 2) return 1;
   return 2;
 };
 
 /** Pop the highest-priority node (ties broken by lowest ordinal). */
-const pickNext = (queue: BookNode[], currentSectionIndex: number): BookNode | undefined => {
+const pickNext = (queue: BookNode[], currentNodeIndex: number): BookNode | undefined => {
   if (queue.length === 0) return undefined;
   let bestIndex = 0;
   let bestKey = Number.POSITIVE_INFINITY;
   queue.forEach((node, index) => {
-    const key = priorityOf(node.nodeIndex, currentSectionIndex) * 1_000 + node.nodeIndex;
+    const key = priorityOf(node.nodeIndex, currentNodeIndex) * 1_000 + node.nodeIndex;
     if (key < bestKey) {
       bestKey = key;
       bestIndex = index;
@@ -188,9 +192,9 @@ export function createBriefScheduler(deps: BriefSchedulerDeps): BriefScheduler {
 
       const worker = async (): Promise<void> => {
         while (!signal.aborted) {
-          const currentSectionIndex =
-            options.getCurrentSectionIndex?.() ?? options.currentSectionIndex;
-          const node = pickNext(queue, currentSectionIndex);
+          const currentNodeIndex =
+            options.getCurrentNodeIndex?.() ?? options.currentNodeIndex;
+          const node = pickNext(queue, currentNodeIndex);
           if (!node) return;
           inFlight.add(node);
           try {

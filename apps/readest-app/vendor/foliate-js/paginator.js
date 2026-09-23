@@ -528,6 +528,14 @@ export class Paginator extends HTMLElement {
             grid-column: 1 / -1;
             grid-row: 1 / -1;
             overflow: auto;
+            /* readest-plus: 单页（scrolled）模式隐藏滚动条。容器仍是原生可滚动
+               区域（滚轮 / 触控板 / 翻页键行为不变），只是不再画那条系统滚动条；
+               这一块在 shadow DOM 里，globals.css 的全局滚动条样式够不到它。 */
+            scrollbar-width: none;
+        }
+        /* readest-plus: WebKit / Chromium（Tauri = WebView2）侧的隐藏。 */
+        :host([flow="scrolled"]) #container::-webkit-scrollbar {
+            display: none;
         }
         #header {
             grid-column: 3 / 4;

@@ -165,7 +165,7 @@ export default function AgentTraceAccordion({ traces, defaultOpen = false }: Age
         {open ? <ChevronDown size={12} aria-hidden /> : <ChevronRight size={12} aria-hidden />}
         <Wrench size={12} aria-hidden />
         <Text type="supporting" color="secondary">
-          {`Agent 思考与工具调用轨迹 (${traces.length})`}
+          {`思考与检索过程 (${traces.length})`}
         </Text>
       </HStack>
       {open && (

@@ -3,23 +3,33 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   Columns2,
   List as ListIcon,
+  RectangleVertical,
   Settings2,
-  Square,
 } from 'lucide-react';
+import { Button } from '@astryxdesign/core/Button';
 import { IconButton } from '@astryxdesign/core/IconButton';
 import { List, ListItem } from '@astryxdesign/core/List';
 import { Popover } from '@astryxdesign/core/Popover';
 import { Text } from '@astryxdesign/core/Text';
-import { VStack } from '@astryxdesign/core/Stack';
+import { HStack, VStack } from '@astryxdesign/core/Stack';
 import ReaderSettingsPanel from '@/components/settings/ReaderSettingsPanel';
 import { useReaderStore } from '@/store/readerStore';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useSegmentationStore } from '@/store/segmentationStore';
 import { useReaderSettingsStore } from '@/store/readerSettingsStore';
 import { useDismissOnWindowBlur } from '@/hooks/useDismissOnWindowBlur';
+import { recordReadingPosition } from '@/services/reader/readingPosition';
+import {
+  createChapterNavigator,
+  resolveCurrentEntryIndex,
+  type NavEntry,
+} from '@/services/reader/chapterNavigation';
+import { getAgentBookContext } from '@/services/agent/agentContext';
+import type { NodeKind } from '@/types/readingAgent';
 import {
   formatNavLabel,
   formatNodeCounts,
@@ -34,6 +44,8 @@ interface RawTocRow {
   label: string;
   href: string;
   depth: number;
+  /** Physical section this row starts at, when the source knows it. */
+  spineIndex?: number;
 }
 
 /**
@@ -49,6 +61,7 @@ interface RawTocRow {
 export default function ReaderDock() {
   const spineCount = useReaderStore((s) => s.spineCount);
   const spineIndex = useReaderStore((s) => s.spineIndex);
+  const bookHash = useReaderStore((s) => s.bookHash);
   const currentEngine = useLibraryStore((s) =>
     s.currentHash ? s.engines[s.currentHash] ?? null : null,
   );
@@ -71,13 +84,39 @@ export default function ReaderDock() {
     },
   );
 
+  /**
+   * The directory rows.
+   *
+   * The **node model is the authority** (候选 6): when the book is indexed the
+   * popover renders the model's own rows, so 「N 章 · M 节」 cannot disagree with
+   * the companion index. Only until the index lands does it fall back to the
+   * engine's flat directory — and in that window it publishes **no counts**,
+   * because the dock used to count directory *rows* while the model counts
+   * *nodes* (ADR 0010 ¶31 collapses same-anchor duplicates), so the same book
+   * could show two different shapes.
+   */
+  const modelRows = useMemo<RawTocRow[] | null>(() => {
+    const context = bookHash ? getAgentBookContext(bookHash) : undefined;
+    if (!context || context.nodes.length === 0) return null;
+    return context.nodes.map((node) => ({
+      label: node.title,
+      href: node.href ?? String(node.spineIndex ?? node.nodeIndex),
+      depth: node.depth,
+      ...(node.spineIndex !== undefined ? { spineIndex: node.spineIndex } : {}),
+    }));
+  }, [bookHash]);
+
   /** Flat rows in document order; `depth` is the level the row came from. */
   const allTocItems = useMemo<RawTocRow[]>(() => {
+    if (modelRows) return modelRows;
     if (currentEngine) {
-      return currentEngine.tocItems().map((item) => ({
-        label: item.label,
-        href: item.href,
-        depth: item.depth,
+      // The engine's `tocEntries` carry the section each row resolved onto, which
+      // is what the navigation rule compares — `tocItems` does not.
+      return currentEngine.tocEntries().map((entry) => ({
+        label: entry.label,
+        href: entry.href ?? String(entry.spineIndex),
+        depth: entry.depth,
+        ...(entry.spineIndex >= 0 ? { spineIndex: entry.spineIndex } : {}),
       }));
     }
     if (segmentation?.virtualSections?.length) {
@@ -85,16 +124,34 @@ export default function ReaderDock() {
         label: sec.title,
         href: String(i),
         depth: 0,
+        spineIndex: i,
       }));
     }
     return [];
-  }, [currentEngine, segmentation]);
+  }, [modelRows, currentEngine, segmentation]);
+
+  /**
+   * The rows the navigation rule walks — the same rows the popover renders, so the
+   * list a reader clicks and the steps the buttons take cannot describe different
+   * books (候选 7).
+   */
+  const navEntries = useMemo<NavEntry[]>(
+    () =>
+      allTocItems.map((item) => ({
+        title: item.label,
+        target: item.href,
+        ...(item.spineIndex !== undefined ? { spineIndex: item.spineIndex } : {}),
+      })),
+    [allTocItems],
+  );
 
   /**
    * Rows stamped with their real level: `max(声明层深, 标题补出的层深)`. A flat
    * NCX whose hierarchy lives only in the titles (《思考快与慢》: 第一部分 →
    * 第N章) therefore renders as two levels, while a genuinely single-level book
-   * stays one level. 章/节 wording and counts come from the node model only.
+   * stays one level. The model's rows already carry their level, so stamping is a
+   * no-op for them — and the fallback uses the same rule the model does, so the
+   * indent and the nav words can be less informed but never contradictory.
    */
   const tocRows = useMemo(
     () =>
@@ -104,49 +161,96 @@ export default function ReaderDock() {
     [allTocItems],
   );
 
-  /** The book's shape as the directory shows it (counts + minimal 节点级). */
-  const tocShape = useMemo(
-    () => shapeOfNodes(tocRows.map(({ row, depth }) => ({ title: row.title, depth }))),
-    [tocRows],
-  );
+  /** The book's shape — only the node model may answer this. */
+  const modelShape = useMemo(() => {
+    const context = bookHash ? getAgentBookContext(bookHash) : undefined;
+    return context && context.nodes.length > 0 ? shapeOfNodes(context.nodes) : null;
+  }, [bookHash]);
 
-  const tocSummary = `书籍目录 · ${formatNodeCounts(tocShape)}`;
-  const prevLabel = formatNavLabel(tocShape.minimalKind, 'prev');
-  const nextLabel = formatNavLabel(tocShape.minimalKind, 'next');
+  const tocSummary = modelShape
+    ? `书籍目录 · ${formatNodeCounts(modelShape)}`
+    : '书籍目录';
+  /** Nav wording: the model's level when known, else the fallback rows' own. */
+  const navKind: NodeKind = modelShape?.minimalKind
+    ?? (tocRows.some(({ depth }) => depth > 0) ? 'section' : 'chapter');
+  const prevLabel = formatNavLabel(navKind, 'prev');
+  const nextLabel = formatNavLabel(navKind, 'next');
+
+  // Track which parent chapters are collapsed (keyed by original row index)
+  const [collapsedChapters, setCollapsedChapters] = useState<Set<number>>(new Set());
+
+  // Map each row index to its parent chapter index, and determine which chapters have children
+  const { rowParentMap, chaptersWithChildren } = useMemo(() => {
+    const parentMap: number[] = [];
+    const withChildren = new Set<number>();
+    let currentParent = -1;
+
+    tocRows.forEach(({ depth }, idx) => {
+      if (depth === 0) {
+        currentParent = idx;
+        parentMap[idx] = idx;
+      } else {
+        parentMap[idx] = currentParent;
+        if (currentParent >= 0) {
+          withChildren.add(currentParent);
+        }
+      }
+    });
+
+    return { rowParentMap: parentMap, chaptersWithChildren: withChildren };
+  }, [tocRows]);
+
+  const toggleChapter = (chapterIdx: number) => {
+    setCollapsedChapters((prev) => {
+      const next = new Set(prev);
+      if (next.has(chapterIdx)) {
+        next.delete(chapterIdx);
+      } else {
+        next.add(chapterIdx);
+      }
+      return next;
+    });
+  };
+
+  const hasAnyChildren = chaptersWithChildren.size > 0;
+  const allCollapsed = hasAnyChildren && chaptersWithChildren.size === collapsedChapters.size;
+
+  const toggleAllChapters = () => {
+    if (allCollapsed) {
+      setCollapsedChapters(new Set());
+    } else {
+      setCollapsedChapters(new Set(chaptersWithChildren));
+    }
+  };
+
+  // Filter visible rows based on collapsed state:
+  // An item with depth > 0 is hidden if its parent chapter is collapsed.
+  const visibleTocRows = useMemo(() => {
+    return tocRows
+      .map((item, originalIndex) => ({ ...item, originalIndex }))
+      .filter(({ depth, originalIndex }) => {
+        if (depth === 0) return true;
+        const parent = rowParentMap[originalIndex];
+        return parent !== undefined && !collapsedChapters.has(parent);
+      });
+  }, [tocRows, rowParentMap, collapsedChapters]);
 
   useEffect(() => {
     if (!currentEngine) return;
     const updateTocPos = (loc: EngineLocation) => {
-      if (currentEngine.getTocIndex) {
-        const idx = currentEngine.getTocIndex(loc);
-        if (idx >= 0) {
-          setTocPos(idx);
-          return;
-        }
-      }
-      if (loc.tocItemHref) {
-        const found = allTocItems.findIndex((it) => it.href === loc.tocItemHref);
-        if (found >= 0) {
-          setTocPos(found);
-          return;
-        }
-      }
-      setTocPos(loc.index);
+      setTocPos(
+        resolveCurrentEntryIndex(navEntries, {
+          spineIndex: loc.index,
+          ...(loc.tocItemHref ? { href: loc.tocItemHref } : {}),
+        }),
+      );
     };
     const current = currentEngine.currentLocation();
     if (current) updateTocPos(current);
     return currentEngine.onRelocate(updateTocPos);
-  }, [currentEngine, allTocItems]);
+  }, [currentEngine, navEntries]);
 
-  const prevToc = tocPos > 0 ? allTocItems[tocPos - 1] : undefined;
-  const nextToc = tocPos >= 0 && tocPos < allTocItems.length - 1 ? allTocItems[tocPos + 1] : undefined;
-
-  const canGoPrev = Boolean(prevToc) || spineIndex > 0 || tocPos > 0;
-  const canGoNext =
-    Boolean(nextToc) ||
-    spineIndex < spineCount - 1 ||
-    (allTocItems.length > 0 && tocPos < allTocItems.length - 1);
-
+  /** Jump to a directory href (engine) or a virtual-section ordinal (TXT). */
   const goChapter = (target: string | number) => {
     if (currentEngine) {
       void currentEngine.goTo(target);
@@ -154,31 +258,49 @@ export default function ReaderDock() {
       const idx = typeof target === 'number' ? target : parseInt(target, 10);
       if (!Number.isNaN(idx)) {
         const title =
-          segmentation?.virtualSections?.[idx]?.title ??
-          formatNodeOrdinal(tocShape.minimalKind, idx + 1);
-        useReaderStore.getState().setPosition(idx, title);
+          segmentation?.virtualSections?.[idx]?.title ?? formatNodeOrdinal(navKind, idx + 1);
+        recordReadingPosition(
+          { bookHash: useReaderStore.getState().bookHash, spineIndex: idx },
+          { titleFallback: title },
+        );
       }
     }
   };
 
+  /**
+   * Chapter stepping: **one** navigator, built from whichever adapter applies
+   * (候选 7). The disabled state (`canStep`) and the click (`step`) are answered by
+   * the same function, so a button can no longer be enabled by one rule and do
+   * nothing under another.
+   */
+  const navigator = useMemo(
+    () =>
+      createChapterNavigator({
+        entries: navEntries,
+        totalSections: currentEngine ? currentEngine.spineCount : spineCount,
+        current: {
+          spineIndex: currentEngine?.currentLocation()?.index ?? spineIndex,
+          ...(currentEngine?.currentLocation()?.tocItemHref
+            ? { href: currentEngine.currentLocation()!.tocItemHref! }
+            : {}),
+        },
+        goTo: goChapter,
+      }),
+    // `goChapter` is recreated per render by design: the navigator only reads it
+    // when a step is actually taken.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [navEntries, currentEngine, spineIndex, spineCount, tocPos, segmentation],
+  );
+
+  const canGoPrev = navigator.canStep('prev');
+  const canGoNext = navigator.canStep('next');
+
   const handlePrevChapter = () => {
-    if (currentEngine?.prevChapter) {
-      void currentEngine.prevChapter();
-    } else if (prevToc) {
-      goChapter(prevToc.href);
-    } else if (spineIndex > 0) {
-      goChapter(spineIndex - 1);
-    }
+    void navigator.step('prev');
   };
 
   const handleNextChapter = () => {
-    if (currentEngine?.nextChapter) {
-      void currentEngine.nextChapter();
-    } else if (nextToc) {
-      goChapter(nextToc.href);
-    } else if (spineIndex < spineCount - 1) {
-      goChapter(spineIndex + 1);
-    }
+    void navigator.step('next');
   };
 
   /** Page mode only applies to paginated engine books (TXT keeps scrolling). */
@@ -221,27 +343,77 @@ export default function ReaderDock() {
             width={300}
             content={
               <VStack gap={1} style={{ maxHeight: 'min(480px, 70vh)', overflowY: 'auto' }}>
-                <Text type="supporting" weight="semibold">
-                  {tocSummary}
-                </Text>
-                <List density="compact" data-testid="reader-dock-toc-list" style={{ flexWrap: 'nowrap' }}>
-                  {tocRows.map(({ row, depth }, i) => (
-                    <ListItem
-                      key={`${row.href}-${i}`}
-                      data-depth={String(depth)}
-                      label={depth > 0 ? <Text type="supporting">{row.title}</Text> : row.title}
-                      isSelected={i === tocPos}
-                      style={
-                        depth > 0
-                          ? { paddingInlineStart: `calc(var(--spacing-3) * ${depth})` }
-                          : undefined
-                      }
-                      onClick={() => {
-                        goChapter(row.href);
-                        setIsTocOpen(false);
-                      }}
+                <HStack justify="between" vAlign="center" style={{ paddingBottom: 'var(--spacing-1)' }}>
+                  <Text type="supporting" weight="semibold">
+                    {tocSummary}
+                  </Text>
+                  {hasAnyChildren && (
+                    <Button
+                      label={allCollapsed ? '全部展开' : '全部折叠'}
+                      variant="ghost"
+                      size="sm"
+                      data-testid="toggle-all-chapters"
+                      onClick={toggleAllChapters}
                     />
-                  ))}
+                  )}
+                </HStack>
+                <List density="compact" data-testid="reader-dock-toc-list" style={{ flexWrap: 'nowrap' }}>
+                  {visibleTocRows.map(({ row, depth, originalIndex }) => {
+                    const hasChildren = chaptersWithChildren.has(originalIndex);
+                    const isCollapsed = collapsedChapters.has(originalIndex);
+                    return (
+                      <ListItem
+                        key={`${row.href}-${originalIndex}`}
+                        data-depth={String(depth)}
+                        label={depth > 0 ? <Text type="supporting">{row.title}</Text> : row.title}
+                        isSelected={originalIndex === tocPos}
+                        style={
+                          depth > 0
+                            ? { paddingInlineStart: `calc(var(--spacing-3) * ${depth})` }
+                            : undefined
+                        }
+                        endContent={
+                          depth === 0 && hasChildren ? (
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              aria-label={isCollapsed ? '展开小节' : '折叠小节'}
+                              data-testid={`chapter-fold-toggle-${originalIndex}`}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                padding: 'var(--spacing-1)',
+                                cursor: 'pointer',
+                                color: 'var(--color-text-secondary)',
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleChapter(originalIndex);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  toggleChapter(originalIndex);
+                                }
+                              }}
+                            >
+                              {isCollapsed ? (
+                                <ChevronRight size={14} aria-hidden />
+                              ) : (
+                                <ChevronDown size={14} aria-hidden />
+                              )}
+                            </span>
+                          ) : undefined
+                        }
+                        onClick={() => {
+                          goChapter(row.href);
+                          setIsTocOpen(false);
+                        }}
+                      />
+                    );
+                  })}
                 </List>
               </VStack>
             }
@@ -259,11 +431,11 @@ export default function ReaderDock() {
         {currentEngine && (
           <IconButton
             label={pageMode === 'double' ? '切换为单页' : '切换为双页'}
-            tooltip={pageMode === 'double' ? '双页 · 点击切至单页' : '单页 · 点击切至双页'}
+            tooltip={pageMode === 'double' ? '切换为单页' : '切换为双页'}
             variant="ghost"
             data-testid="page-mode-toggle"
             onClick={togglePageMode}
-            icon={pageMode === 'double' ? <Columns2 size={20} aria-hidden /> : <Square size={20} aria-hidden />}
+            icon={pageMode === 'double' ? <Columns2 size={20} aria-hidden /> : <RectangleVertical size={20} aria-hidden />}
           />
         )}
 
@@ -278,7 +450,7 @@ export default function ReaderDock() {
         >
           <IconButton
             label="阅读设置"
-            tooltip="字号 / 字体 / 间距 设置"
+            tooltip="阅读设置"
             variant="ghost"
             data-testid="reader-settings-button"
             icon={<Settings2 size={20} aria-hidden />}

@@ -32,7 +32,9 @@ export function useQuickActions(): QuickActionRunner {
       // quote draft arrives (it may not be mounted yet at this instant).
       window.dispatchEvent(new CustomEvent('readest-plus:focus-chat-input'));
     } else {
-      void useChatStore.getState().send(buildQuickActionPrompt(action, text).prompt, text);
+      // The selection travels as `quoteText` (and renders as the quote block);
+      // the bubble carries the instruction alone — no duplicated passage.
+      void useChatStore.getState().send(buildQuickActionPrompt(action).instruction, text);
     }
     dismiss();
   }, []);

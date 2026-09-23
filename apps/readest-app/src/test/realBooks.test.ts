@@ -145,11 +145,11 @@ async function segment(book: RealBook): Promise<Segmented | null> {
   for (let index = 0; index < content.spineCount; index += 1) {
     // Loading a spine section is what produces its text AND its intra-section
     // anchor offsets in one walk.
-    const text = await content.getSpineTextAsync!(index);
-    const anchors: NodeAnchor[] = content.getSpineAnchors?.(index) ?? [];
+    const text = await content.getSpineText(index);
+    const anchors: NodeAnchor[] = content.getSpineAnchors(index);
     sections.push({ title: content.getSpineTitle(index), text, spineIndex: index, anchors });
   }
-  const entries: BookTocEntry[] = content.getTocEntries?.() ?? [];
+  const entries: BookTocEntry[] = content.getTocEntries();
   const result = segmentSpineBook(book.label, sections, entries);
   engine.close();
   return {

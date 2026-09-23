@@ -1,46 +1,35 @@
 'use client';
 
 import { useCallback, useEffect, useState, type RefObject } from 'react';
+import {
+  MIN_SELECTION_CHARS,
+  captureSelections,
+  clearSelection,
+  readSelection,
+  type RawSelection,
+} from '@/services/reader/selectionCapture';
 
 /** A validated reader selection: trimmed text plus its viewport rect. */
-export interface TextSelection {
-  text: string;
-  rect: DOMRect;
-}
+export type TextSelection = RawSelection;
 
-/** Selections shorter than this (after trimming) never summon the toolbar. */
-export const MIN_SELECTION_CHARS = 2;
+export { MIN_SELECTION_CHARS };
 
 /**
- * Read the current document selection and validate it against the reader
- * container: non-collapsed, at least `MIN_SELECTION_CHARS` long after
- * trimming, and anchored inside `container` (checked via the range's
- * commonAncestorContainer). Returns null when nothing eligible is selected.
+ * Adapter: a selection in the **host** document, restricted to `container`.
+ *
+ * The eligibility rule lives in `selectionCapture`; this wrapper only supplies the
+ * host document and the containment check that keeps a selection inside the reader
+ * article from being mistaken for one elsewhere on the page.
  */
 export function readTextSelection(container: HTMLElement | null): TextSelection | null {
   if (!container || typeof window === 'undefined') return null;
-  const selection = window.getSelection();
-  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
-  const text = selection.toString().trim();
-  if (text.length < MIN_SELECTION_CHARS) return null;
-
-  const range = selection.getRangeAt(0);
-  const ancestor = range.commonAncestorContainer;
-  const anchor =
-    ancestor.nodeType === Node.TEXT_NODE
-      ? ancestor.parentElement
-      : (ancestor as HTMLElement | null);
-  if (!anchor || !container.contains(anchor)) return null;
-
-  const rect =
-    typeof range.getBoundingClientRect === 'function' ? range.getBoundingClientRect() : null;
-  return { text, rect: rect ?? new DOMRect(0, 0, 0, 0) };
+  return readSelection(window.document, container);
 }
 
-/** Wipe the native document selection (no visual residue after an action). */
+/** Wipe the host document's selection (no visual residue after an action). */
 export function clearDocumentSelection(): void {
   if (typeof window === 'undefined') return;
-  window.getSelection()?.removeAllRanges();
+  clearSelection(window.document);
 }
 
 export interface UseTextSelectionResult {
@@ -52,23 +41,14 @@ export interface UseTextSelectionResult {
 }
 
 /**
- * Selection capture for the reader viewport (design doc 4.4.3, ADR 0007):
- * recomputes on `mouseup`/`keyup` (selection gesture finished) and hides on
- * `selectionchange` when the selection collapses, so dragging mid-gesture
- * never flickers the toolbar.
+ * Selection capture for the scroll reader's article (design doc 4.4.3, ADR 0007).
+ * A thin React wrapper: the gesture events and the eligibility rule are shared with
+ * the iframe adapter.
  */
 export function useTextSelection(
   containerRef: RefObject<HTMLElement | null>,
 ): UseTextSelectionResult {
   const [selection, setSelection] = useState<TextSelection | null>(null);
-
-  const update = useCallback(() => {
-    setSelection(readTextSelection(containerRef.current));
-  }, [containerRef]);
-
-  const hideIfEmpty = useCallback(() => {
-    if (!readTextSelection(containerRef.current)) setSelection(null);
-  }, [containerRef]);
 
   const close = useCallback(() => setSelection(null), []);
 
@@ -78,17 +58,20 @@ export function useTextSelection(
   }, []);
 
   useEffect(() => {
-    document.addEventListener('mouseup', update);
-    document.addEventListener('keyup', update);
-    document.addEventListener('selectionchange', hideIfEmpty);
+    if (typeof window === 'undefined') return;
+    // A gesture event reports the selection; a mid-drag `selectionchange` reports
+    // null and therefore hides the toolbar until the gesture finishes.
+    const detach = captureSelections({
+      doc: window.document,
+      read: (doc) => readSelection(doc, containerRef.current),
+      onChange: setSelection,
+    });
     return () => {
-      document.removeEventListener('mouseup', update);
-      document.removeEventListener('keyup', update);
-      document.removeEventListener('selectionchange', hideIfEmpty);
+      detach();
       // Unmount must leave no lingering toolbar state (无残留).
       setSelection(null);
     };
-  }, [update, hideIfEmpty]);
+  }, [containerRef]);
 
   return { selection, close, reset };
 }

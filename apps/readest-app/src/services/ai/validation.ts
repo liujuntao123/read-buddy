@@ -1,5 +1,6 @@
-import type { AIProvider, AISettings } from '@/types/ai';
+import type { AISettings } from '@/types/ai';
 import { MAX_TURNS_PER_TOPIC, MIN_TURNS_PER_TOPIC } from '@/types/ai';
+import { AI_PROVIDERS } from './providerReadiness';
 
 /**
  * Field-level validation for the AI provider configuration center
@@ -7,13 +8,6 @@ import { MAX_TURNS_PER_TOPIC, MIN_TURNS_PER_TOPIC } from '@/types/ai';
  * persist; `testConnection` intentionally bypasses the apiKey rule so a
  * half-configured provider can still be probed.
  */
-
-const AI_PROVIDERS: readonly AIProvider[] = [
-  'openai-compatible',
-  'deepseek',
-  'claude',
-  'ollama',
-];
 
 export type AISettingsErrors = Record<string, string>;
 
@@ -36,7 +30,7 @@ export function validateAISettings(settings: AISettings): AISettingsErrors {
   }
 
   if (!AI_PROVIDERS.includes(settings.provider)) {
-    errors.provider = 'Provider 必须是 openai-compatible / deepseek / claude / ollama 之一';
+    errors.provider = `Provider 必须是 ${AI_PROVIDERS.join(' / ')} 之一`;
   }
 
   const { temperature } = settings;
@@ -53,11 +47,14 @@ export function validateAISettings(settings: AISettings): AISettingsErrors {
     maxTurnsPerTopic < MIN_TURNS_PER_TOPIC ||
     maxTurnsPerTopic > MAX_TURNS_PER_TOPIC
   ) {
-    errors.maxTurnsPerTopic = `轮数配额必须是 ${MIN_TURNS_PER_TOPIC} ~ ${MAX_TURNS_PER_TOPIC} 之间的整数`;
+    errors.maxTurnsPerTopic = `对话轮数必须在 ${MIN_TURNS_PER_TOPIC} ~ ${MAX_TURNS_PER_TOPIC} 之间`;
   }
 
-  // ADR 0008: plaintext storage is local-only; ollama runs keyless.
-  if (settings.provider !== 'ollama' && !settings.apiKey.trim()) {
+  // ADR 0008: plaintext storage is local-only. Every offered provider is a
+  // remote-compatible endpoint and needs a key, so this is the same rule
+  // `providerReady` applies at generation time — kept phrased identically on
+  // purpose: the form must not accept what the pipeline will refuse to run.
+  if (!settings.apiKey.trim()) {
     errors.apiKey = 'API Key 不能为空';
   }
 

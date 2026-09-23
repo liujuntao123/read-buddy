@@ -17,11 +17,14 @@ import {
 /** Minimal in-memory EPUB: 3 spine chapters, nav covering the first two. */
 async function buildEpubBytes(variant = ''): Promise<ArrayBuffer> {
   const zip = new JSZip();
-  zip.file('mimetype', 'application/epub+zip');
+  const fileDate = new Date(1700000000000);
+  const opts = { date: fileDate };
+  zip.file('mimetype', 'application/epub+zip', opts);
   zip.file(
     'META-INF/container.xml',
     '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">' +
       '<rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
+    opts,
   );
   zip.file(
     'OEBPS/content.opf',
@@ -36,17 +39,19 @@ async function buildEpubBytes(variant = ''): Promise<ArrayBuffer> {
       '</manifest>' +
       '<spine><itemref idref="ch1"/><itemref idref="ch2"/><itemref idref="ch3"/></spine>' +
       '</package>',
+    opts,
   );
   const page = (title: string, body: string): string =>
     `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><h2>${title}</h2><p>${body}</p></body></html>`;
-  zip.file('OEBPS/ch1.xhtml', page('第一章 迷雾之城', `灯火在雾中摇曳。${variant}`));
-  zip.file('OEBPS/ch2.xhtml', page('第二章 图书馆的密语', '星图亮了起来。'));
-  zip.file('OEBPS/ch3.xhtml', page('第三章 长夜漫漫', '长夜第一节。'));
+  zip.file('OEBPS/ch1.xhtml', page('第一章 迷雾之城', `灯火在雾中摇曳。${variant}`), opts);
+  zip.file('OEBPS/ch2.xhtml', page('第二章 图书馆的密语', '星图亮了起来。'), opts);
+  zip.file('OEBPS/ch3.xhtml', page('第三章 长夜漫漫', '长夜第一节。'), opts);
   zip.file(
     'OEBPS/nav.xhtml',
     '<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body>' +
       '<nav epub:type="toc"><ol><li><a href="ch1.xhtml">第一章 迷雾之城</a></li>' +
       '<li><a href="ch2.xhtml">第二章 图书馆的密语</a></li></ol></nav></body></html>',
+    opts,
   );
   return zip.generateAsync({ type: 'arraybuffer' });
 }
@@ -196,7 +201,7 @@ describe('importBookFile', () => {
     const result = await importBookFile(new File([new Uint8Array([1])], 'novel.pdf'), noCover());
     expect(result.status).toBe('unsupported');
     if (result.status === 'unsupported') {
-      expect(result.message).toContain('暂不支持该格式（待 Foliate 引擎接入）');
+      expect(result.message).toContain('暂不支持该文件格式');
     }
     expect(await db.books.count()).toBe(4); // epub + mobi + cover-mobi + png-cover epub
   });
@@ -225,8 +230,18 @@ const makeFakeEngine = (): FoliateEngineHandle & {
     getCachedSpineText: vi.fn(() => '灯火在雾中摇曳。'),
     getSpineTitle: vi.fn((index: number) => `第 ${index + 1} 章`),
     spineCount: 3,
-    tocItems: vi.fn(() => [{ label: '第 1 章', href: 'ch1.xhtml' }]),
+    tocEntries: vi.fn(() => []),
+    getSpineAnchors: vi.fn(() => []),
     currentLocation: vi.fn(() => null),
+    // Required since 候选 4: no cover is a fact the engine answers, not a missing
+    // method callers must detect.
+    getCover: vi.fn(async () => undefined),
+    applyPresentation: vi.fn(),
+    presentationDiagnostics: vi.fn(() => ({
+      viaElement: [],
+      viaRendererFallback: [],
+      unsupported: [],
+    })),
     close: vi.fn(),
   } as unknown as FoliateEngineHandle & {
     prepare: ReturnType<typeof vi.fn>;
@@ -311,8 +326,8 @@ describe('openBook / readLibrary / removeBook / saveProgress', () => {
 
     const opened = await openBook(imported.book, { db });
     expect(opened.spineCount).toBe(1);
-    expect(opened.getMonolithicText?.()).toBe(text);
-    expect(getOpenedBook(imported.book.hash)?.getSpineText(0)).toContain('正文内容第一段');
+    expect(opened.getMonolithicText()).toBe(text);
+    expect(await getOpenedBook(imported.book.hash)?.getSpineText(0)).toContain('正文内容第一段');
   });
 
   it('lists shelf metadata without raw bytes, persists progress and deletes cleanly', async () => {
@@ -322,7 +337,7 @@ describe('openBook / readLibrary / removeBook / saveProgress', () => {
 
     const target = list[0]!;
     await saveProgress(target.hash, 1, { db });
-    expect((await db.books.get(target.hash))?.lastNodeIndex).toBe(1);
+    expect((await db.books.get(target.hash))?.lastSpineIndex).toBe(1);
 
     // Ticket 07: engine progress also persists the CFI, and a save without
     // one keeps the previously stored CFI (TXT path never clears it).
@@ -330,7 +345,7 @@ describe('openBook / readLibrary / removeBook / saveProgress', () => {
     expect((await db.books.get(target.hash))?.lastCfi).toBe('epubcfi(/6/8!/2/2)');
     await saveProgress(target.hash, 1, { db });
     expect((await db.books.get(target.hash))?.lastCfi).toBe('epubcfi(/6/8!/2/2)');
-    expect((await db.books.get(target.hash))?.lastNodeIndex).toBe(1);
+    expect((await db.books.get(target.hash))?.lastSpineIndex).toBe(1);
     await removeBook(target.hash, { db });
     expect(await db.books.get(target.hash)).toBeUndefined();
     expect(getOpenedBook(target.hash)).toBeUndefined();

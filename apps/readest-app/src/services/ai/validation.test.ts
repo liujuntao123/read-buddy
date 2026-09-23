@@ -7,7 +7,7 @@ import {
 } from '@/types/ai';
 import { validateAISettings } from './validation';
 
-/** A baseline that passes every rule (non-ollama provider needs a key). */
+/** A baseline that passes every rule (every provider needs a key). */
 const valid = (): AISettings => ({ ...DEFAULT_AI_SETTINGS, apiKey: 'sk-test' });
 
 describe('validateAISettings', () => {
@@ -40,13 +40,18 @@ describe('validateAISettings', () => {
   });
 
   describe('provider', () => {
-    it('rejects a provider outside the four-value enum', () => {
+    it('rejects a provider outside the enum', () => {
       const errors = validateAISettings({ ...valid(), provider: 'grok' as AISettings['provider'] });
       expect(errors.provider).toBeTruthy();
     });
 
-    it('accepts each of the four supported providers', () => {
-      for (const provider of ['openai-compatible', 'deepseek', 'claude', 'ollama'] as const) {
+    it('rejects a removed provider that may still sit in old persisted settings', () => {
+      const errors = validateAISettings({ ...valid(), provider: 'ollama' as AISettings['provider'] });
+      expect(errors.provider).toBeTruthy();
+    });
+
+    it('accepts each of the supported providers', () => {
+      for (const provider of ['openai-compatible', 'deepseek'] as const) {
         expect(validateAISettings({ ...valid(), provider }).provider).toBeUndefined();
       }
     });
@@ -94,20 +99,14 @@ describe('validateAISettings', () => {
   });
 
   describe('apiKey', () => {
-    it('requires a key for remote providers', () => {
-      for (const provider of ['openai-compatible', 'deepseek', 'claude'] as const) {
+    it('requires a key for every offered provider', () => {
+      for (const provider of ['openai-compatible', 'deepseek'] as const) {
         expect(validateAISettings({ ...valid(), provider, apiKey: '' }).apiKey).toBeTruthy();
       }
     });
 
-    it('allows an empty key for ollama', () => {
-      const errors = validateAISettings({
-        ...valid(),
-        provider: 'ollama',
-        baseUrl: 'http://localhost:11434/v1',
-        apiKey: '',
-      });
-      expect(errors.apiKey).toBeUndefined();
+    it('rejects a whitespace-only key', () => {
+      expect(validateAISettings({ ...valid(), apiKey: '   ' }).apiKey).toBeTruthy();
     });
   });
 

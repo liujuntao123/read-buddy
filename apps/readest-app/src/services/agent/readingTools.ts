@@ -16,6 +16,7 @@
 import { jsonSchema, tool, type ToolSet } from '@ai-sdk/provider-utils';
 import type { AgentBookContext } from './agentContext';
 import type { AgentCitation } from '@/types/readingAgent';
+import { briefLabelFor } from '@/types/readingAgent';
 import { formatBookScale, nodeKindLabel, shapeOfNodes } from '@/services/bookNodes';
 
 /** Human-facing labels for the UI trace accordion. */
@@ -79,7 +80,11 @@ export function createReadingTools(context: AgentBookContext, hooks: ReadingTool
             // The model reads the same level word the reader sees (章 / 节 / 段).
             nodeKind: nodeKindLabel(entry.kind),
             ...(entry.parentTitle ? { parentChapter: entry.parentTitle } : {}),
-            brief: entry.brief ?? '（待生成微简介）',
+            // A container 章 is a structural grouping and is never briefed
+            // (ADR 0010): say that instead of 「待生成微简介」, which would read
+            // as a brief that is still queued.
+            isContainer: entry.isContainer,
+            brief: briefLabelFor(entry.brief, entry.isContainer),
           })),
         };
       },

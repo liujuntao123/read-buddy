@@ -44,12 +44,9 @@ describe('testConnection', () => {
     expect(headersOf(calls[0]!)).toMatchObject({ Authorization: 'Bearer sk-deep' });
   });
 
-  it('omits the Authorization header for ollama', async () => {
+  it('omits the Authorization header when no key is set yet', async () => {
     const { impl, calls } = statusFetch(200);
-    await testConnection(
-      settings({ provider: 'ollama', baseUrl: 'http://localhost:11434/v1', apiKey: '' }),
-      impl,
-    );
+    await testConnection(settings({ apiKey: '' }), impl);
     expect(headersOf(calls[0]!).Authorization).toBeUndefined();
   });
 

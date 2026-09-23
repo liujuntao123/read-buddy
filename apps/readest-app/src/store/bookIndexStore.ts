@@ -13,9 +13,11 @@
  * 章/节 book, the 章 of a single-level book — never for container 章 rows that
  * exist only to group their 节.
  *
- * AI phases are skipped silently while no API key is configured; re-opening
- * the book (or configuring the key and re-opening) resumes any unfinished
- * briefs exactly where they stopped.
+ * AI phases are skipped while no provider is configured, but **not silently**
+ * (ADR: the unconfigured-provider defect): the store parks in `awaiting-key` so the
+ * status bar can offer the settings action. Re-opening the book (or configuring
+ * the key and re-opening) resumes any unfinished briefs exactly where they
+ * stopped.
  */
 import { create } from 'zustand';
 import type { AISettings } from '@/types/ai';
@@ -24,11 +26,18 @@ import { BookPanoramaRepository, BookNodeRepository } from '@/services/db/reposi
 import {
   clearAgentBookContext,
   createAgentBookContext,
+  getAgentBookContext,
   registerAgentBookContext,
   type AgentBookContext,
 } from '@/services/agent/agentContext';
-import { createBriefScheduler } from '@/services/agent/briefScheduler';
-import { createPanoramaGenerator } from '@/services/agent/panoramaGenerator';
+import { createReadingAgentIndex } from '@/services/agent/readingAgentIndex';
+import {
+  createBookIngestion,
+  type BookIngestion,
+  type BookSegmentationSource,
+} from '@/services/agent/bookIngestion';
+
+export type { BookSegmentationSource };
 import {
   shapeOfNodes,
   type BookNodeShape,
@@ -36,17 +45,26 @@ import {
 } from '@/services/bookNodes';
 import { nodeKindLabel } from '@/services/bookNodes/nodeKind';
 import {
+  SPINE_JOIN,
   segmentMonolithic,
   segmentSpineBook,
   type SpineSectionInput,
 } from '@/services/segmentation/layeredSegmenter';
 import type { StreamTextFn } from '@/services/ai/streamClient';
 import { getOpenedBook } from '@/services/library/contentRegistry';
+import { readBookIndexSummary, saveBookIndexSummary } from '@/services/library/bookLibrary';
 import { useReaderStore } from '@/store/readerStore';
-import { useSegmentationStore } from '@/store/segmentationStore';
 import { useAISettingsStore } from '@/store/aiSettingsStore';
 
-export type IndexPhase = 'idle' | 'segmenting' | 'panorama' | 'briefs' | 'ready' | 'failed';
+export type IndexPhase =
+  | 'idle'
+  | 'segmenting'
+  | 'panorama'
+  | 'briefs'
+  | 'ready'
+  /** The AI phases are skipped because no provider is configured yet. */
+  | 'awaiting-key'
+  | 'failed';
 
 /** 尚无节点时的空形状（界面可以无条件读取）。 */
 export const EMPTY_SHAPE: BookNodeShape = {
@@ -72,39 +90,46 @@ export interface BookIndexState {
   error: string | null;
   /** Progress label, e.g. "正在建立全书微大纲 (15/70 节)". */
   progressLabel: string;
-  ensureIndexed: (bookHash: string, options?: { currentSectionIndex?: number }) => Promise<void>;
+  ensureIndexed: (
+    bookHash: string,
+    options?: { currentSpineIndex?: number; autoRunAi?: boolean },
+  ) => Promise<void>;
+  /** 手动触发全书画像与微大纲索引构建流程 */
+  startIndexing: (options?: { currentSpineIndex?: number }) => Promise<void>;
+  /** 中止当前的索引与画像构建 */
+  stopIndexing: () => void;
   /**
    * Wipe the book's index (nodes + panorama) and rebuild it from scratch —
    * the "重新索引" affordance for users unsatisfied with the generated
    * panorama / briefs.
    */
-  reindex: (bookHash: string, options?: { currentSectionIndex?: number }) => Promise<void>;
-  /** Live priority source consumed by the brief queue (Priority 0 boost). */
-  currentSectionIndex: number;
-  setCurrentSection: (sectionIndex: number) => void;
+  reindex: (bookHash: string, options?: { currentSpineIndex?: number }) => Promise<void>;
+  /**
+   * Live priority source consumed by the brief queue (Priority 0 boost).
+   * Holds the reader's **physical** position; the pipeline converts it to a
+   * Book Node ordinal once the node tree exists.
+   */
+  currentSpineIndex: number;
+  setCurrentSpine: (spineIndex: number) => void;
   /** Testing seam: abort the pipeline and reset the state. */
   reset: () => void;
 }
 
-/** Segmentation inputs resolved from an opened book. */
-export interface BookSegmentationSource {
-  sections: SpineSectionInput[];
-  tocEntries: BookTocEntry[];
-}
-
 export interface BookIndexDeps {
+  /** Phases 1–2: the Book Ingestion module (候选 epilogue). */
+  ingestion: BookIngestion;
   bookNodes: BookNodeRepository;
   panoramas: BookPanoramaRepository;
   stream: StreamTextFn;
   getSettings: () => AISettings;
-  /** Monolithic text source (defaults to the opened-book registry). */
-  getMonolithicText?: (bookHash: string) => string | undefined;
-  /** Spine sections + directory; may be async (engine loads sections on demand). */
-  getSegmentationSource?: (
-    bookHash: string,
-  ) => BookSegmentationSource | undefined | Promise<BookSegmentationSource | undefined>;
   now?: () => number;
 }
+
+/**
+ * Segmentation inputs resolved from an opened book. Re-exported so existing
+ * callers keep their import; the shape itself is the ingestion module's.
+ */
+
 
 /** Abort controller of the currently running background pipeline. */
 let pipelineController: AbortController | null = null;
@@ -117,30 +142,28 @@ const toRecords = (nodes: BookNode[], now: () => number): BookNodeRecord[] =>
 
 const defaultMonolithicText = (bookHash: string): string | undefined => {
   const opened = getOpenedBook(bookHash);
-  if (opened?.getMonolithicText) return opened.getMonolithicText();
-  // Demo monolithic flow keeps its text inside the segmentation scan context.
-  const { scanContext } = useSegmentationStore.getState();
-  if (scanContext?.bookHash === bookHash) return scanContext.fullText;
-  return undefined;
+  return opened?.getMonolithicText();
 };
 
 const defaultSegmentationSource = async (
   bookHash: string,
 ): Promise<BookSegmentationSource | undefined> => {
   const opened = getOpenedBook(bookHash);
-  if (!opened || opened.getMonolithicText) return undefined;
+  // `kind`, not a capability probe (候选 8): only a segmented source has spine
+  // sections to hand the segmenter.
+  if (!opened || opened.kind === 'monolithic') return undefined;
   const count = opened.spineCount;
   const sections = await Promise.all(
     Array.from({ length: count }, async (_, index) => {
-      const text = opened.getSpineTextAsync
-        ? await opened.getSpineTextAsync(index)
-        : opened.getSpineText(index);
+      // Always loads: asking for a section's text never depends on whether the
+      // reader happened to visit it.
+      const text = await opened.getSpineText(index);
       // 段内目录锚点（EPUB 的 #sigil_toc_id_N）让「节」有独立文本范围。
-      const anchors = opened.getSpineAnchors?.(index) ?? [];
+      const anchors = opened.getSpineAnchors(index);
       return { title: opened.getSpineTitle(index), text, spineIndex: index, anchors };
     }),
   );
-  return { sections, tocEntries: opened.getTocEntries?.() ?? [] };
+  return { sections, tocEntries: opened.getTocEntries() };
 };
 
 /** 最小节点：全书微大纲（索引）的唯一对象。 */
@@ -157,7 +180,7 @@ export function createBookIndexStore(deps: BookIndexDeps) {
     panoramaReady: false,
     error: null,
     progressLabel: '',
-    currentSectionIndex: 0,
+    currentSpineIndex: 0,
 
     ensureIndexed: async (bookHash, options) => {
       if (!bookHash) return;
@@ -176,64 +199,42 @@ export function createBookIndexStore(deps: BookIndexDeps) {
         panoramaReady: false,
         error: null,
         progressLabel: '',
-        currentSectionIndex: options?.currentSectionIndex ?? 0,
+        currentSpineIndex: options?.currentSpineIndex ?? 0,
       });
 
       try {
-        const monolithic = (deps.getMonolithicText ?? defaultMonolithicText)(bookHash);
-        const source = await (deps.getSegmentationSource ?? defaultSegmentationSource)(bookHash);
-        const existing = await deps.bookNodes.listByBook(bookHash);
+        // Phases 1–2 are the Book Ingestion module's job (候选 epilogue): source
+        // resolution, the branch order, the offset-space join and the recorded
+        // Segmentation Rule all live there. This store maps the outcome onto view
+        // state and registers the node model.
+        const outcome = await deps.ingestion.ingest(bookHash);
 
-        let nodes: BookNode[];
-        let strategy: SegmentStrategy;
-        let fullText: string;
+        if (outcome.status === 'nothing') {
+          set({ phase: 'idle' });
+          return;
+        }
 
-        if (
-          existing.length > 0 &&
-          (monolithic !== undefined || (source && source.sections.length > 0))
-        ) {
-          // Rehydrate persisted nodes (resume path): offsets already valid.
-          nodes = existing;
-          strategy = existing[0]?.spineIndex !== undefined ? 'native' : 'regex';
-          fullText = monolithic ?? source!.sections.map((section) => section.text).join('\n\n');
-        } else if (existing.length > 0) {
-          // Nodes exist but no text source is live: index-only mode (no
-          // passage/search until the book re-registers, still better than
-          // wiping the briefs).
-          const context = createAgentBookContext({ bookHash, nodes: existing, fullText: '' });
+        if (outcome.status === 'index-only') {
+          // Nodes exist but no text source is live: the reader keeps its briefs,
+          // and passage/search are unavailable until the book re-registers.
+          const context = createAgentBookContext({ bookHash, nodes: outcome.nodes, fullText: '' });
           registerAgentBookContext(context);
           const minimal = context.getNodeTree().minimalNodes;
           set({
-            strategy: existing[0]?.spineIndex !== undefined ? 'native' : 'regex',
-            shape: shapeOfNodes(existing),
+            strategy: outcome.strategy,
+            shape: outcome.shape,
             briefTotal: minimal.length,
             briefedCount: minimal.filter((node) => node.brief).length,
             phase: 'idle',
           });
           return;
-        } else if (monolithic !== undefined) {
-          const result = segmentMonolithic(bookHash, monolithic);
-          nodes = result.nodes;
-          strategy = result.strategy;
-          fullText = monolithic;
-          await deps.bookNodes.bulkPut(toRecords(nodes, now));
-        } else if (source && source.sections.length > 0) {
-          const result = segmentSpineBook(bookHash, source.sections, source.tocEntries);
-          nodes = result.nodes;
-          strategy = result.strategy;
-          fullText = result.fullText;
-          await deps.bookNodes.bulkPut(toRecords(nodes, now));
-        } else {
-          // No resolvable text source (demo fixtures etc.): nothing to index.
-          set({ phase: 'idle' });
-          return;
         }
 
+        const { nodes, fullText, strategy, shape } = outcome;
         const panorama = await deps.panoramas.get(bookHash);
         const context = createAgentBookContext({ bookHash, nodes, fullText, panorama });
         registerAgentBookContext(context);
 
-        const shape = shapeOfNodes(nodes);
         const minimal = context.getNodeTree().minimalNodes;
         const briefedCount = minimal.filter((node) => node.brief).length;
         set({
@@ -251,22 +252,52 @@ export function createBookIndexStore(deps: BookIndexDeps) {
 
         if (controller.signal.aborted) return;
 
-        // ---- Background Phase 3 + 4 (never block the reader) ----
-        void runBackgroundPipeline({
-          deps,
-          bookHash,
-          context,
-          signal: controller.signal,
-          currentSectionIndex: options?.currentSectionIndex ?? 0,
-          getCurrentSectionIndex: () => get().currentSectionIndex,
-          set,
-        });
+        // Background Phase 3 + 4 (only run when autoRunAi is explicitly requested)
+        if (options?.autoRunAi) {
+          void runBackgroundPipeline({
+            deps,
+            bookHash,
+            context,
+            signal: controller.signal,
+            currentSpineIndex: options?.currentSpineIndex ?? 0,
+            getCurrentSpineIndex: () => get().currentSpineIndex,
+            bookTitle: useReaderStore.getState().bookTitle || bookHash,
+            set,
+          });
+        }
       } catch (error) {
         set({ phase: 'failed', error: error instanceof Error ? error.message : String(error) });
       }
     },
 
-    setCurrentSection: (sectionIndex) => set({ currentSectionIndex: sectionIndex }),
+    startIndexing: async (options) => {
+      const { bookHash, currentSpineIndex } = get();
+      if (!bookHash) return;
+      const context = getAgentBookContext(bookHash);
+      if (!context) return;
+      pipelineController?.abort();
+      const controller = new AbortController();
+      pipelineController = controller;
+
+      void runBackgroundPipeline({
+        deps,
+        bookHash,
+        context,
+        signal: controller.signal,
+        currentSpineIndex: options?.currentSpineIndex ?? currentSpineIndex,
+        getCurrentSpineIndex: () => get().currentSpineIndex,
+        bookTitle: useReaderStore.getState().bookTitle || bookHash,
+        set,
+      });
+    },
+
+    stopIndexing: () => {
+      pipelineController?.abort();
+      pipelineController = null;
+      set({ phase: 'idle' });
+    },
+
+    setCurrentSpine: (sectionIndex) => set({ currentSpineIndex: sectionIndex }),
 
     reindex: async (bookHash, options) => {
       if (!bookHash) return;
@@ -282,14 +313,14 @@ export function createBookIndexStore(deps: BookIndexDeps) {
         panoramaReady: false,
         error: null,
         progressLabel: '',
-        currentSectionIndex: options?.currentSectionIndex ?? 0,
+        currentSpineIndex: options?.currentSpineIndex ?? 0,
       });
       // Drop every persisted index artifact for this book, forget the live
       // context, then run the full pipeline again from the source text.
       await deps.bookNodes.deleteByBook(bookHash);
       await deps.panoramas.delete(bookHash);
       clearAgentBookContext(bookHash);
-      await get().ensureIndexed(bookHash, options);
+      await get().ensureIndexed(bookHash, { ...options, autoRunAi: true });
     },
 
     reset: () => {
@@ -305,7 +336,7 @@ export function createBookIndexStore(deps: BookIndexDeps) {
         panoramaReady: false,
         error: null,
         progressLabel: '',
-        currentSectionIndex: 0,
+        currentSpineIndex: 0,
       });
     },
   }));
@@ -316,93 +347,69 @@ interface BackgroundRunInput {
   bookHash: string;
   context: AgentBookContext;
   signal: AbortSignal;
-  currentSectionIndex: number;
-  getCurrentSectionIndex: () => number;
+  /** The reader's physical position when the run started. */
+  currentSpineIndex: number;
+  /** Live physical position, consulted before each node pickup. */
+  getCurrentSpineIndex: () => number;
+  /** Book title for the panorama prompt; the caller owns where it comes from. */
+  bookTitle: string;
   set: (partial: Partial<BookIndexState>) => void;
 }
 
 /**
- * Phase 3 (panorama, one call) then Phase 4 (brief queue). Each phase checks
- * the AI settings and the abort signal; failures degrade to a silent skip so
- * reading is never disturbed.
+ * `runReadingAgentIndex` is Phase 3 + Phase 4 (候选 epilogue): the pipeline is a
+ * module now, not a store function. It reports through `onProgress` and resolves
+ * with the settled outcome, so this store is a **view** of it — it maps one report
+ * onto its own state fields and holds no pipeline logic. It also means
+ * `ensureIndexed` can, if a caller ever needs to, await the AI half instead of
+ * resolving before it starts.
  */
 async function runBackgroundPipeline(input: BackgroundRunInput): Promise<void> {
   const { deps, bookHash, context, signal, set } = input;
-  const settings = deps.getSettings();
-  const hasApiKey = settings.apiKey.trim().length > 0;
-
-  // Phase 3: panorama portrait.
-  if (!context.getPanorama()) {
-    if (!hasApiKey || signal.aborted) return;
-    set({ phase: 'panorama' });
-    try {
-      const generator = createPanoramaGenerator({
-        stream: deps.stream,
-        settings,
-        repository: deps.panoramas,
-      });
-      const panorama = await generator.generate(
-        {
-          bookHash,
-          bookTitle: useReaderStore.getState().bookTitle || bookHash,
-          nodes: context.nodes,
-          fullText: context.fullText,
-        },
-        signal,
-      );
-      if (signal.aborted) return;
-      if (panorama) {
-        context.setPanorama(panorama);
-        set({ panoramaReady: true });
-      }
-    } catch {
-      // Panorama failure is non-fatal: briefs can still run.
-    }
-  }
-
-  // Phase 4: minimal-node micro-brief queue (container 章 are never briefed).
-  const minimal = context.getNodeTree().minimalNodes;
-  const pendingBriefs = minimal.filter((node) => !(node.indexStatus === 'ready' && node.brief));
-  const kind = shapeOfNodes(context.nodes).minimalKind;
-  if (pendingBriefs.length === 0) {
-    set({ phase: 'ready', progressLabel: '' });
-    return;
-  }
-  if (!hasApiKey || signal.aborted) {
-    set({ phase: 'idle', progressLabel: '' });
-    return;
-  }
-
-  set({ phase: 'briefs' });
-  const scheduler = createBriefScheduler({
+  const index = createReadingAgentIndex({
     stream: deps.stream,
-    getSettings: () => useAISettingsStore.getState().settings,
-    repository: deps.bookNodes,
-    getFullText: () => context.fullText,
+    getSettings: deps.getSettings,
+    bookNodes: deps.bookNodes,
+    panoramas: deps.panoramas,
+    progressLabel: (done, total) =>
+      indexLabel(done, total, shapeOfNodes(context.nodes).minimalKind),
   });
 
-  try {
-    await scheduler.run(bookHash, [...minimal], {
-      signal,
-      currentSectionIndex: input.currentSectionIndex,
-      getCurrentSectionIndex: input.getCurrentSectionIndex,
-      onProgress: (progress) => {
-        context.updateNodes([progress.node]);
-        set({
-          briefedCount: progress.done,
-          progressLabel: indexLabel(progress.done, progress.total, kind),
-        });
-      },
-    });
-    if (signal.aborted) return;
-    set({ phase: 'ready', progressLabel: '' });
-  } catch {
-    set({ phase: 'idle', progressLabel: '' });
-  }
+  const outcome = await index.run({
+    bookHash,
+    // The title is the caller's fact, not something the pipeline reads from a store.
+    bookTitle: input.bookTitle,
+    context,
+    signal,
+    currentSpineIndex: input.currentSpineIndex,
+    getCurrentSpineIndex: input.getCurrentSpineIndex,
+    onProgress: (progress) => {
+      // Only the fields a report names are written, so a progress tick cannot
+      // clobber the phase another tick just set.
+      const patch: Partial<BookIndexState> = {};
+      if (progress.phase !== undefined) patch.phase = progress.phase;
+      if (progress.panoramaReady !== undefined) patch.panoramaReady = progress.panoramaReady;
+      if (progress.briefedCount !== undefined) patch.briefedCount = progress.briefedCount;
+      if (progress.briefTotal !== undefined) patch.briefTotal = progress.briefTotal;
+      if (progress.progressLabel !== undefined) patch.progressLabel = progress.progressLabel;
+      set(patch);
+    },
+  });
+
+  void outcome;
 }
 
 /** App-wide singleton bound to the real Dexie repositories. */
 export const useBookIndexStore = createBookIndexStore({
+  // Phase 1+2 waits for no model, and its sources are the opened-book registry:
+  // an engine book loads section text lazily, a TXT book is one document.
+  ingestion: createBookIngestion({
+    bookNodes: new BookNodeRepository(),
+    getMonolithicText: (bookHash) => getOpenedBook(bookHash)?.getMonolithicText(),
+    getSegmentationSource: defaultSegmentationSource,
+    readBookIndexSummary: (bookHash) => readBookIndexSummary(bookHash),
+    saveBookIndexSummary: (bookHash, summary) => saveBookIndexSummary(bookHash, summary),
+  }),
   bookNodes: new BookNodeRepository(),
   panoramas: new BookPanoramaRepository(),
   // Lazy dynamic import keeps the AI SDK out of unit-test module load.

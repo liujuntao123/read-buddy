@@ -2,7 +2,12 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import FoliatePane from './FoliatePane';
 import { applyTheme } from '@/theme/readingTheme';
-import type { EngineLocation, FoliateEngineHandle } from '@/services/library/foliateEngine';
+import type {
+  EngineLocation,
+  FoliateEngineHandle,
+  PresentationDiagnostics,
+  PresentationPatch,
+} from '@/services/library/foliateEngine';
 import type { BookNode } from '@/types/readingAgent';
 import {
   clearAgentBookContext,
@@ -28,8 +33,9 @@ interface FakeEngine extends FoliateEngineHandle {
   goTo: (target: string | number) => Promise<void>;
   goToCfi: (cfi: string) => Promise<void>;
   close: () => void;
-  setLayout: (params: { pageMode: 'single' | 'double' }) => void;
-  setTypography: (css: string) => void;
+  /** One presentation entry point since 候选 4. */
+  applyPresentation: (patch: PresentationPatch) => void;
+  presentationDiagnostics: () => PresentationDiagnostics;
   relocators: Set<(location: EngineLocation) => void>;
   loaders: Set<(payload: { doc: Document; index: number }) => void>;
   location: EngineLocation | null;
@@ -66,7 +72,6 @@ const makeEngine = (toc = TOC): FakeEngine => {
     get spineCount() {
       return toc.length;
     },
-    tocItems: vi.fn(() => toc.map(({ label, href }) => ({ label, href, depth: 0 }))),
     tocEntries: vi.fn(() =>
       toc.map(({ label, href }, index) => ({ label, href, depth: 0, spineIndex: index })),
     ),
@@ -75,18 +80,14 @@ const makeEngine = (toc = TOC): FakeEngine => {
       return this.location;
     }),
     close: vi.fn(),
-    setTheme: vi.fn(),
-    setPageMode: vi.fn(),
-    setLayout: vi.fn(),
-    setTypography: vi.fn(),
-    getTocIndex: vi.fn((loc: EngineLocation) => {
-      if (loc.tocItemHref) {
-        const found = toc.findIndex((t) => t.href === loc.tocItemHref);
-        if (found >= 0) return found;
-      }
-      return loc.index;
+    getCover: vi.fn(async () => undefined),
+    applyPresentation: vi.fn(),
+    presentationDiagnostics: () => ({
+      viaElement: [],
+      viaRendererFallback: [],
+      unsupported: [],
     }),
-  };
+    };
   return engine;
 };
 
@@ -288,7 +289,12 @@ describe('FoliatePane', () => {
     const sendSpy = vi.spyOn(useChatStore.getState(), 'send').mockResolvedValue(undefined);
     fireEvent.click(screen.getByRole('button', { name: '解释' }));
     expect(sendSpy).toHaveBeenCalledTimes(1);
-    expect(sendSpy.mock.calls[0]![0]).toContain('灯火在雾中摇曳');
+    const [instruction, quoteText] = sendSpy.mock.calls[0]!;
+    // The selection travels as the quote (it renders as the quote block); the
+    // message body is the instruction alone, so the passage shows up once.
+    expect(instruction).toContain('请解释');
+    expect(instruction).not.toContain('灯火在雾中摇曳');
+    expect(quoteText).toBe('灯火在雾中摇曳');
     expect(useAISidebarStore.getState().expanded).toBe(true);
     expect(useAISidebarStore.getState().activeTab).toBe('chat');
     sendSpy.mockRestore();
@@ -342,15 +348,15 @@ describe('FoliatePane', () => {
     act(() => {
       useReaderSettingsStore.getState().setPageMode('single');
     });
-    expect(engine.setLayout).toHaveBeenLastCalledWith(
-      expect.objectContaining({ pageMode: 'single' }),
+    expect(engine.applyPresentation).toHaveBeenLastCalledWith(
+      expect.objectContaining({ layout: expect.objectContaining({ pageMode: 'single' }) }),
     );
 
     act(() => {
       useReaderSettingsStore.getState().setPageMode('double');
     });
-    expect(engine.setLayout).toHaveBeenLastCalledWith(
-      expect.objectContaining({ pageMode: 'double' }),
+    expect(engine.applyPresentation).toHaveBeenLastCalledWith(
+      expect.objectContaining({ layout: expect.objectContaining({ pageMode: 'double' }) }),
     );
   });
 
@@ -362,10 +368,10 @@ describe('FoliatePane', () => {
     render(<FoliatePane engine={engine} />);
     await waitFor(() => expect(engine.openIn).toHaveBeenCalled());
 
-    expect(engine.setTypography).toHaveBeenCalledWith(expect.stringContaining('font-size: 21px'));
-    expect(engine.setTypography).toHaveBeenCalledWith(expect.stringContaining('font-family'));
-    expect(engine.setLayout).toHaveBeenCalledWith(
-      expect.objectContaining({ pageMode: 'double', contentWidth: 900 }),
+    expect(engine.applyPresentation).toHaveBeenCalledWith(expect.objectContaining({ typographyCss: expect.stringContaining('font-size: 21px') }));
+    expect(engine.applyPresentation).toHaveBeenCalledWith(expect.objectContaining({ typographyCss: expect.stringContaining('font-family') }));
+    expect(engine.applyPresentation).toHaveBeenCalledWith(
+      expect.objectContaining({ layout: expect.objectContaining({ pageMode: 'double', contentWidth: 900 }) }),
     );
   });
 
@@ -465,7 +471,7 @@ describe('FoliatePane', () => {
     });
 
     await waitFor(() => {
-      expect(engine.setTheme).toHaveBeenCalledWith('dark');
+      expect(engine.applyPresentation).toHaveBeenCalledWith(expect.objectContaining({ theme: 'dark' }));
     });
   });
 });

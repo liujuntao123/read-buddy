@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   CONFIDENCE_ADOPT_THRESHOLD,
-  FIXED_PART_PATTERN,
   LEVEL3_TARGET_CHARS,
   SPINE_JOIN,
   buildFixedLengthNodes,
   buildTocNodes,
-  classifyHeadingLevel,
   detectTocPageEnd,
   isDegenerateSpine,
   monotonicityScore,
@@ -16,9 +14,11 @@ import {
   scoreConfidence,
   segmentMonolithic,
   segmentSpineBook,
-  stampDepths,
   type SpineSectionInput,
 } from './layeredSegmenter';
+// Level rules are owned by the node model (ADR 0010 ¶1, 候选 5); they are used
+// here only as pre-conditions inside integration tests.
+import { classifyHeadingLevel, stampDepths } from '@/services/bookNodes';
 import { bookNodeId, type BookTocEntry, type NodeAnchor } from '@/types/readingAgent';
 
 const paragraph = (seed: string, lines = 60): string =>
@@ -182,38 +182,6 @@ describe('segmentMonolithic', () => {
 });
 
 describe('hierarchical node model (章 › 节)', () => {
-  it('classifies 卷/部/篇 as 章-level containers and 章/回/节 as leaves', () => {
-    expect(classifyHeadingLevel('第一卷 风云')).toBe('container');
-    expect(classifyHeadingLevel('第二部')).toBe('container');
-    expect(classifyHeadingLevel('上部')).toBe('container');
-    expect(classifyHeadingLevel('正篇')).toBe('container');
-    expect(classifyHeadingLevel('Part II')).toBe('container');
-    expect(classifyHeadingLevel('第一章 风起')).toBe('leaf');
-    expect(classifyHeadingLevel('第二回')).toBe('leaf');
-    expect(classifyHeadingLevel('第三节')).toBe('leaf');
-    expect(classifyHeadingLevel('Chapter 3')).toBe('leaf');
-    expect(classifyHeadingLevel('序言')).toBeNull();
-    expect(classifyHeadingLevel('1. 绪论')).toBeNull();
-    expect(classifyHeadingLevel('第 3 部分')).toBeNull();
-  });
-
-  it('treats a NAMED 部分 heading as a container (《看见孩子》/《思考快与慢》)', () => {
-    // 「第一部分」 ends in 分, so a bare [卷部篇] character class never matched
-    // it and these two books stayed flat at depth 0.
-    expect(classifyHeadingLevel('第一部分 系统1，系统2')).toBe('container');
-    expect(classifyHeadingLevel('第二部分 启发法与偏见')).toBe('container');
-    expect(classifyHeadingLevel('第1部分 贝姬医生的育儿准则')).toBe('container');
-    expect(classifyHeadingLevel('第2部分 建立亲密感，改善行为')).toBe('container');
-    expect(classifyHeadingLevel('第三部分')).toBe('container');
-    // Still leaf-ish / signals: 章 and the book-specific 准则/实战 series.
-    expect(classifyHeadingLevel('第1章 一张愤怒的脸和一道乘法题')).toBe('leaf');
-    expect(classifyHeadingLevel('准则2 真相不唯一')).toBeNull();
-    expect(classifyHeadingLevel('实战2 孩子不听话（或者说，不合作）怎么办？')).toBeNull();
-    // The Level-3 synthetic chunk title must NOT become a container.
-    expect(FIXED_PART_PATTERN.test('第 3 部分')).toBe(true);
-    expect(FIXED_PART_PATTERN.test('第1部分 贝姬医生的育儿准则')).toBe(false);
-  });
-
   it('nests every non-container heading after a container (《看见孩子》 spine)', () => {
     const sections = [
       { title: '前言', text: paragraph('p', 10), spineIndex: 0 },

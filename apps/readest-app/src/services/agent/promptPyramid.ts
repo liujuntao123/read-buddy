@@ -7,6 +7,7 @@
  * along in the same prompt; L0 (user quote) is appended to the user turn.
  */
 import type { BookPanoramaRecord, BookNode, NodeKind } from '@/types/readingAgent';
+import { briefLabelFor } from '@/types/readingAgent';
 import {
   formatNodeCounts,
   formatNodeOrdinal,
@@ -18,27 +19,34 @@ import {
 
 export interface AssembleSystemPromptOptions {
   bookTitle: string;
-  /** 0-based physical ordinal of the node the reader currently sees. */
-  currentSectionIndex: number;
+  /** 0-based **node** ordinal of the viewport node (a Node View ordinal). */
+  currentNodeIndex: number;
   currentNodeTitle: string;
   /** 章-level container above the current node (user hierarchy model). */
   parentNodeTitle?: string;
   /** Node kind of the current viewpoint: 章 / 节 / 段. */
   currentNodeKind?: NodeKind;
   /**
-   * Whole-book node shape; drives the outline heading counts. Derived from
-   * `allNodeBriefs` when the caller does not have the full node list.
+   * Whole-book node shape; drives the outline heading counts. Required: the
+   * shape must come from the book's own node list (候选 6), never from the micro
+   * briefs that happen to be in hand — those are a different population and a
+   * book with pending briefs would report the wrong counts.
    */
-  shape?: BookNodeShape;
+  shape: BookNodeShape;
   panorama?: Pick<
     BookPanoramaRecord,
     'genre' | 'summary' | 'worldSetting' | 'mainCharacters'
   >;
-  /** All book nodes (briefs may still be pending). */
+  /**
+   * All book nodes (briefs may still be pending). `isContainer` marks the
+   * structural grouping nodes (a 章 owning 节): they are never briefed, so the
+   * matrix says so instead of claiming a brief is still pending (ADR 0010).
+   */
   allNodeBriefs: Array<
     Pick<BookNode, 'nodeIndex' | 'title' | 'brief'> & {
       depth?: BookNode['depth'];
       parentTitle?: string;
+      isContainer?: boolean;
     }
   >;
   /** L0: the user's selected text fragment, when the turn started from one. */
@@ -54,6 +62,10 @@ export const CURRENT_CHAPTER_EXCERPT_CHARS = 1_500;
  * 章-level container so the model can reason about book structure. Each row
  * names its level with the shared vocabulary (`nodeKindLabel`) — never the
  * ambiguous "节点" placeholder that used to hide 章 / 节.
+ *
+ * A container 章 is never briefed (ADR 0010), so its row names the grouping
+ * instead of showing the pending-brief placeholder: the model must not read a
+ * container as "this chapter's brief has not been generated yet".
  */
 export function renderTocMatrix(
   nodes: AssembleSystemPromptOptions['allNodeBriefs'],
@@ -62,7 +74,7 @@ export function renderTocMatrix(
     .map((node) => {
       const depth = node.depth ?? 0;
       const kind = resolveNodeKind(depth, node.title);
-      const base = `• ${formatNodeOrdinal(kind, node.nodeIndex + 1)}《${node.title}》：${node.brief || '（待生成微简介）'}`;
+      const base = `• ${formatNodeOrdinal(kind, node.nodeIndex + 1)}《${node.title}》：${briefLabelFor(node.brief, node.isContainer === true)}`;
       if (depth > 0) {
         const parent = node.parentTitle ? `（隶属《${node.parentTitle}》）` : '';
         return `  └ ${base}${parent}`;
@@ -74,7 +86,7 @@ export function renderTocMatrix(
 
 export function assembleAgentSystemPrompt({
   bookTitle,
-  currentSectionIndex,
+  currentNodeIndex,
   currentNodeTitle,
   parentNodeTitle,
   currentNodeKind,
@@ -84,9 +96,7 @@ export function assembleAgentSystemPrompt({
   quoteText,
 }: AssembleSystemPromptOptions): string {
   const fullTOC = renderTocMatrix(allNodeBriefs);
-  const nodeShape =
-    shape ??
-    shapeOfNodes(allNodeBriefs.map((node) => ({ depth: node.depth ?? 0, title: node.title })));
+  const nodeShape = shape;
 
   const quoteBlock = quoteText
     ? `\n【读者划选的原文片段（L0 焦点）】\n${quoteText}\n`
@@ -102,13 +112,13 @@ export function assembleAgentSystemPrompt({
 你正在陪伴读者阅读《${bookTitle}》。
 
 【读者当前阅读视口（L1 局部）】
-- 读者目前停留在：第 ${currentSectionIndex + 1} 节点，${breadcrumb}
+- 读者目前停留在：${formatNodeOrdinal(kind, currentNodeIndex + 1)}，${breadcrumb}
 ${quoteBlock}
 【全书宏观画像与主旨（L2 骨架）】
-- 题材类型：${panorama?.genre ?? '未标注'}
-- 全书主旨概要：${panorama?.summary ?? '暂无全景概要'}
-- 核心人物库：${panorama?.mainCharacters?.join('、') ?? '未标注'}
-- 世界观/架构背景：${panorama?.worldSetting ?? '无特定设定'}
+- 所属领域与体裁：${panorama?.genre ?? '未标注'}
+- 全书核心主旨与脉络：${panorama?.summary ?? '暂无全景概要'}
+- 核心概念与关键主体：${panorama?.mainCharacters?.join('、') ?? '未标注'}
+- 探讨语境与背景脉络：${panorama?.worldSetting ?? '无特定设定'}
 
 【全书节点脉络（共 ${allNodeBriefs.length} 个：${formatNodeCounts(nodeShape)}，└ 缩进行为第二层节点）】
 ${fullTOC}

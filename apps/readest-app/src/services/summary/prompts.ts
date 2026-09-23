@@ -26,42 +26,43 @@ export const SUMMARY_HEADING_TERMS = '### 💡 核心概念与关键术语';
 
 /** Canonical shape the final answer must follow (and only this shape). */
 export const THREE_PART_TEMPLATE = `${SUMMARY_HEADING_CORE}
-（用 2~3 句话高度概括本节点的核心事件或主要论点）
+（以与原书相同的叙述视角，用 2~3 句话概述本节点的核心主旨、核心事实或主要论点）
 
 ${SUMMARY_HEADING_OUTLINE}
-1. **[阶段/论点一]**：交代来龙去脉——因何而起、如何发展、导向什么结果或转折（2~4 句连贯叙述，禁止只罗列孤立事实）
-2. **[阶段/论点二]**：同上，讲清该要点的前因、经过与后续影响...
-3. **[阶段/论点三]**：同上，说明它为后文留下了什么（结论、悬念或伏笔）...
+1. **[阶段/论点一]**：完整阐述该要点的逻辑链与论证链，交代背景起因与目的、核心内容或经过、导向的结果与结论（删除冗余细节，保持前后上下文与论证链条完整连贯）
+2. **[阶段/论点二]**：按论证/叙事脉络展开下一个要点，讲清该要点的背景起因、展开过程与最终结论
+3. **[阶段/论点三]**：继续推进核心脉络，保持完整论证闭环与前后逻辑承接
 
 ${SUMMARY_HEADING_TERMS}
-- **[概念/术语名]**：在书中的具体含义、首次出现的语境与作用`;
+- **[概念/术语名]**：在书中的具体含义、语境与核心作用`;
 
 /**
- * Narrative-completeness rule (user review): every outline point must trace
- * its full arc in the source text instead of being a fragmentary fact.
+ * Narrative-completeness rule: every outline point must trace its full
+ * logical / argumentative chain in the book's narrative perspective.
  */
-export const CAUSALITY_RULE = `【要点撰写铁律】
-- 每个要点都必须讲清"来龙去脉"：它因何发生（前文铺垫）→ 具体如何展开（人物、场景、行动）→ 造成什么结果或转折（对后续的影响/悬念）；
-- 禁止片面性、片段性的孤立罗列（例如只写"某某离开了城市"而不交代动机与后果）；
-- 各要点按叙事或论证的自然顺序衔接，前后要点之间要有可追溯的因果链。`;
+export const CAUSALITY_RULE = `【要点撰写准则】
+1. 叙述视角：始终采用与书籍内容相同的叙述视角直接陈述，不采用第三方解读书籍或解读作者的口吻。
+2. 逻辑链与论证链：讲述每个要点时，完整交代前后上下文与论证链条（是谁基于什么目的或背景 → 核心内容或事实大致是什么 → 得到了什么结果与结论）。可以删除冗余细节和繁琐描述，但必须保留完整的逻辑链和论证链。
+3. 脉络连贯：按原文论证或叙事的推进顺序组织各要点，各要点之间前后逻辑严密承接。`;
 
 /** Rule injected wherever the model must emit the three-part structure. */
-export const THREE_PART_RULE = `你的输出必须且仅需包含以下三个小节，顺序固定，不得添加任何额外小节、开场白或结尾解释：
+export const THREE_PART_RULE = `请严格按照以下三小节结构直接输出 Markdown 正文：
 ${THREE_PART_TEMPLATE}
 
 ${CAUSALITY_RULE}`;
 
 /** System prompt for the final-answer calls (single pass and reduce). */
 export const SUMMARY_SYSTEM_PROMPT =
-  '你是一位严谨、注重脉络的中文读书助理，负责生成结构化的节点总结。' +
-  '总结要点时始终交代清楚每个要点在原文中的来龙去脉（前因、经过、后果），而非片段式摘抄。' +
-  '直接输出 Markdown 正文，严格遵循用户给出的格式规范，不要输出任何解释性开场白或收尾语。';
+  '你是一位严谨、注重逻辑脉络的中文阅读助理，负责生成结构化的节点总结。' +
+  '总结时始终保持与书籍内容相同的叙述视角直接阐述内容。' +
+  '讲述要点时把前后上下文讲述完整，保留完整的逻辑链与论证链（背景与目的、核心内容或事实、结果与结论），删除冗余细节，保持论证链条与逻辑闭环严密连贯。' +
+  '请直接输出 Markdown 正文。';
 
 /** System prompt for the map phase (sub-block key-point extraction). */
 export const MAP_SYSTEM_PROMPT =
-  '你是一位严谨、注重脉络的中文读书助理，正在协助分块提炼超长节点。' +
-  '每个要点都用一两句连贯陈述交代其前因与后果，而非孤立摘抄。' +
-  '只依据给定片段输出要点列表，不要臆测片段之外的内容，不要输出开场白或收尾语。';
+  '你是一位严谨、注重脉络的中文阅读助理，正在协助分块提炼长节点。' +
+  '请以与书籍内容相同的叙述视角直接提取核心要点，每个要点交代清楚前后上下文、起因目的、核心事实与导向的结论，保持完整的逻辑链。' +
+  '请直接输出要点列表。';
 
 export interface SummaryPromptInput {
   bookTitle: string;
@@ -119,10 +120,10 @@ export function buildMapPrompt({
 }: MapPromptInput): string {
   const level = nodeKindLabel(nodeKind);
   return `《${bookTitle}》的超长${level}「${nodeTitle}」被拆分为 ${total} 个片段，下面是第 ${index}/${total} 个片段。
-请提炼该片段的关键要点（不需要三段式结构）：
-- 逐条列出片段中的关键事件、论点或情节转折，每条用一两句话交代前因与后果，保持叙事连贯；
-- 标出片段中出现的重要人物、地点与设定及其在片段中的角色；
-- 不要推测片段之外的内容，不要输出开场白或收尾语。
+请以与原书相同的叙述视角提炼该片段的关键要点（不需要三段式结构）：
+- 逐条列出片段中的关键事件、论点或情节转折，完整交代前后上下文与逻辑链（背景目的、经过与结论）；
+- 标出片段中出现的重要人物、地点与设定及其核心作用；
+- 直接输出要点列表。
 
 【片段 ${index}/${total}】
 ${chunk}`;
@@ -151,7 +152,7 @@ export function buildReducePrompt({
     .map((summary, i) => `【片段 ${i + 1} 要点】\n${summary.trim()}`)
     .join('\n\n');
 
-  return `以下是《${bookTitle}》${level}「${nodeTitle}」各片段的要点提炼结果。请将它们合成为一份统一、权威的整${level}总结：去重、按叙事/论证顺序重组，并把被拆散到不同片段的因果链重新接续完整（每个要点仍须交代来龙去脉）。
+  return `以下是《${bookTitle}》${level}「${nodeTitle}」各片段的要点提炼结果。请将它们合成为一份统一的整${level}总结：去重、按叙事/论证顺序重组，保持前后上下文连贯并接续完整的逻辑链与论证链。
 
 ${THREE_PART_RULE}
 

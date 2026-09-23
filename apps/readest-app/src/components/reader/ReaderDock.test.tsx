@@ -8,6 +8,12 @@ import { useLibraryStore } from '@/store/libraryStore';
 import { useReaderStore } from '@/store/readerStore';
 import { useReaderSettingsStore } from '@/store/readerSettingsStore';
 import { useSegmentationStore } from '@/store/segmentationStore';
+import {
+  clearAgentBookContext,
+  createAgentBookContext,
+  registerAgentBookContext,
+} from '@/services/agent/agentContext';
+import { bookNodeId, type BookNode } from '@/types/readingAgent';
 
 const TOC = [
   { label: '第一章 迷雾之城', href: 'ch1.xhtml' },
@@ -40,6 +46,8 @@ const makeEngine = (
 ): FoliateEngineHandle => {
   const relocators = new Set<(location: EngineLocation) => void>();
   const loaders = new Set<(payload: { doc: Document; index: number }) => void>();
+  /** Where the fake viewport is; `currentLocation()` reports it. */
+  let location: EngineLocation | null = null;
   return {
     openIn: vi.fn(async (container: HTMLElement) => {
       container.appendChild(document.createElement('div'));
@@ -65,7 +73,6 @@ const makeEngine = (
     get spineCount() {
       return toc.length;
     },
-    tocItems: vi.fn(() => toc.map((item) => ({ ...item, depth: item.depth ?? 0 }))),
     tocEntries: vi.fn(() =>
       toc.map((item, index) => ({
         label: item.label,
@@ -75,25 +82,31 @@ const makeEngine = (
       })),
     ),
     getSpineAnchors: vi.fn(() => []),
-    currentLocation: vi.fn((): EngineLocation | null => null),
+    // A real engine reports where the viewport actually is. This fake used to
+    // return null forever while still firing relocate events, which let the dock's
+    // own `tocPos` and the engine's position disagree — exactly the split 候选 7
+    // removed, so the fixture now keeps them consistent.
+    currentLocation: vi.fn((): EngineLocation | null => location),
     close: vi.fn(),
-    setTheme: vi.fn(),
-    setLayout: vi.fn(),
-    setTypography: vi.fn(),
-    getTocIndex: vi.fn((loc: EngineLocation) => {
-      const found = toc.findIndex((t) => t.href === loc.tocItemHref);
-      return found >= 0 ? found : loc.index;
-    }),
+    applyPresentation: vi.fn(),
     __relocators: relocators,
     __loaders: loaders,
+    __setLocation: (next: EngineLocation) => {
+      location = next;
+    },
   } as unknown as FoliateEngineHandle & {
     __relocators: Set<(location: EngineLocation) => void>;
   };
 };
 
-const relocate = (engine: FoliateEngineHandle, index: number): void => {
+const relocate = (
+  engine: FoliateEngineHandle,
+  index: number,
+  locationOverride?: Partial<EngineLocation>,
+): void => {
   const handle = engine as unknown as {
     __relocators: Set<(location: EngineLocation) => void>;
+    __setLocation: (location: EngineLocation) => void;
   };
   const location: EngineLocation = {
     index,
@@ -101,8 +114,43 @@ const relocate = (engine: FoliateEngineHandle, index: number): void => {
     cfi: `epubcfi(/6/${index + 1})`,
     tocItemLabel: TOC[index]?.label,
     tocItemHref: TOC[index]?.href,
+    ...locationOverride,
   };
+  handle.__setLocation(location);
   for (const cb of handle.__relocators) cb(location);
+};
+
+/**
+ * The book's node model as the index would produce it: rows in document order
+ * carrying their **stamped** depth, parent links included. The dock takes its
+ * counts from this list — and from nothing else (候选 6).
+ */
+const registerModel = (
+  bookHash: string,
+  rows: Array<{ title: string; depth: number; href?: string }>,
+): void => {
+  let lastChapterId: string | undefined;
+  const nodes: BookNode[] = rows.map((row, index) => {
+    const nodeId = bookNodeId(bookHash, index);
+    const node: BookNode = {
+      nodeId,
+      bookHash,
+      nodeIndex: index,
+      title: row.title,
+      depth: row.depth,
+      startOffset: index * 10,
+      endOffset: (index + 1) * 10,
+      charCount: 10,
+      ...(row.href ? { href: row.href } : {}),
+      indexStatus: 'ready',
+      ...(row.depth > 0 && lastChapterId ? { parentNodeId: lastChapterId } : {}),
+    };
+    if (row.depth === 0) lastChapterId = nodeId;
+    return node;
+  });
+  registerAgentBookContext(
+    createAgentBookContext({ bookHash, nodes, fullText: 'x'.repeat(rows.length * 10) }),
+  );
 };
 
 const resetStores = (engine: FoliateEngineHandle | null = null): void => {
@@ -126,9 +174,6 @@ const resetStores = (engine: FoliateEngineHandle | null = null): void => {
   useAISidebarStore.setState({ expanded: false, width: 400, activeTab: 'summary' });
   useSegmentationStore.setState({
     segmentation: null,
-    banner: { visible: false, detectedCount: 0 },
-    applyDecision: null,
-    scanContext: null,
   });
 };
 
@@ -141,6 +186,8 @@ beforeEach(() => {
 
 afterEach(() => {
   resetStores();
+  clearAgentBookContext('engine-book');
+  clearAgentBookContext('txt-book');
 });
 
 describe('ReaderDock', () => {
@@ -212,6 +259,7 @@ describe('ReaderDock', () => {
   it('indents nested 节 rows and jumps to their intra-chapter anchor', () => {
     const engine = makeEngine(NESTED_TOC);
     resetStores(engine);
+    registerModel('engine-book', NESTED_TOC.map((row) => ({ title: row.label, depth: row.depth, href: row.href })));
     render(<ReaderDock />);
 
     fireEvent.click(screen.getByTestId('reader-dock-toc-button'));
@@ -245,6 +293,9 @@ describe('ReaderDock', () => {
   it('stamps the hierarchy of a flat NCX from the titles themselves', () => {
     const engine = makeEngine(FLAT_NCX_TOC);
     resetStores(engine);
+    // The model carries the STAMPED depth; the flat directory rows are only the
+    // engine's view of it.
+    registerModel('engine-book', FLAT_NCX_TOC.map((row, i) => ({ title: row.label, depth: i === 0 ? 0 : 1, href: row.href })));
     render(<ReaderDock />);
 
     fireEvent.click(screen.getByTestId('reader-dock-toc-button'));
@@ -273,6 +324,7 @@ describe('ReaderDock', () => {
   it('renders a genuinely single-level book without 节 wording', () => {
     const engine = makeEngine();
     resetStores(engine);
+    registerModel('engine-book', TOC.map((row) => ({ title: row.label, depth: 0, href: row.href })));
     render(<ReaderDock />);
 
     fireEvent.click(screen.getByTestId('reader-dock-toc-button'));
@@ -297,10 +349,16 @@ describe('ReaderDock', () => {
       },
     });
 
+    // The index builds the model from those sections: three first-level nodes.
+    registerModel('txt-book', [
+      { title: '第一章 起点', depth: 0 },
+      { title: '第二章 转折', depth: 0 },
+      { title: '第三章 归途', depth: 0 },
+    ]);
+
     render(<ReaderDock />);
     // Scroll readers have no page mode: the toggle stays hidden.
     expect(screen.queryByTestId('page-mode-toggle')).toBeNull();
-
     fireEvent.click(screen.getByTestId('reader-dock-toc-button'));
     expect(screen.getByTestId('reader-dock-toc-list').textContent).toContain('第二章 转折');
     // Virtual sections carry the hierarchy in their titles: 3 章, no 节.
@@ -311,6 +369,28 @@ describe('ReaderDock', () => {
     fireEvent.click(screen.getByRole('button', { name: '第三章 归途' }));
     expect(useReaderStore.getState().spineIndex).toBe(2);
     expect(useReaderStore.getState().nodeTitle).toBe('第三章 归途');
+  });
+
+  it('publishes no 章/节 counts before the node model exists', () => {
+    // Counting the engine's directory *rows* is what let the same book show two
+    // different shapes: the dock counted rows, the companion index counts nodes
+    // (same-anchor duplicates collapse). Until the model can answer, the popover
+    // lists the directory and claims nothing.
+    const engine = makeEngine(NESTED_TOC);
+    resetStores(engine);
+    render(<ReaderDock />);
+
+    fireEvent.click(screen.getByTestId('reader-dock-toc-button'));
+
+    const summary = screen.getByTestId('reader-dock-toc-list').parentElement!.textContent ?? '';
+    expect(summary).toContain('书籍目录');
+    expect(summary).not.toContain('2 章');
+    expect(summary).not.toContain('3 节');
+    // The rows themselves are still complete and indented.
+    expect(screen.getAllByRole('listitem')).toHaveLength(5);
+    expect(screen.getAllByRole('listitem')[1]!.getAttribute('style')).toContain(
+      'padding-inline-start',
+    );
   });
 
   it('toggles page mode through the store and the pane applies it to the engine', async () => {
@@ -330,8 +410,8 @@ describe('ReaderDock', () => {
     expect(window.localStorage.getItem('readest-plus:page-mode')).toBe('single');
     expect(screen.getByTestId('page-mode-toggle').getAttribute('aria-label')).toBe('切换为双页');
     await waitFor(() =>
-      expect(engine.setLayout).toHaveBeenLastCalledWith(
-        expect.objectContaining({ pageMode: 'single' }),
+      expect(engine.applyPresentation).toHaveBeenLastCalledWith(
+        expect.objectContaining({ layout: expect.objectContaining({ pageMode: 'single' }) }),
       ),
     );
 
@@ -339,8 +419,8 @@ describe('ReaderDock', () => {
     expect(useReaderSettingsStore.getState().layout.pageMode).toBe('double');
     expect(window.localStorage.getItem('readest-plus:page-mode')).toBe('double');
     await waitFor(() =>
-      expect(engine.setLayout).toHaveBeenLastCalledWith(
-        expect.objectContaining({ pageMode: 'double' }),
+      expect(engine.applyPresentation).toHaveBeenLastCalledWith(
+        expect.objectContaining({ layout: expect.objectContaining({ pageMode: 'double' }) }),
       ),
     );
   });
@@ -364,12 +444,52 @@ describe('ReaderDock', () => {
     fireEvent.click(screen.getByTestId('font-size-increase'));
     expect(screen.getByTestId('font-size-value').textContent).toBe('18px');
     await waitFor(() =>
-      expect(engine.setTypography).toHaveBeenCalledWith(expect.stringContaining('font-size: 18px')),
+      expect(engine.applyPresentation).toHaveBeenCalledWith(expect.objectContaining({ typographyCss: expect.stringContaining('font-size: 18px') })),
     );
 
     fireEvent.click(screen.getByTestId('reader-settings-reset'));
     await waitFor(() =>
-      expect(engine.setTypography).toHaveBeenCalledWith(expect.not.stringContaining('18px')),
+      expect(engine.applyPresentation).toHaveBeenCalledWith(expect.objectContaining({ typographyCss: expect.not.stringContaining('18px') })),
     );
+  });
+
+  it('allows folding and unfolding individual chapters as well as all chapters', () => {
+    const engine = makeEngine(NESTED_TOC);
+    resetStores(engine);
+    // Deliberately NO node model: this suite keeps covering the pre-index window,
+    // where the dock falls back to the engine's directory rows.
+    render(<ReaderDock />);
+
+    fireEvent.click(screen.getByTestId('reader-dock-toc-button'));
+
+    // Initially all 5 rows are visible
+    expect(screen.getAllByRole('listitem')).toHaveLength(5);
+    expect(screen.getByText('§1 伦理学这个名称')).toBeTruthy();
+
+    // Toggle fold on chapter 0
+    const foldToggle0 = screen.getByTestId('chapter-fold-toggle-0');
+    fireEvent.click(foldToggle0);
+
+    // Chapter 0's children (§1, §2) are now hidden; chapter 1 and its child (§1) remain visible
+    const itemsAfterFold = screen.getAllByRole('listitem');
+    expect(itemsAfterFold).toHaveLength(3);
+    expect(screen.queryByText('§1 伦理学这个名称')).toBeNull();
+    expect(screen.getByText('第二章 功效主义与自私的基因')).toBeTruthy();
+
+    // Toggle "全部折叠"
+    const toggleAllBtn = screen.getByTestId('toggle-all-chapters');
+    expect(toggleAllBtn.textContent).toBe('全部折叠');
+    fireEvent.click(toggleAllBtn);
+
+    // All chapters are folded: only the 2 chapter headers remain visible
+    expect(screen.getAllByRole('listitem')).toHaveLength(2);
+
+    // Toggle "全部展开"
+    expect(toggleAllBtn.textContent).toBe('全部展开');
+    fireEvent.click(toggleAllBtn);
+
+    // All 5 rows are visible again
+    expect(screen.getAllByRole('listitem')).toHaveLength(5);
+    expect(screen.getByText('§1 伦理学这个名称')).toBeTruthy();
   });
 });

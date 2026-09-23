@@ -10,6 +10,7 @@ import { useSegmentationStore } from '@/store/segmentationStore';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useBookIndexStore } from '@/store/bookIndexStore';
 import { getOpenedBook } from '@/services/library/contentRegistry';
+import { flushReadingPosition, recordReadingPosition } from '@/services/reader/readingPosition';
 import { DEMO_BOOK, type DemoSection } from '@/services/reader/demoBook';
 import ReaderPane from '@/components/reader/ReaderPane';
 import FoliatePane from '@/components/reader/FoliatePane';
@@ -46,7 +47,6 @@ export default function Workspace() {
   const libraryBooks = useLibraryStore((s) => s.books);
   const initLibrary = useLibraryStore((s) => s.init);
   const importFiles = useLibraryStore((s) => s.importFiles);
-  const saveLibraryProgress = useLibraryStore((s) => s.saveProgress);
   const segmentation = useSegmentationStore((s) => s.segmentation);
 
   const [dragOver, setDragOver] = useState(false);
@@ -94,26 +94,40 @@ export default function Workspace() {
     void openChatBook(bookHash, spineIndex);
   }, [bookHash, spineIndex, openChatBook]);
 
-  // Reading-agent pipeline (doc §4.1): on book open, segment + index the
-  // whole book (chapter nodes → panorama → micro-briefs) in the background.
+  // Reading-agent pipeline (doc §4.1): on book open, segment the book and
+  // register the node model. The AI phases (panorama → micro-briefs) are
+  // **manually triggered** (ADR 0004's manual-trigger philosophy; see
+  // `startIndexing`), so this call deliberately omits `autoRunAi`.
   // Keyed on bookHash ONLY — page turns must not restart the pipeline; they
-  // just boost the freshly opened chapter to Priority 0 in the brief queue.
+  // just boost the freshly opened node to Priority 0 in the brief queue.
   const ensureBookIndexed = useBookIndexStore((s) => s.ensureIndexed);
-  const setCurrentIndexedSection = useBookIndexStore((s) => s.setCurrentSection);
+  const setCurrentIndexedSpine = useBookIndexStore((s) => s.setCurrentSpine);
   useEffect(() => {
     if (!bookHash) return;
-    void ensureBookIndexed(bookHash, { currentSectionIndex: spineIndex });
+    void ensureBookIndexed(bookHash, { currentSpineIndex: spineIndex });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- bookHash only; spineIndex is the initial boost seed
   }, [bookHash, ensureBookIndexed]);
   useEffect(() => {
-    setCurrentIndexedSection(spineIndex);
-  }, [spineIndex, setCurrentIndexedSection]);
+    setCurrentIndexedSpine(spineIndex);
+  }, [spineIndex, setCurrentIndexedSpine]);
 
   // Persist reading progress whenever the active section changes (ticket 06).
+  // The Reading Position owner debounces writes and owns them end to end; all
+  // this shell owes it is the flush when the window goes away, so the last page
+  // turn of a session is never lost (the pane's old 1500 ms throttle could drop
+  // it).
   useEffect(() => {
-    if (view !== 'reader' || !currentHash) return;
-    void saveLibraryProgress();
-  }, [spineIndex, view, currentHash, saveLibraryProgress]);
+    const flush = () => {
+      void flushReadingPosition();
+    };
+    window.addEventListener('pagehide', flush);
+    window.addEventListener('beforeunload', flush);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      window.removeEventListener('beforeunload', flush);
+      void flushReadingPosition();
+    };
+  }, []);
 
   // When a segmented book mounts, ReaderPane's segmentation wiring jumps to
   // the first virtual section (its demo-flow effect). Child effects run
@@ -122,12 +136,17 @@ export default function Workspace() {
   useEffect(() => {
     if (view !== 'reader' || !currentHash) return;
     if (!segmentation || segmentation.bookHash !== currentHash) return;
-    const target = libraryBooks.find((book) => book.hash === currentHash)?.lastNodeIndex ?? 0;
+    const target = libraryBooks.find((book) => book.hash === currentHash)?.lastSpineIndex ?? 0;
     if (target <= 0) return;
     const section = segmentation.virtualSections[target];
     if (!section) return;
     const reader = useReaderStore.getState();
-    if (reader.spineIndex !== target) reader.setPosition(target, section.title);
+    if (reader.spineIndex !== target) {
+      recordReadingPosition(
+        { bookHash: currentHash, spineIndex: target },
+        { titleFallback: section.title },
+      );
+    }
   }, [view, currentHash, segmentation, libraryBooks]);
 
   const opened = bookHash ? getOpenedBook(bookHash) : undefined;
@@ -145,7 +164,7 @@ export default function Workspace() {
       },
     }));
   }, [opened]);
-  const monolithicText = opened?.getMonolithicText?.();
+  const monolithicText = opened?.getMonolithicText();
 
   // Drag-and-drop import (tickets 06/07): engine formats and txt dropped
   // anywhere onto the window get imported.
@@ -195,7 +214,7 @@ export default function Workspace() {
       {dragOver && (
         <DropImportHint>
           <Text weight="medium" color="accent">
-            松开以导入书籍（.epub / .mobi / .fb2 / .cbz / .txt）
+            松开以导入书籍
           </Text>
         </DropImportHint>
       )}

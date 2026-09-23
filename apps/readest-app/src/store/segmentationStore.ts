@@ -3,13 +3,20 @@
  * architecture doc §3.2): orchestrates segmentation → persisted virtual
  * sections for monolithic TXT books.
  *
- * Flow:
- * - `scanAndPrompt`: loads any persisted segmentation (idempotent re-scan),
- *   otherwise runs the THREE-LEVEL layered segmenter (front TOC-page filter
- *   → multi-pattern confidence scan → smooth fixed-length fallback) and
- *   auto-applies the result — the pipeline is fully automatic, so the old
- *   interactive confirm banner no longer triggers. `applyRegex` /
- *   `rejectAndFallback` remain for the legacy banner surfaces.
+ * Flow: `scanAndPrompt` loads any persisted segmentation (idempotent re-scan),
+ * otherwise runs the THREE-LEVEL layered segmenter (front TOC-page filter →
+ * multi-pattern confidence scan → smooth fixed-length fallback) and applies the
+ * result — the pipeline is fully automatic (ADR 0004's manual-trigger
+ * philosophy applies to *summaries*, not to segmentation).
+ *
+ * **There is exactly one segmenter** (候选 10). The legacy interactive confirm
+ * flow was unreachable — `banner.visible` was never set outside tests — but it
+ * kept a second detector (`detector.ts`) and a second 段 cutter (`chunker.ts`)
+ * alive, answering "what is a 段" differently from `layeredSegmenter`
+ * (`PREAMBLE_TITLE '序言'` vs `'前言'`; snap window 800 vs
+ * `LEVEL3_SNAP_WINDOW 1_200`). Those, the banner component and the store's
+ * banner half are gone; `scanContext` went with them (every production write set
+ * it to null, so its only readers were tests).
  *
  * The resulting virtual sections share the exact offsets of the agent
  * pipeline's BookNodes (same layered segmenter), so the reader, the DOM
@@ -19,107 +26,70 @@
  * ReadestPlusDatabase instead of the app singleton.
  */
 import { create } from 'zustand';
+import type { StoreApi, UseBoundStore } from 'zustand';
 import { BookSegmentationRepository } from '@/services/db/repositories';
-import { buildVirtualSections, detectChapters } from '@/services/segmentation/detector';
-import { buildFixedLengthSections, DEFAULT_CHUNK_LENGTH } from '@/services/segmentation/chunker';
 import { segmentMonolithic } from '@/services/segmentation/layeredSegmenter';
-import { NODE_HEADING_PATTERN, type BookSegmentation } from '@/types/ai';
-
-export type ApplyDecision = 'pending' | 'applied' | 'rejected' | null;
-
-export interface SegmentationBannerState {
-  visible: boolean;
-  detectedCount: number;
-}
-
-/** Book/text pair the banner actions operate on (from the last scan). */
-export interface SegmentationScanContext {
-  bookHash: string;
-  fullText: string;
-}
+import type { BookSegmentation } from '@/types/ai';
 
 export interface SegmentationState {
   segmentation: BookSegmentation | null;
-  banner: SegmentationBannerState;
-  applyDecision: ApplyDecision;
-  scanContext: SegmentationScanContext | null;
   scanAndPrompt: (bookHash: string, fullText: string) => Promise<void>;
-  applyRegex: (bookHash: string, fullText: string) => Promise<void>;
-  rejectAndFallback: (bookHash: string, fullText: string) => Promise<void>;
-  dismiss: () => void;
 }
 
-let repository: BookSegmentationRepository | null = null;
+export type SegmentationStoreHook = UseBoundStore<StoreApi<SegmentationState>>;
 
-/** Lazily created so importing the store never opens IndexedDB by itself. */
-const getRepository = (): BookSegmentationRepository =>
-  (repository ??= new BookSegmentationRepository());
-
-/** Swap the persistence seam (tests inject a fake or isolated database). */
-export function setSegmentationRepository(repo: BookSegmentationRepository): void {
-  repository = repo;
+export interface SegmentationStoreDeps {
+  /**
+   * Resolve the persistence seam. A **function**, not a value: importing this store
+   * must not open IndexedDB by itself, so the app's resolver constructs the real
+   * repository on first use.
+   */
+  repository: () => BookSegmentationRepository;
 }
 
-const HIDDEN_BANNER: SegmentationBannerState = { visible: false, detectedCount: 0 };
+/**
+ * Factory, like every other non-`persist` store in this directory (候选 epilogue).
+ * It replaces `setSegmentationRepository`, a mutable module global that tests
+ * mutated to point the store at an isolated database — the same anti-pattern
+ * removed from `summaryStore`. A caller that wants an isolated store builds one.
+ */
+export function createSegmentationStore(deps: SegmentationStoreDeps): SegmentationStoreHook {
+  return create<SegmentationState>()((set) => ({
+    segmentation: null,
 
-export const useSegmentationStore = create<SegmentationState>()((set) => ({
-  segmentation: null,
-  banner: HIDDEN_BANNER,
-  applyDecision: null,
-  scanContext: null,
+    scanAndPrompt: async (bookHash, fullText) => {
+      const existing = await deps.repository().load(bookHash);
+      if (existing) {
+        set({ segmentation: existing });
+        return;
+      }
 
-  scanAndPrompt: async (bookHash, fullText) => {
-    const existing = await getRepository().load(bookHash);
-    if (existing) {
-      set({
-        segmentation: existing,
-        banner: HIDDEN_BANNER,
-        applyDecision: 'applied',
-        scanContext: null,
-      });
-      return;
-    }
+      // Reading-agent pipeline: auto-apply the three-level layered segmentation
+      // (TOC-page filter + confidence + smooth fallback). Only the strategy that
+      // actually produced the sections is recorded — the old code stamped
+      // `regexPattern: NODE_HEADING_PATTERN.source` even when the layered
+      // segmenter's own pattern set had matched, so the persisted artifact could
+      // not say which rule ran.
+      const result = segmentMonolithic(bookHash, fullText);
+      const segmentation: BookSegmentation = {
+        bookHash,
+        strategy: result.strategy,
+        virtualSections: result.nodes.map((node) => ({
+          virtualIndex: node.nodeIndex,
+          title: node.title,
+          charOffset: node.startOffset,
+        })),
+      };
+      await deps.repository().save(segmentation);
+      set({ segmentation });
+    },
+  }));
+}
 
-    // Reading-agent pipeline: auto-apply the three-level layered
-    // segmentation (TOC-page filter + confidence + smooth fallback).
-    const result = segmentMonolithic(bookHash, fullText);
-    const segmentation: BookSegmentation = {
-      bookHash,
-      strategy: result.strategy,
-      ...(result.strategy === 'regex'
-        ? { regexPattern: NODE_HEADING_PATTERN.source }
-        : { chunkLength: DEFAULT_CHUNK_LENGTH }),
-      virtualSections: result.nodes.map((node) => ({
-        virtualIndex: node.nodeIndex,
-        title: node.title,
-        charOffset: node.startOffset,
-      })),
-    };
-    await getRepository().save(segmentation);
-    set({ segmentation, banner: HIDDEN_BANNER, applyDecision: 'applied', scanContext: null });
-  },
+/** App-wide singleton (components and `createLibraryStore` default binding). */
+let lazyRepository: BookSegmentationRepository | null = null;
 
-  applyRegex: async (bookHash, fullText) => {
-    const segmentation: BookSegmentation = {
-      bookHash,
-      strategy: 'regex',
-      regexPattern: NODE_HEADING_PATTERN.source,
-      virtualSections: buildVirtualSections(detectChapters(fullText)),
-    };
-    await getRepository().save(segmentation);
-    set({ segmentation, banner: HIDDEN_BANNER, applyDecision: 'applied', scanContext: null });
-  },
-
-  rejectAndFallback: async (bookHash, fullText) => {
-    const segmentation: BookSegmentation = {
-      bookHash,
-      strategy: 'fixed-length',
-      chunkLength: DEFAULT_CHUNK_LENGTH,
-      virtualSections: buildFixedLengthSections(fullText),
-    };
-    await getRepository().save(segmentation);
-    set({ segmentation, banner: HIDDEN_BANNER, applyDecision: 'rejected', scanContext: null });
-  },
-
-  dismiss: () => set((state) => ({ banner: { ...state.banner, visible: false } })),
-}));
+export const useSegmentationStore: SegmentationStoreHook = createSegmentationStore({
+  // Lazily created so importing the store never opens IndexedDB by itself.
+  repository: () => (lazyRepository ??= new BookSegmentationRepository()),
+});

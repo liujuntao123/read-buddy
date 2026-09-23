@@ -80,7 +80,7 @@ describe('createBriefScheduler', () => {
   it('generates, persists and reports progress for every pending node', async () => {
     const { scheduler, repository, db } = makeScheduler();
     const progress = vi.fn();
-    await scheduler.run('bk', NODES, { signal: new AbortController().signal, currentSectionIndex: 0, onProgress: progress });
+    await scheduler.run('bk', NODES, { signal: new AbortController().signal, currentNodeIndex: 0, onProgress: progress });
 
     expect(progress).toHaveBeenCalledTimes(6);
     const rows = await repository.listByBook('bk');
@@ -98,7 +98,7 @@ describe('createBriefScheduler', () => {
 
   it('prioritizes the current node, then the opening nodes', async () => {
     const { scheduler, db, order } = makeScheduler();
-    await scheduler.run('bk', NODES, { signal: new AbortController().signal, currentSectionIndex: 4 });
+    await scheduler.run('bk', NODES, { signal: new AbortController().signal, currentNodeIndex: 4 });
     // With concurrency 2 the exact interleaving is bounded, but node 4
     // (priority 0) and nodes 0~2 (priority 1) must precede 3 and 5.
     expect(order.indexOf(4)).toBeLessThan(order.indexOf(3));
@@ -113,7 +113,7 @@ describe('createBriefScheduler', () => {
     await repository.put({ ...readyNode, updatedAt: 0 });
     await scheduler.run('bk', [readyNode, ...NODES.slice(1)], {
       signal: new AbortController().signal,
-      currentSectionIndex: 0,
+      currentNodeIndex: 0,
     });
     expect(order).not.toContain(0);
     expect(order).toHaveLength(5);
@@ -127,7 +127,7 @@ describe('createBriefScheduler', () => {
       },
     });
     const progress = vi.fn();
-    await scheduler.run('bk', NODES, { signal: new AbortController().signal, currentSectionIndex: 0, onProgress: progress });
+    await scheduler.run('bk', NODES, { signal: new AbortController().signal, currentNodeIndex: 0, onProgress: progress });
     expect(progress).toHaveBeenCalledTimes(6);
     const rows = await repository.listByBook('bk');
     expect(rows.every((row) => row.indexStatus === 'failed')).toBe(true);
@@ -142,7 +142,7 @@ describe('createBriefScheduler', () => {
         yield '永远写不完的摘要';
       },
     });
-    await scheduler.run('bk', NODES, { signal: controller.signal, currentSectionIndex: 0 });
+    await scheduler.run('bk', NODES, { signal: controller.signal, currentNodeIndex: 0 });
     const rows = await repository.listByBook('bk');
     expect(rows.some((row) => row.indexStatus === 'indexing')).toBe(false);
     await db.delete();

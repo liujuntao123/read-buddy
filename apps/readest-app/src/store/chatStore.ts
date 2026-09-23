@@ -25,6 +25,7 @@ import {
 } from '@/services/db/repositories';
 import {
   TOPIC_TITLE_MAX_CHARS,
+  canSend,
   createConversationManager,
   type ConversationManager,
 } from '@/services/chat/conversationManager';
@@ -36,17 +37,17 @@ import {
   type RunTurnResult,
 } from '@/services/agent/agentOrchestrator';
 import { getAgentBookContext } from '@/services/agent/agentContext';
-import { nodeKindLabel } from '@/services/bookNodes';
-import { resolveCurrentNodeText } from '@/services/summary/nodeSource';
+import { roleLabel } from '@/services/chat/messageLabels';
+import {
+  currentReadingPosition,
+  nodeKindLabel,
+  resolveNodeViewAt,
+  type ReadingPosition,
+} from '@/services/bookNodes';
 import { useAISettingsStore } from '@/store/aiSettingsStore';
 import { useReaderStore } from '@/store/readerStore';
 
 export type ChatPhase = 'idle' | 'streaming' | 'error' | 'closed';
-
-export interface ChatChapterText {
-  title: string;
-  text: string;
-}
 
 /** Injectable seam: one full agent turn (orchestrator-shaped). */
 export type RunTurnFn = (input: RunTurnInput) => Promise<RunTurnResult>;
@@ -55,7 +56,6 @@ export interface ChatStoreDeps {
   manager: ConversationManager;
   runTurn: RunTurnFn;
   getSettings: () => AISettings;
-  getNodeText: () => ChatChapterText;
   /** Trace persistence; omit to skip (tests). */
   traces?: AgentTraceRepository;
   /**
@@ -86,9 +86,19 @@ export interface ChatState {
   quoteDraft: string | null;
   /** Derived: streaming or topic closed. */
   inputDisabled: boolean;
+  /**
+   * The Turn Quota the store enforces, exposed so the pill displays the same
+   * number. Read from the injected settings at open and at each send — never
+   * from a second store (候选 epilogue: the cap used to come from two places).
+   */
+  maxTurns: number;
   activeBookHash: string;
-  activeSectionIndex: number | null;
-  openBook: (bookHash: string, nodeIndex?: number) => Promise<void>;
+  /**
+   * The **physical** position (spine ordinal) the active topic is bound to,
+   * or null to follow the live reader position. See `Conversation.spineIndex`.
+   */
+  activeSpineIndex: number | null;
+  openBook: (bookHash: string, spineIndex?: number) => Promise<void>;
   send: (userText: string, quoteText?: string) => Promise<void>;
   stop: () => void;
   startNewTopic: () => void;
@@ -111,11 +121,13 @@ const toErrorMessage = (err: unknown): string =>
   err instanceof Error ? err.message : typeof err === 'string' ? err : 'AI 请求失败，请稍后重试';
 
 const computeInputDisabled = (phase: ChatPhase, conversation: Conversation | null): boolean =>
-  phase === 'streaming' || (conversation?.isClosed ?? false);
+  phase === 'streaming' || !canSend(conversation);
 
-/** `turnCount / maxTurns` label for the quota pill. */
-export const turnLabel = (conversation: Conversation | null | undefined, maxTurns: number): string =>
-  `${conversation?.turnCount ?? 0} / ${maxTurns}`;
+/**
+ * `turnCount / maxTurns` for the quota pill. Re-exported from the conversation
+ * manager so the displayed number and the enforced one are the same expression.
+ */
+export { turnQuotaLabel } from '@/services/chat/conversationManager';
 
 export function createChatStore(deps: ChatStoreDeps): ChatStoreHook {
   let controller: AbortController | null = null;
@@ -141,13 +153,15 @@ export function createChatStore(deps: ChatStoreDeps): ChatStoreHook {
       error: null,
       quoteDraft: null,
       inputDisabled: false,
+      maxTurns: deps.getSettings().maxTurnsPerTopic,
       activeBookHash: '',
-      activeSectionIndex: null,
+      activeSpineIndex: null,
 
-      openBook: async (bookHash, nodeIndex) => {
+      openBook: async (bookHash, spineIndex) => {
         patch({
           activeBookHash: bookHash,
-          activeSectionIndex: nodeIndex ?? null,
+          activeSpineIndex: spineIndex ?? null,
+          maxTurns: deps.getSettings().maxTurnsPerTopic,
           streamingText: '',
           liveTraces: [],
           liveCitations: [],
@@ -174,7 +188,7 @@ export function createChatStore(deps: ChatStoreDeps): ChatStoreHook {
         if (!conversation) {
           conversation = await deps.manager.startConversation({
             bookHash,
-            nodeIndex: state.activeSectionIndex ?? undefined,
+            spineIndex: state.activeSpineIndex ?? undefined,
             title: userText.slice(0, TOPIC_TITLE_MAX_CHARS),
           });
           patch({ conversation });
@@ -206,16 +220,26 @@ export function createChatStore(deps: ChatStoreDeps): ChatStoreHook {
         });
 
         const reader = useReaderStore.getState();
-        const chapter = deps.getNodeText();
         controller = new AbortController();
+
+        // The Reading Position this turn runs against. A topic bound to an older
+        // position keeps it, but carries no anchor — none was recorded for it
+        // (ADR 0011). Otherwise the live reader position wins, anchor included.
+        const activeSpineIndex = get().activeSpineIndex;
+        const live = currentReadingPosition();
+        const position: ReadingPosition =
+          activeSpineIndex !== null && activeSpineIndex !== live.spineIndex
+            ? { bookHash, spineIndex: activeSpineIndex }
+            : {
+                bookHash,
+                spineIndex: live.spineIndex,
+                ...(live.anchor ? { anchor: live.anchor } : {}),
+              };
 
         try {
           const result = await deps.runTurn({
-            bookHash,
+            position,
             bookTitle: reader.bookTitle,
-            currentSectionIndex: get().activeSectionIndex ?? reader.spineIndex,
-            currentNodeTitle: chapter.title || reader.nodeTitle,
-            currentNodeText: chapter.text,
             history,
             userMessage: userText,
             quoteText,
@@ -249,16 +273,16 @@ export function createChatStore(deps: ChatStoreDeps): ChatStoreHook {
               createdAt: assistantMessage.createdAt,
             });
           }
-          const updated = await deps.manager.completeTurn(
-            conversation,
-            deps.getSettings().maxTurnsPerTopic,
-          );
+          // One read of the cap: the number enforced is the number displayed.
+          const maxTurns = deps.getSettings().maxTurnsPerTopic;
+          const updated = await deps.manager.completeTurn(conversation, maxTurns);
           const [messages, topics] = await Promise.all([
             deps.manager.loadMessages(conversation.id),
             deps.manager.listTopics(updated.bookHash),
           ]);
           patch({
             conversation: updated,
+            maxTurns,
             messages,
             topics,
             streamingText: '',
@@ -295,6 +319,9 @@ export function createChatStore(deps: ChatStoreDeps): ChatStoreHook {
           liveCitations: [],
           error: null,
           phase: 'idle',
+          // A fresh topic re-reads the cap: the displayed and enforced quota both
+          // follow the current settings from here on.
+          maxTurns: deps.getSettings().maxTurnsPerTopic,
         });
         void get().refreshTopics();
       },
@@ -311,7 +338,7 @@ export function createChatStore(deps: ChatStoreDeps): ChatStoreHook {
           messages,
           topics,
           activeBookHash: conversation.bookHash,
-          activeSectionIndex: conversation.nodeIndex ?? null,
+          activeSpineIndex: conversation.spineIndex ?? null,
           streamingText: '',
           liveTraces: [],
           liveCitations: [],
@@ -336,7 +363,7 @@ export function createChatStore(deps: ChatStoreDeps): ChatStoreHook {
         const { conversation, messages } = get();
         const title = conversation?.title ?? '伴读对话';
         const body = messages.map((message) => {
-          const label = message.role === 'user' ? '读者' : message.role === 'assistant' ? '助手' : '系统';
+          const label = roleLabel(message.role);
           const quote = message.quoteText ? `> ${message.quoteText}\n` : '';
           const toolLines = (message.toolCalls ?? [])
             .map((call) => `  · 🔧 ${call.toolName}${call.resultSnippet ? `：${call.resultSnippet}` : ''}`)
@@ -367,6 +394,7 @@ const getSingletonOrchestrator = async (): Promise<AgentOrchestrator> => {
       stream: createAgentStreamFn(),
       getSettings: () => useAISettingsStore.getState().settings,
       getContext: getAgentBookContext,
+      resolveNodeView: resolveNodeViewAt,
     });
   }
   return singletonOrchestrator;
@@ -377,10 +405,6 @@ export const useChatStore: ChatStoreHook = createChatStore({
   traces: new AgentTraceRepository(),
   runTurn: async (input) => (await getSingletonOrchestrator()).runTurn(input),
   getSettings: () => useAISettingsStore.getState().settings,
-  getNodeText: () => {
-    const { title, text } = resolveCurrentNodeText();
-    return { title: title || useReaderStore.getState().nodeTitle, text };
-  },
   locateQuote: (bookHash, quoteText) => {
     const context = getAgentBookContext(bookHash);
     if (!context) return null;

@@ -24,9 +24,6 @@ beforeEach(() => {
   clearLocateListeners();
   useSegmentationStore.setState({
     segmentation: segmentationFor(),
-    banner: { visible: false, detectedCount: 0 },
-    applyDecision: 'applied',
-    scanContext: null,
   });
   useReaderStore.getState().loadBook({
     bookHash: 'demo-monolithic',

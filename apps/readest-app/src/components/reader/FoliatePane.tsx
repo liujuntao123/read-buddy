@@ -7,8 +7,10 @@ import { Text } from '@astryxdesign/core/Text';
 import { useReaderStore } from '@/store/readerStore';
 import { useLibraryStore } from '@/store/libraryStore';
 import type { EngineLocation, FoliateEngineHandle } from '@/services/library/foliateEngine';
+import { tocAnchorOf } from '@/services/library/foliateEngine';
 import { getAgentBookContext } from '@/services/agent/agentContext';
 import { subscribeLocate } from '@/services/reader/readerLink';
+import { recordReadingPosition } from '@/services/reader/readingPosition';
 import { highlightSnippet } from '@/services/reader/highlight';
 import { useReadingTheme } from '@/theme/readingTheme';
 import {
@@ -20,20 +22,14 @@ import { useQuickActions } from '@/hooks/useQuickActions';
 import { useIframeSelection, type IframeSelectionReader } from '@/hooks/useIframeSelection';
 import SelectionToolbar from './SelectionToolbar';
 
-/** Relocate-driven progress saves are throttled (page turns are frequent). */
-const PROGRESS_SAVE_THROTTLE_MS = 1500;
+/** Relocate-driven position records are debounced inside the position owner. */
 
 /**
- * 目录 href 的段内锚点（`"ch1.xhtml#sigil_toc_id_1"` → `"sigil_toc_id_1"`）：
- * 阅读位置记录的目录锚点，没有 `#`（或 `#` 后为空）时为 undefined。
+ * 目录 href 的段内锚点（`"ch1.xhtml#sigil_toc_id_1"` → `"sigil_toc_id_1"`）。
+ * 复用引擎的 `tocAnchorOf`：这里曾经有一份写法不同的私有副本，同一件事两个答案。
  */
-function anchorOfHref(href: string | undefined): string | undefined {
-  if (!href) return undefined;
-  const hashAt = href.indexOf('#');
-  if (hashAt < 0) return undefined;
-  const anchor = href.slice(hashAt + 1);
-  return anchor.length > 0 ? anchor : undefined;
-}
+const anchorOfHref = (href: string | undefined): string | undefined =>
+  href ? tocAnchorOf(href) : undefined;
 
 export interface FoliatePaneProps {
   /** Engine of the opened book (store-owned lifecycle; null renders a hint). */
@@ -62,7 +58,6 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
   const [openError, setOpenError] = useState<string | null>(null);
   const { selection, attach, close, reset } = useIframeSelection(readSelection);
   const runQuickAction = useQuickActions();
-  const lastSaveRef = useRef(0);
   /** Quote awaiting highlight once the located chapter's iframe loads. */
   const pendingHighlightRef = useRef<string | null>(null);
   /** Most recently loaded chapter document (same-section highlight path). */
@@ -75,34 +70,40 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
   const pageMode = useReaderSettingsStore((s) => s.layout.pageMode);
   const isScrolled = pageMode === 'single';
 
-  /** Apply typography changes live (font size / family / spacing). */
+  /**
+   * Present the reader's settings in **one** call (候选 4). This used to be three
+   * effects — typography, layout, theme — each probing its own optional setter, so
+   * a settings change could render twice with the theme applied and the typography
+   * not; and whether the vendored view honoured a knob was this component's problem
+   * to hedge with `?.`.
+   */
   useEffect(() => {
-    engine?.setTypography?.(typographyCss(typography));
-  }, [engine, typography]);
-
-  /** Apply layout changes live (page mode / width / margins). */
-  useEffect(() => {
-    engine?.setLayout?.(toEngineLayout(layoutSettings));
+    engine?.applyPresentation({
+      layout: toEngineLayout(layoutSettings),
+      typographyCss: typographyCss(typography),
+      theme: readingTheme,
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- layoutSettings identity carries the values
-  }, [engine, layoutSettings]);
+  }, [engine, typography, layoutSettings, readingTheme]);
 
-  /** Reading-theme synchronization (light / sepia / dark). */
-  useEffect(() => {
-    engine?.setTheme?.(readingTheme);
-  }, [engine, readingTheme]);
-
-  /** Apply a relocation: reading context (physical position + title + anchor)
-   *  plus a throttled progress save. */
+  /** Apply a relocation: record the Reading Position (physical position +
+   *  intra-section anchor + CFI). The position owner derives the title from the
+   *  node model and owns persistence — this pane no longer throttles its own
+   *  save, which could drop the last page turn of a session. */
   const applyLocation = (location: EngineLocation): void => {
-    const title = location.tocItemLabel ?? engine?.getSpineTitle(location.index) ?? '';
-    useReaderStore
-      .getState()
-      .setPosition(location.index, title, anchorOfHref(location.tocItemHref));
-    const now = Date.now();
-    if (now - lastSaveRef.current >= PROGRESS_SAVE_THROTTLE_MS) {
-      lastSaveRef.current = now;
-      void useLibraryStore.getState().saveProgress();
-    }
+    recordReadingPosition(
+      {
+        bookHash: useReaderStore.getState().bookHash,
+        spineIndex: location.index,
+        ...(anchorOfHref(location.tocItemHref)
+          ? { anchor: anchorOfHref(location.tocItemHref)! }
+          : {}),
+      },
+      {
+        cfi: location.cfi,
+        ...(location.tocItemLabel ? { titleFallback: location.tocItemLabel } : {}),
+      },
+    );
   };
 
   // Relocations → reader context (chapter title / section index) and a

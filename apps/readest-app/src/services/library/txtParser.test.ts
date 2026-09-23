@@ -28,14 +28,14 @@ describe('decodeTxt', () => {
 });
 
 describe('parseTxt', () => {
-  it('exposes one section titled after the file, plus the monolithic text', () => {
+  it('exposes one section titled after the file, plus the monolithic text', async () => {
     const text = '第一章 风起之地\n\n灯火在雾中摇曳。';
     const book = parseTxt(toBuffer(text), 'hash-txt-1', '风起之地');
 
     expect(book.title).toBe('风起之地');
     expect(book.spineCount).toBe(1);
     expect(book.getSpineTitle(0)).toBe('风起之地');
-    expect(book.getSpineText(0)).toBe(text);
+    expect(await book.getSpineText(0)).toBe(text);
     expect(book.getMonolithicText()).toBe(text);
   });
 

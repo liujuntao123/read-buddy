@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Eye, EyeOff } from 'lucide-react';
+import { Download, Eye, EyeOff } from 'lucide-react';
 import { Banner } from '@astryxdesign/core/Banner';
 import { Button } from '@astryxdesign/core/Button';
 import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog';
@@ -11,6 +11,7 @@ import { NumberInput } from '@astryxdesign/core/NumberInput';
 import { Selector } from '@astryxdesign/core/Selector';
 import { TextInput } from '@astryxdesign/core/TextInput';
 import { useAISettingsStore } from '@/store/aiSettingsStore';
+import { normalizeBaseUrl } from '@/services/ai/modelsEndpoint';
 import { MAX_TURNS_PER_TOPIC, MIN_TURNS_PER_TOPIC, type AIProvider, type AISettings } from '@/types/ai';
 import type { AISettingsErrors } from '@/services/ai/validation';
 
@@ -18,17 +19,15 @@ import type { AISettingsErrors } from '@/services/ai/validation';
 const PROVIDER_BASE_URL_PRESETS: Record<AIProvider, string> = {
   'openai-compatible': 'https://api.openai.com/v1',
   deepseek: 'https://api.deepseek.com/v1',
-  // Claude is reached through an OpenAI-compatible proxy endpoint.
-  claude: 'https://api.openai.com/v1',
-  ollama: 'http://localhost:11434/v1',
 };
 
 const PROVIDER_OPTIONS: Array<{ value: AIProvider; label: string }> = [
   { value: 'openai-compatible', label: 'OpenAI 兼容接口 (通用)' },
   { value: 'deepseek', label: 'DeepSeek 官方 API' },
-  { value: 'claude', label: 'Claude（OpenAI 兼容代理）' },
-  { value: 'ollama', label: 'Ollama（本地运行）' },
 ];
+
+/** Above this many models the pulled list gets a search box. */
+const MODEL_SEARCH_THRESHOLD = 8;
 
 const TOAST_AUTO_DISMISS_MS = 3_000;
 
@@ -46,6 +45,8 @@ export default function AISettingsPanel({ open, onClose }: AISettingsPanelProps)
   const settings = useAISettingsStore((s) => s.settings);
   const save = useAISettingsStore((s) => s.save);
   const testConnection = useAISettingsStore((s) => s.testConnection);
+  const loadModels = useAISettingsStore((s) => s.loadModels);
+  const availableModels = useAISettingsStore((s) => s.availableModels);
   const toast = useAISettingsStore((s) => s.toast);
   const clearToast = useAISettingsStore((s) => s.clearToast);
 
@@ -54,6 +55,7 @@ export default function AISettingsPanel({ open, onClose }: AISettingsPanelProps)
   const [errors, setErrors] = useState<AISettingsErrors>({});
   const [showKey, setShowKey] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [pulling, setPulling] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // Toast auto-dismisses after 3s (manual close button also available).
@@ -95,6 +97,22 @@ export default function AISettingsPanel({ open, onClose }: AISettingsPanelProps)
     }
   };
 
+  const handlePullModels = async () => {
+    setPulling(true);
+    try {
+      await loadModels(draft);
+    } finally {
+      setPulling(false);
+    }
+  };
+
+  // A pulled list belongs to the endpoint it came from, so editing the Base URL
+  // hides it until the next pull instead of offering another service's models.
+  const pulledModels =
+    availableModels && availableModels.baseUrl === normalizeBaseUrl(draft.baseUrl)
+      ? availableModels.models
+      : [];
+
   return (
     <Dialog
       isOpen
@@ -108,11 +126,11 @@ export default function AISettingsPanel({ open, onClose }: AISettingsPanelProps)
       padding={0}
     >
       <VStack data-testid="ai-settings-panel" gap={4} padding={4}>
-        <DialogHeader title="AI Provider 设置" onOpenChange={(next) => !next && onClose()} />
+        <DialogHeader title="AI 设置" onOpenChange={(next) => !next && onClose()} />
 
         <VStack gap={3}>
           <Selector
-            label="服务提供商 (Provider)"
+            label="服务提供商"
             data-testid="provider-select"
             options={PROVIDER_OPTIONS}
             value={draft.provider}
@@ -129,20 +147,11 @@ export default function AISettingsPanel({ open, onClose }: AISettingsPanelProps)
             status={errors.baseUrl ? { type: 'error', message: errors.baseUrl } : undefined}
           />
 
-          <TextInput
-            label="Model ID"
-            data-testid="model-input"
-            placeholder="deepseek-chat / gpt-4o-mini"
-            value={draft.model}
-            onChange={(model) => update('model', model)}
-            status={errors.model ? { type: 'error', message: errors.model } : undefined}
-          />
-
           <VStack gap={1}>
-            <HStack gap={1} vAlign="end">
+            <HStack gap={2} vAlign="end">
               <VStack style={{ flex: 1, minWidth: 0 }}>
                 <TextInput
-                  label={draft.provider === 'ollama' ? 'API Key（本地模型可留空）' : 'API Key'}
+                  label="API Key"
                   data-testid="api-key-input"
                   type={showKey ? 'text' : 'password'}
                   placeholder="sk-..."
@@ -155,15 +164,60 @@ export default function AISettingsPanel({ open, onClose }: AISettingsPanelProps)
               <IconButton
                 label={showKey ? '隐藏 API Key' : '显示 API Key'}
                 variant="ghost"
-                size="sm"
-                icon={showKey ? <EyeOff size={14} aria-hidden /> : <Eye size={14} aria-hidden />}
+                size="md"
+                icon={showKey ? <EyeOff size={15} aria-hidden /> : <Eye size={15} aria-hidden />}
                 onClick={() => setShowKey((visible) => !visible)}
               />
             </HStack>
           </VStack>
 
+          {/* Model ID is a free text field first: gateways serve models their
+              own /models list omits. The icon button pulls the picker's list.
+              Both row buttons are `size="md"` — the same 32px as the inputs
+              beside them — so an icon button and its field share one baseline
+              instead of the 28px/32px mismatch a `sm` button produced. */}
+          <VStack gap={1}>
+            <HStack gap={2} vAlign="end">
+              <VStack style={{ flex: 1, minWidth: 0 }}>
+                <TextInput
+                  label="Model ID"
+                  data-testid="model-input"
+                  placeholder="deepseek-chat / gpt-4o-mini"
+                  value={draft.model}
+                  onChange={(model) => update('model', model)}
+                  status={errors.model ? { type: 'error', message: errors.model } : undefined}
+                />
+              </VStack>
+              <IconButton
+                label="拉取模型列表"
+                data-testid="fetch-models"
+                variant="secondary"
+                size="md"
+                icon={<Download size={15} aria-hidden />}
+                tooltip="从上方 Base URL 拉取可用模型列表"
+                isLoading={pulling}
+                isDisabled={testing || saving}
+                onClick={() => void handlePullModels()}
+              />
+            </HStack>
+
+            {pulledModels.length > 0 && (
+              <Selector
+                label="可用模型"
+                data-testid="model-select"
+                description="从服务端实时拉取；选择后自动填入 Model ID，也可直接手动输入。"
+                options={pulledModels}
+                value={pulledModels.includes(draft.model) ? draft.model : ''}
+                placeholder={`选择模型（共 ${pulledModels.length} 个）`}
+                hasSearch={pulledModels.length > MODEL_SEARCH_THRESHOLD}
+                searchPlaceholder="搜索模型…"
+                onChange={(model) => update('model', model)}
+              />
+            )}
+          </VStack>
+
           <NumberInput
-            label={`每话题轮数配额（${MIN_TURNS_PER_TOPIC} ~ ${MAX_TURNS_PER_TOPIC} 轮）`}
+            label={`单话题最大对话轮数（${MIN_TURNS_PER_TOPIC} ~ ${MAX_TURNS_PER_TOPIC} 轮）`}
             data-testid="max-turns-input"
             min={MIN_TURNS_PER_TOPIC}
             max={MAX_TURNS_PER_TOPIC}

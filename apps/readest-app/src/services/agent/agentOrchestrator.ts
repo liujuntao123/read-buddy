@@ -20,7 +20,9 @@ import { createReadingTools } from './readingTools';
 import type { AgentStreamFn } from '@/services/ai/agentStreamClient';
 import type { AISettings } from '@/types/ai';
 import { buildSystemPrompt } from '@/services/chat/promptAssembly';
+import { renderHistory } from '@/services/chat/messageLabels';
 import { nodeKindLabel, resolveNodeKind, shapeOfNodes } from '@/services/bookNodes';
+import type { NodeView, ReadingPosition } from '@/services/bookNodes/nodeView';
 
 /** Truncation for persisted tool-result snippets (trace table + UI). */
 export const TRACE_SNIPPET_MAX_CHARS = 200;
@@ -32,13 +34,15 @@ export type AgentTurnEvent =
   | { type: 'citation'; citation: AgentCitation };
 
 export interface RunTurnInput {
-  bookHash: string;
+  /**
+   * The reader's physical position. This seam speaks **Reading Position** only:
+   * a node ordinal is never accepted here, so a spine ordinal can no longer be
+   * mistaken for one (CONTEXT.md "Node View", ADR 0011). The node, its parent,
+   * its level and its text are resolved inside the turn.
+   */
+  position: ReadingPosition;
+  /** Book title, from the library row (not derivable from the book text). */
   bookTitle: string;
-  /** Physical reader position (`spineIndex`); the node model resolves the node. */
-  currentSectionIndex: number;
-  currentNodeTitle: string;
-  /** L1: current node body (excerpted into the prompt). */
-  currentNodeText: string;
   history: Message[];
   userMessage: string;
   /** L0: user's selected fragment, when present. */
@@ -58,14 +62,19 @@ export interface AgentOrchestratorDeps {
   getSettings: () => AISettings;
   /** Resolve the registered whole-book context (undefined → degraded mode). */
   getContext: (bookHash: string) => AgentBookContext | undefined;
+  /**
+   * Resolve the Node View at a Reading Position. Injected so a turn never reads
+   * a global store itself; the app binds it to `resolveNodeViewAt`, and tests
+   * pass plain values (CONTEXT.md "Node View").
+   */
+  resolveNodeView: (position: ReadingPosition) => NodeView;
 }
-
-const historyLabel = (role: Message['role']): string =>
-  role === 'user' ? '读者' : role === 'assistant' ? '助手' : '系统';
 
 /** User-turn prompt: L1 excerpt + FULL topic history + the question (L0 quote). */
 export function buildAgentUserPrompt(input: {
-  currentNodeText: string;
+  nodeText: string;
+  /** Level of the viewport node, so the heading names 章 / 节 / 段. */
+  nodeKind: NodeKind;
   history: Message[];
   userMessage: string;
   quoteText?: string;
@@ -78,10 +87,8 @@ export function buildAgentUserPrompt(input: {
     nodeKind?: NodeKind;
   };
 }): string {
-  const excerpt = buildCurrentChapterExcerpt(input.currentNodeText);
-  const historyText = input.history
-    .map((message) => `${historyLabel(message.role)}：${message.content}`)
-    .join('\n');
+  const excerpt = buildCurrentChapterExcerpt(input.nodeText);
+  const historyText = renderHistory(input.history);
   const anchorNote = input.quoteAnchor
     ? `\n（该片段位于${nodeKindLabel(
         input.quoteAnchor.nodeKind ?? resolveNodeKind(0, input.quoteAnchor.nodeTitle),
@@ -91,7 +98,7 @@ export function buildAgentUserPrompt(input: {
     ? `> ${input.quoteText}${anchorNote}\n\n${input.userMessage}`
     : input.userMessage;
   return [
-    `【当前章节正文节选】\n${excerpt}`,
+    `【当前${nodeKindLabel(input.nodeKind)}正文节选】\n${excerpt}`,
     `【对话历史】\n${historyText}`,
     `【本轮提问】\n${question}`,
   ].join('\n\n');
@@ -124,7 +131,12 @@ export function locateQuoteInContext(
 export function createAgentOrchestrator(deps: AgentOrchestratorDeps) {
   return {
     runTurn: async (input: RunTurnInput): Promise<RunTurnResult> => {
-      const context = deps.getContext(input.bookHash);
+      const { position } = input;
+      const context = deps.getContext(position.bookHash);
+      // The Node View is the one answer to "which Book Node is the reader at",
+      // and it is resolved from the Reading Position — never from a caller's
+      // node ordinal (CONTEXT.md "Node View").
+      const view = deps.resolveNodeView(position);
       const settings = deps.getSettings();
       const citations: AgentCitation[] = [];
       const toolCalls: ToolCallTrace[] = [];
@@ -135,29 +147,27 @@ export function createAgentOrchestrator(deps: AgentOrchestratorDeps) {
 
       // Degraded mode (book not indexed, e.g. demo fixtures): answer from
       // the current node only, without tools.
-      const nodePath = context?.getNodePath(input.currentSectionIndex);
+      const tree = context?.getNodeTree();
       const system = context
         ? assembleAgentSystemPrompt({
             bookTitle: input.bookTitle,
-            currentSectionIndex: input.currentSectionIndex,
-            currentNodeTitle: input.currentNodeTitle,
-            ...(nodePath?.parent ? { parentNodeTitle: nodePath.parent.title } : {}),
-            ...(nodePath?.node
-              ? {
-                  currentNodeKind: resolveNodeKind(nodePath.node.depth, nodePath.node.title),
-                }
-              : {}),
+            currentNodeIndex: view.nodeIndex,
+            currentNodeTitle: view.title,
+            ...(view.parentTitle ? { parentNodeTitle: view.parentTitle } : {}),
+            currentNodeKind: view.kind,
             shape: shapeOfNodes(context.nodes),
             panorama: context.getPanorama(),
             allNodeBriefs: context.nodes.map((node) => {
-              const parent = node.parentNodeId
-                ? context.nodes.find((candidate) => candidate.nodeId === node.parentNodeId)
-                : undefined;
+              const parent =
+                node.parentNodeId && tree ? tree.byId.get(node.parentNodeId) : undefined;
               return {
                 nodeIndex: node.nodeIndex,
                 title: node.title,
                 brief: node.brief,
                 depth: node.depth,
+                // Container 章 are structural groupings, never briefed; the
+                // matrix says so rather than showing a pending placeholder.
+                isContainer: tree?.childIdsByParent.has(node.nodeId) ?? false,
                 ...(parent ? { parentTitle: parent.title } : {}),
               };
             }),
@@ -165,12 +175,13 @@ export function createAgentOrchestrator(deps: AgentOrchestratorDeps) {
           })
         : buildSystemPrompt({
             bookTitle: input.bookTitle,
-            nodeIndex: input.currentSectionIndex,
-            nodeTitle: input.currentNodeTitle,
+            nodeTitle: view.title,
+            nodeKind: view.kind,
           });
 
       const prompt = buildAgentUserPrompt({
-        currentNodeText: input.currentNodeText,
+        nodeText: view.text,
+        nodeKind: view.kind,
         history: input.history,
         userMessage: input.userMessage,
         quoteText: input.quoteText,

@@ -16,6 +16,12 @@ Canonical 5-state triage vocabulary mapped 1:1. See `docs/agents/triage-labels.m
 
 Single-context layout (`CONTEXT.md` at root, ADRs under `docs/adr/`). See `docs/agents/domain.md`.
 
+## Verification
+
+Default to cheap checks — typecheck, unit tests, diff review — which catch most defects in a fraction of the time.
+
+A visual pass (screenshot, browser session, manual UI run) earns its cost only when the change is itself visual: layout, styling, rendering. One pass settles that change; logic, data, config, and refactor changes need none.
+
 ## Release and packaging
 
 <!--### Post-task Windows build

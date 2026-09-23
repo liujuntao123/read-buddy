@@ -17,7 +17,7 @@ We choose the **Resizable Split-Screen Dual-Pane Layout** as the primary reading
 ### Positive
 - **Simultaneous Immersion**: Readers can compare summary bullets or ask questions about text while the original text remains completely visible in the left pane.
 - **Selection Ergonomics**: Selecting sentences on the left and dragging/quoting into the right panel is natural and unobstructed.
-- **Customizable Screen Real Estate**: The split divider supports dragging between `320px` and `600px`, remembering user preference per display.
+- **Customizable Screen Real Estate**: The split divider supports dragging between `320px` and `900px`, remembering user preference per display.
 
 ### Negative / Trade-offs
 - **Horizontal Screen Demands**: Requires at least a reasonable window width (recommended >= 1024px) for optimal multi-column reader typography. On narrow windows, responsive logic must collapse the sidebar into an overlay drawer.

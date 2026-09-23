@@ -26,9 +26,18 @@ export interface BookNodeShape {
   minimalKind: NodeKind;
 }
 
-type ShapeInput = Pick<BookNode, 'depth' | 'title'>;
-
-export function shapeOfNodes(nodes: readonly ShapeInput[]): BookNodeShape {
+/**
+ * The composition of one book's **Book Node list**, and the Minimal Node level
+ * it implies.
+ *
+ * The argument is typed as a real Book Node list on purpose (候选 6): it used to
+ * accept a `Pick<BookNode,'depth'|'title'>` projection, so each caller fed
+ * whatever list it happened to hold — persisted node rows, Directory rows
+ * re-stamped by the reader dock, or a micro-brief list — and two surfaces could
+ * answer 「N 章 · M 节」 differently for the same book. A projection no longer
+ * type-checks, so the population question has one answer.
+ */
+export function shapeOfNodes(nodes: readonly BookNode[]): BookNodeShape {
   let chapter = 0;
   let section = 0;
   let chunk = 0;

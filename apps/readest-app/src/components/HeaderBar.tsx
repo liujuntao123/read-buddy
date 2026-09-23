@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { BookMarked, BookOpen, ChevronLeft, Sparkles, Upload } from 'lucide-react';
+import { BookMarked, ChevronLeft, History, Sparkles, Upload } from 'lucide-react';
 import { Button } from '@astryxdesign/core/Button';
 import { Divider } from '@astryxdesign/core/Divider';
 import { HStack, VStack } from '@astryxdesign/core/Stack';
@@ -114,7 +114,7 @@ export default function HeaderBar() {
                   variant="secondary"
                   size="sm"
                   isIconOnly
-                  icon={<BookOpen size={16} aria-hidden />}
+                  icon={<History size={16} aria-hidden />}
                   onClick={resumeReading}
                 />
               )}

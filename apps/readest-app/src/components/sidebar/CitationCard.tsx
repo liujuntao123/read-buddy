@@ -60,7 +60,7 @@ export default function CitationCard({ citation }: CitationCardProps) {
               hasTabularNumbers
               style={{ flexShrink: 0, marginLeft: 'auto' }}
             >
-              {`偏移量 ${citation.charOffset.toLocaleString()} 字符`}
+              {`约第 ${citation.charOffset.toLocaleString()} 字`}
             </Text>
           )}
         </HStack>
@@ -73,7 +73,7 @@ export default function CitationCard({ citation }: CitationCardProps) {
         </Text>
         <HStack justify="end">
           <Button
-            label="📍 跳转至该节点"
+            label="📍 定位到原文"
             variant="secondary"
             size="sm"
             data-testid="citation-jump"

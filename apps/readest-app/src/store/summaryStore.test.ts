@@ -315,7 +315,7 @@ describe('generate', () => {
   });
 
   it('rejects generation with a hint when AI settings are unconfigured', async () => {
-    useAISettingsStore.setState({ settings: { ...DEFAULT_AI_SETTINGS } }); // empty apiKey, non-ollama
+    useAISettingsStore.setState({ settings: { ...DEFAULT_AI_SETTINGS } }); // empty apiKey
     const harness = makeHarness();
     await harness.store.getState().openNode(CHAPTER.bookHash, CHAPTER.nodeIndex, CHAPTER.nodeTitle, 9_000);
 
@@ -325,35 +325,6 @@ describe('generate', () => {
     expect(state.phase).toBe('error');
     expect(state.error).toBe(MISSING_SETTINGS_ERROR);
     expect(harness.factory).not.toHaveBeenCalled();
-  });
-
-  it('allows generation for local ollama without an API key', async () => {
-    useAISettingsStore.setState({
-      settings: { ...DEFAULT_AI_SETTINGS, provider: 'ollama', apiKey: '', model: 'llama3' },
-    });
-    const harness = makeHarness();
-    await harness.store.getState().openNode(CHAPTER.bookHash, CHAPTER.nodeIndex, CHAPTER.nodeTitle, 9_000);
-
-    harness.factory.mockImplementation(() =>
-      makeSummarizer(async (input) => {
-        input.onEvent({ type: 'delta', text: '本地模型总结' });
-        return {
-          id: nodeSummaryId(input.bookHash, input.nodeIndex),
-          bookHash: input.bookHash,
-          nodeIndex: input.nodeIndex,
-          nodeTitle: input.nodeTitle,
-          modelUsed: 'llama3',
-          summaryContent: '本地模型总结',
-          pipeline: 'single',
-          createdAt: 1,
-          updatedAt: 1,
-        };
-      }),
-    );
-
-    await harness.store.getState().generate();
-    expect(harness.store.getState().phase).toBe('cached');
-    expect(harness.store.getState().cachedSummary?.modelUsed).toBe('llama3');
   });
 
   it('maps map-reduce progress events onto stageLabel', async () => {

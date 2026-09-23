@@ -23,7 +23,7 @@ describe('AgentTraceAccordion', () => {
   it('renders collapsed by default with the trail count', () => {
     render(<AgentTraceAccordion traces={TRACES} />);
     expect(screen.getByTestId('agent-trace-accordion').textContent).toContain(
-      'Agent 思考与工具调用轨迹 (2)',
+      '思考与检索过程 (2)',
     );
     expect(screen.queryByTestId('agent-trace-body')).toBeNull();
   });

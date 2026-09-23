@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SummaryTab from './SummaryTab';
 import {
   createSummaryStore,
-  setSummaryStore,
   useSummaryStore,
   type SummaryNodeContext,
   type SummaryStore,
@@ -38,6 +37,9 @@ interface Setup {
   put: ReturnType<typeof vi.fn>;
 }
 
+/** The store the next ender(<SummaryTab …/>) should use; set by setup(). */
+let currentStore: SummaryStore;
+
 const setup = (seed: NodeSummary[] = []): Setup => {
   const table = new Map(seed.map((summary) => [summary.id, summary]));
   const put = vi.fn(async (summary: NodeSummary) => {
@@ -59,7 +61,7 @@ const setup = (seed: NodeSummary[] = []): Setup => {
     repository,
     resolveNode: () => ({ ...CHAPTER }),
   });
-  setSummaryStore(store);
+  currentStore = store;
   return { store, factory, put };
 };
 
@@ -74,9 +76,6 @@ beforeEach(() => {
   });
   useSegmentationStore.setState({
     segmentation: null,
-    banner: { visible: false, detectedCount: 0 },
-    applyDecision: null,
-    scanContext: null,
   });
   useAISettingsStore.setState({
     settings: { ...DEFAULT_AI_SETTINGS, provider: 'deepseek', apiKey: 'sk-test', model: 'deepseek-chat' },
@@ -86,7 +85,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  setSummaryStore(useSummaryStore); // restore the app singleton
   clearAgentBookContext(DEMO_BOOK.bookHash);
 });
 
@@ -123,7 +121,7 @@ describe('SummaryTab', () => {
       createAgentBookContext({ bookHash: DEMO_BOOK.bookHash, nodes: hierarchical, fullText: 'x'.repeat(150) }),
     );
     const { factory } = setup();
-    render(<SummaryTab />);
+    render(<SummaryTab store={currentStore} />);
 
     await waitFor(() => {
       expect(screen.getByTestId('generate-summary')).toBeTruthy();
@@ -141,16 +139,16 @@ describe('SummaryTab', () => {
     expect(facts).not.toContain('当前节点');
     expect(panel.textContent).not.toContain('个节点');
     expect(panel.textContent).not.toContain('隶属《');
-    // The viewpoint description names the leaf level and its 章 explicitly.
-    expect(panel.textContent).toContain('当前节《第一章 图书馆的密语》还没有总结');
+    // The viewpoint description names the leaf level explicitly.
+    expect(panel.textContent).toContain('当前节《第一章 图书馆的密语》暂无总结');
     expect(panel.textContent).toContain('⚡ 总结当前节');
-    expect(panel.textContent).toContain('（隶属章《第一卷 风云之始》）');
+    expect(panel.textContent).toContain('提炼当前节的核心内容与脉络');
     expect(factory).not.toHaveBeenCalled();
   });
 
   it('renders the flat single-level case as a 章 viewpoint (no breadcrumb)', async () => {
     const { factory } = setup();
-    render(<SummaryTab />);
+    render(<SummaryTab store={currentStore} />);
 
     await waitFor(() => {
       expect(screen.getByTestId('generate-summary')).toBeTruthy();
@@ -161,7 +159,7 @@ describe('SummaryTab', () => {
     expect(panel.textContent).toContain('第二章 图书馆的密语');
     expect(panel.textContent).not.toContain('›');
     expect(panel.textContent).toContain('⚡ 总结当前章');
-    expect(panel.textContent).toContain('（全书一级节点）');
+    expect(panel.textContent).toContain('提炼当前章的核心内容与脉络');
     // demo chapter 2 extracted char count, resolved from the real nodeSource
     const chapterTwoChars = screen.getByText(/约 \d+ 字/);
     expect(chapterTwoChars.textContent).toMatch(/约 \d{2,} 字/);
@@ -172,7 +170,7 @@ describe('SummaryTab', () => {
 
   it('warns instead of offering generation when the chapter has <50 extractable chars', async () => {
     const { store, factory } = setup();
-    render(<SummaryTab />);
+    render(<SummaryTab store={currentStore} />);
 
     await waitFor(() => {
       expect(screen.getByTestId('generate-summary')).toBeTruthy();
@@ -210,7 +208,7 @@ describe('SummaryTab', () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
       return summary;
     });
-    render(<SummaryTab />);
+    render(<SummaryTab store={currentStore} />);
     await waitFor(() => screen.getByTestId('generate-summary'));
 
     fireEvent.click(screen.getByTestId('generate-summary'));
@@ -240,7 +238,7 @@ describe('SummaryTab', () => {
       throw new Error('should have aborted');
     });
 
-    render(<SummaryTab />);
+    render(<SummaryTab store={currentStore} />);
     await waitFor(() => screen.getByTestId('generate-summary'));
     fireEvent.click(screen.getByTestId('generate-summary'));
 
@@ -287,14 +285,33 @@ describe('SummaryTab', () => {
       [cached],
     );
 
-    render(<SummaryTab />);
+    render(<SummaryTab store={currentStore} />);
 
-    // Cached view: heading + list rendered, model + regenerate visible.
+    // Cached view: heading + list rendered, regenerate visible.
     expect(await screen.findByText('cached-content-甲')).toBeTruthy();
     expect(screen.getByTestId('regenerate-summary')).toBeTruthy();
-    expect(screen.getByText(/deepseek-chat/)).toBeTruthy();
     expect(screen.getByText('星图')).toBeTruthy(); // **bold** inline text
     expect(screen.queryByTestId('generate-summary')).toBeNull();
+
+    // 重新生成 is an icon-only button inside the scope card (no separate meta
+    // strip repeating the same 「这是哪一节 / 状态 / 动作」 story). The model name
+    // is NOT here: it is rendered once at the sidebar tab level
+    // (AISidebar's `sidebar-model-chip`), shared by 总结 and 伴读.
+    const regenerate = screen.getByTestId('regenerate-summary');
+    const scopeCard = screen.getByTestId('summary-scope-header');
+    expect(scopeCard.contains(regenerate)).toBe(true);
+    expect(regenerate.textContent?.trim()).toBe('');
+    expect(screen.getByRole('button', { name: '重新生成' })).toBe(regenerate);
+    expect(screen.queryByTestId('summary-meta-bar')).toBeNull();
+    // Metadata is one item per fact, each with its own style: word count and
+    // status are Tokens, the update time is the quietest of the three.
+    expect(scopeCard.textContent).toContain('已生成');
+    const facts = screen.getByTestId('summary-scope-row');
+    expect(facts.textContent).toContain('约');
+    expect(facts.textContent).toContain('已生成');
+    expect(facts.querySelectorAll('.astryx-token').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByTestId('summary-updated-at').textContent).toContain('更新于');
+    expect(scopeCard.textContent).not.toContain('deepseek-chat');
 
     // Regenerate is force=true: streams even though a cache exists.
     fireEvent.click(screen.getByTestId('regenerate-summary'));
@@ -308,16 +325,16 @@ describe('SummaryTab', () => {
     useAISettingsStore.setState({ settings: { ...DEFAULT_AI_SETTINGS } }); // no apiKey
     const { store } = setup();
 
-    render(<SummaryTab />);
+    render(<SummaryTab store={currentStore} />);
     await waitFor(() => screen.getByTestId('generate-summary'));
 
     fireEvent.click(screen.getByTestId('generate-summary'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('summary-error-text').textContent).toBe('请先在侧栏右上角 ⚙ 完成 AI Provider 配置');
+      expect(screen.getByTestId('summary-error-text').textContent).toBe('请先在侧栏右上角 ⚙ 完成 AI 设置');
     });
     expect(screen.getByTestId('retry-summary')).toBeTruthy();
-    expect(screen.getByText(/⚙ 检查 AI Provider 配置/)).toBeTruthy();
+    expect(screen.getByText(/⚙ 检查 AI 设置/)).toBeTruthy();
     expect(store.getState().phase).toBe('error');
   });
 
@@ -325,7 +342,7 @@ describe('SummaryTab', () => {
     const { factory, store } = setup();
     const openNode = vi.spyOn(store.getState(), 'openNode');
 
-    render(<SummaryTab />);
+    render(<SummaryTab store={currentStore} />);
     await waitFor(() => screen.getByTestId('generate-summary'));
     expect(openNode).toHaveBeenCalledTimes(1);
 

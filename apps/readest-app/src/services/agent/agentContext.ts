@@ -42,13 +42,6 @@ export interface OutlineEntry {
   indexStatus: NodeIndexStatus;
 }
 
-/** Hierarchical position of one node: the node plus its 章 ancestor. */
-export interface NodePath {
-  node: BookNode;
-  /** The 章-level node above it, when present. */
-  parent?: BookNode;
-}
-
 /** One passage slice served to `read_node_passage`. */
 export interface PassageSlice {
   nodeIndex: number;
@@ -92,8 +85,6 @@ export interface AgentBookContext {
   getNode(nodeIndex: number): BookNode | undefined;
   /** 物理阅读位置（段序号 + 段内锚点）→ 节点。 */
   resolveNodeAt(spineIndex: number, anchor?: string): BookNode | undefined;
-  /** Hierarchical position: node plus its 章-level ancestor. */
-  getNodePath(nodeIndex: number): NodePath | null;
   getOutline(startNode?: number, limit?: number): OutlineEntry[];
   readPassage(nodeIndex: number, charOffset?: number, length?: number): PassageSlice | null;
   searchText(query: string, maxResults?: number): SearchMatch[];
@@ -148,13 +139,6 @@ export function createAgentBookContext(input: CreateAgentBookContextInput): Agen
     getNode: (nodeIndex) => tree.byIndex.get(nodeIndex),
 
     resolveNodeAt: (spineIndex, anchor) => resolveNodeAtPosition(tree, spineIndex, anchor),
-
-    getNodePath: (nodeIndex) => {
-      const node = tree.byIndex.get(nodeIndex);
-      if (!node) return null;
-      const parent = node.parentNodeId ? tree.byId.get(node.parentNodeId) : undefined;
-      return { node, ...(parent ? { parent } : {}) };
-    },
 
     getOutline: (startNode = 0, limit = OUTLINE_DEFAULT_LIMIT) => {
       const capped = Math.min(Math.max(1, limit), OUTLINE_MAX_LIMIT);

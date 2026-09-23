@@ -9,9 +9,11 @@
  *   so the AI features (nodeSource) pick the real book up automatically.
  */
 import type { BookFormat, LibraryBook } from '@/types/library';
+import type { BookNodeShape } from '@/services/bookNodes/nodeShape';
+import type { SegmentStrategy } from '@/types/readingAgent';
 import { getDatabase, type ReadestPlusDatabase } from '@/services/db/database';
 import { clearOpenedBook, registerOpenedBook, type OpenedBookContent } from './contentRegistry';
-import { parseEpub } from './epubParser';
+import { readEpubMetadata } from './epubParser';
 import { parseTxt } from './txtParser';
 import { extractCover } from './coverExtract';
 import { createFoliateEngine, engineToContent, type FoliateEngineHandle } from './foliateEngine';
@@ -35,7 +37,7 @@ export type ImportResult =
   | { status: 'ok'; book: LibraryBook }
   | { status: 'unsupported' | 'duplicate'; message: string };
 
-export const UNSUPPORTED_FORMAT_MESSAGE = '暂不支持该格式（待 Foliate 引擎接入）';
+export const UNSUPPORTED_FORMAT_MESSAGE = '暂不支持该文件格式';
 
 /** The result of opening a book: registry content plus the live engine. */
 export type OpenedBook = OpenedBookContent & { engine?: FoliateEngineHandle };
@@ -92,17 +94,19 @@ export async function importBookFile(file: File, deps: LibraryDeps = {}): Promis
 
   const existing = await db.books.get(hash);
   if (existing) {
-    return { status: 'duplicate', message: `《${existing.title}》已在书架中，内容相同无需重复导入` };
+    return { status: 'duplicate', message: `《${existing.title}》已在书架中，无需重复导入` };
   }
 
   let title = stripExtension(file.name);
   let author: string | undefined;
   let cover: string | undefined;
   if (format === 'epub') {
-    const parsed = await parseEpub(data, hash);
-    title = parsed.title;
-    author = parsed.author;
-    cover = parsed.cover;
+    // Metadata only: O(metadata), not O(book). The spine is materialized later by
+    // the engine when the book is opened (候选 9).
+    const meta = await readEpubMetadata(data, hash);
+    title = meta.title;
+    author = meta.author;
+    cover = meta.cover;
   }
 
   // Foliate cover extraction (original readest approach): covers every engine
@@ -165,7 +169,10 @@ export async function openBook(
     }
     const content = engineToContent(engine, book.hash);
     registerOpenedBook(content);
-    if (!book.cover && engine.getCover) {
+    if (!book.cover) {
+      // `getCover` is required (候选 4): whether a cover exists is a fact about the
+      // book, and the engine answers `undefined` when there is none — no more
+      // testing for the method's existence.
       void engine
         .getCover()
         .then((extracted) => {
@@ -182,13 +189,18 @@ export async function openBook(
 
   if (book.format === 'txt') {
     const parsed = parseTxt(book.data, book.hash, book.title);
+    // Built directly from the parser's members — no hand-copied field list to
+    // keep in step with the interface (候选 8).
     const content: OpenedBookContent = {
       bookHash: book.hash,
+      kind: 'monolithic',
       spineCount: parsed.spineCount,
-      getSpineTitle: parsed.getSpineTitle,
-      getSpineHtml: parsed.getSpineHtml,
-      getSpineText: parsed.getSpineText,
+      getSpineTitle: (index) => parsed.getSpineTitle(index),
+      getSpineHtml: (index) => parsed.getSpineHtml(index),
+      getSpineText: (index) => parsed.getSpineText(index),
       getMonolithicText: () => parsed.getMonolithicText(),
+      getTocEntries: () => parsed.getTocEntries(),
+      getSpineAnchors: (index) => parsed.getSpineAnchors(index),
     };
     registerOpenedBook(content);
     return content;
@@ -205,31 +217,92 @@ export async function readLibrary(deps: LibraryDeps = {}): Promise<LibraryBookMe
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
+export interface RemoveBookOptions extends LibraryDeps {
+  deleteArtifacts?: boolean;
+}
+
 /** Delete a book row and drop its parsed-content cache from the registry. */
-export async function removeBook(hash: string, deps: LibraryDeps = {}): Promise<void> {
-  const db = dbOf(deps);
+export async function removeBook(hash: string, options: RemoveBookOptions = {}): Promise<void> {
+  const db = dbOf(options);
   await db.books.delete(hash);
   clearOpenedBook(hash);
+
+  if (options.deleteArtifacts) {
+    await db.node_summaries?.where('bookHash').equals(hash).delete();
+    await db.book_nodes?.where('bookHash').equals(hash).delete();
+    await db.book_panoramas?.delete(hash);
+    await db.reading_entities?.where('bookHash').equals(hash).delete();
+    await db.bookSegmentations?.delete(hash);
+
+    const convs = await db.conversations?.where('bookHash').equals(hash).toArray();
+    if (convs && convs.length > 0) {
+      const convIds = convs.map((c) => c.id);
+      await db.messages?.where('conversationId').anyOf(convIds).delete();
+      await db.agent_turn_traces?.where('conversationId').anyOf(convIds).delete();
+      await db.conversations?.where('bookHash').equals(hash).delete();
+    }
+  }
 }
 
 /**
- * Persist reading progress: the last read section ordinal and (engine books)
- * the position CFI so re-opening lands on the exact spot. The options object
- * keeps the existing call shape (`{ db }`); `cfi` is omitted by the TXT path,
- * which leaves any previously stored CFI untouched.
+ * Persist reading progress: the physical position (spine ordinal, intra-section
+ * Node Anchor) and, for engine books, the exact CFI so re-opening lands on the
+ * spot. The options object keeps the existing call shape (`{ db }`); `cfi` and
+ * `anchor` are omitted by the TXT path, which leaves any previously stored value
+ * untouched.
+ *
+ * The anchor is part of the record because restoring only the ordinal leaves the
+ * Node View resolving the owning 章 instead of the 节 the reader was in.
  */
 export async function saveProgress(
   hash: string,
-  nodeIndex: number,
-  options: LibraryDeps & { cfi?: string } = {},
+  spineIndex: number,
+  options: LibraryDeps & { cfi?: string; anchor?: string; nodeIndex?: number } = {},
 ): Promise<void> {
   const db = dbOf(options);
   const book = await db.books.get(hash);
   if (!book) return;
   await db.books.put({
     ...book,
-    lastNodeIndex: nodeIndex,
+    lastSpineIndex: spineIndex,
+    ...(options.nodeIndex !== undefined ? { lastNodeIndex: options.nodeIndex } : {}),
+    lastAnchor: options.anchor ?? book.lastAnchor,
     lastCfi: options.cfi ?? book.lastCfi,
     updatedAt: Date.now(),
   });
+}
+
+/**
+ * Record what the index pipeline built for a book, on its shelf row.
+ *
+ * The shelf has no node model, and it used to borrow whatever single shape the
+ * index store happened to hold — so a row could wear another book's levels (候选 6).
+ * The **Segmentation Rule** is recorded too: it cannot be inferred from the nodes,
+ * and guessing it relabelled a fixed-length TXT index as heading-detected
+ * (候选 epilogue). One writer, one reader, no query per card.
+ */
+export async function saveBookIndexSummary(
+  hash: string,
+  summary: { shape: BookNodeShape; strategy: SegmentStrategy },
+  options: LibraryDeps = {},
+): Promise<void> {
+  const db = dbOf(options);
+  const book = await db.books.get(hash);
+  if (!book) return;
+  await db.books.put({
+    ...book,
+    nodeShape: summary.shape,
+    nodeStrategy: summary.strategy,
+    updatedAt: Date.now(),
+  });
+}
+
+/** The index summary a book remembers, or null when it was never indexed. */
+export async function readBookIndexSummary(
+  hash: string,
+  options: LibraryDeps = {},
+): Promise<{ shape: BookNodeShape; strategy: SegmentStrategy } | null> {
+  const book = await dbOf(options).books.get(hash);
+  if (!book?.nodeShape || !book.nodeStrategy) return null;
+  return { shape: book.nodeShape, strategy: book.nodeStrategy };
 }

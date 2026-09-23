@@ -34,6 +34,7 @@ describe('createAISettingsStore', () => {
     expect(state.settings).toEqual(DEFAULT_AI_SETTINGS);
     expect(state.status).toBe('idle');
     expect(state.toast).toBeNull();
+    expect(state.availableModels).toBeNull();
   });
 
   it('load() reads persisted settings through the repository', async () => {
@@ -91,5 +92,39 @@ describe('createAISettingsStore', () => {
     await store.getState().testConnection();
     store.getState().clearToast();
     expect(store.getState().toast).toBeNull();
+  });
+
+  it('loadModels() tags the pulled list with the endpoint it came from', async () => {
+    const fetchModels: typeof fetch = () =>
+      Promise.resolve(new Response(JSON.stringify({ data: [{ id: 'm-b' }, { id: 'm-a' }] }), { status: 200 }));
+    const { store } = newStore(fetchModels);
+
+    const result = await store.getState().loadModels({ ...custom, baseUrl: 'https://api.deepseek.com/v1/' });
+
+    expect(result.ok).toBe(true);
+    expect(store.getState().availableModels).toEqual({
+      baseUrl: 'https://api.deepseek.com/v1',
+      models: ['m-a', 'm-b'],
+    });
+    expect(store.getState().toast).toEqual({ type: 'success', text: '已拉取 2 个模型，可在下方选择' });
+  });
+
+  it('loadModels() drops a previous list when the pull fails', async () => {
+    let status = 200;
+    const fetchImpl: typeof fetch = () =>
+      Promise.resolve(
+        status === 200
+          ? new Response(JSON.stringify({ data: [{ id: 'm-a' }] }), { status: 200 })
+          : new Response('{}', { status }),
+      );
+    const { store } = newStore(fetchImpl);
+
+    await store.getState().loadModels();
+    expect(store.getState().availableModels?.models).toEqual(['m-a']);
+
+    status = 401;
+    await store.getState().loadModels();
+    expect(store.getState().availableModels).toBeNull();
+    expect(store.getState().toast).toEqual({ type: 'error', text: 'API Key 无效或未授权' });
   });
 });

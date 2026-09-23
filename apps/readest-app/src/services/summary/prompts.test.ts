@@ -33,17 +33,18 @@ describe('THREE_PART_TEMPLATE', () => {
     expect(THREE_PART_TEMPLATE).toContain('- **[概念/术语名]**：');
   });
 
-  it('demands the full causal arc per point (来龙去脉, no fragmentary listing)', () => {
-    expect(THREE_PART_TEMPLATE).toContain('来龙去脉');
-    expect(THREE_PART_TEMPLATE).toContain('禁止只罗列孤立事实');
-    expect(THREE_PART_TEMPLATE).toContain('前因、经过与后续影响');
+  it('demands the full logical and argumentative chain per point in original perspective', () => {
+    expect(THREE_PART_TEMPLATE).toContain('叙述视角');
+    expect(THREE_PART_TEMPLATE).toContain('逻辑链与论证链');
+    expect(THREE_PART_TEMPLATE).toContain('背景起因与目的、核心内容或经过、导向的结果与结论');
   });
 });
 
 describe('CAUSALITY_RULE injection', () => {
   it('rides along with every three-part rule usage', () => {
     expect(THREE_PART_RULE).toContain(CAUSALITY_RULE);
-    expect(THREE_PART_RULE).toContain('片面性、片段性');
+    expect(THREE_PART_RULE).toContain('叙述视角');
+    expect(THREE_PART_RULE).toContain('逻辑链和论证链');
     expect(buildSinglePassPrompt(INPUT)).toContain(CAUSALITY_RULE);
   });
 });
@@ -107,7 +108,7 @@ describe('buildMapPrompt', () => {
     expect(prompt).toContain('第 1/2 个片段');
     expect(prompt).toContain(chunk);
     expect(prompt).toContain('不需要三段式结构');
-    expect(prompt).toContain('交代前因与后果');
+    expect(prompt).toContain('前后上下文与逻辑链');
     expect(prompt).not.toContain(SUMMARY_HEADING_CORE);
     expect(prompt).not.toContain(SUMMARY_HEADING_TERMS);
   });

@@ -21,7 +21,7 @@ const makeEngine = (): FoliateEngineHandle =>
     getCachedSpineText: vi.fn(() => ''),
     getSpineTitle: vi.fn(() => ''),
     spineCount: 3,
-    tocItems: vi.fn(() => []),
+
     currentLocation: vi.fn((): EngineLocation | null => null),
     close: vi.fn(),
   }) as unknown as FoliateEngineHandle;

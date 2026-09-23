@@ -1,11 +1,27 @@
 'use client';
 
-import { useRef, useState } from 'react';
-import { GripVertical, MessageSquare, Settings2, Sparkles, X } from 'lucide-react';
+import { useRef } from 'react';
+import {
+  BookOpen,
+  Cpu,
+  GripVertical,
+  History,
+  MessageSquare,
+  Settings2,
+  Sparkles,
+  X,
+} from 'lucide-react';
+import { Button } from '@astryxdesign/core/Button';
 import { IconButton } from '@astryxdesign/core/IconButton';
 import { Tab, TabList } from '@astryxdesign/core/TabList';
 import { HStack, VStack } from '@astryxdesign/core/Stack';
+import { Text } from '@astryxdesign/core/Text';
+import { Token } from '@astryxdesign/core/Token';
 import { useAISidebarStore } from '@/store/aiSidebarStore';
+import { useAISettingsStore } from '@/store/aiSettingsStore';
+import { useLibraryStore } from '@/store/libraryStore';
+import { useReaderStore } from '@/store/readerStore';
+import { providerReady } from '@/services/ai/providerReadiness';
 import { useViewportWidth } from '@/hooks/useViewportWidth';
 import AISettingsPanel from '@/components/settings/AISettingsPanel';
 import SummaryTab from './SummaryTab';
@@ -19,7 +35,7 @@ interface DragState {
 
 /**
  * Split-screen AI companion sidebar (ADR 0003): collapsible container whose
- * width (320~600px) is driven through the shared aiSidebarStore, so it is
+ * width (320~900px) is driven through the shared aiSidebarStore, so it is
  * clamped there and remembered across restarts via the persist middleware.
  *
  * Responsive (design doc 6): below 768px the pane detaches into a fixed
@@ -35,7 +51,19 @@ export default function AISidebar() {
   const setExpanded = useAISidebarStore((s) => s.setExpanded);
   const { isCompact } = useViewportWidth();
 
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const view = useLibraryStore((s) => s.view);
+  const currentHash = useLibraryStore((s) => s.currentHash);
+  const resumeReading = useLibraryStore((s) => s.resumeReading);
+  const bookTitle = useReaderStore((s) => s.bookTitle);
+  const settingsOpen = useAISidebarStore((s) => s.settingsOpen);
+  const openSettings = useAISidebarStore((s) => s.openSettings);
+  const closeSettings = useAISidebarStore((s) => s.closeSettings);
+
+  // The model is shared by both tabs (总结 and 伴读 call the same endpoint), so
+  // it is reported once here at the tab level instead of inside either panel.
+  const model = useAISettingsStore((s) => s.settings.model);
+  const hasProvider = useAISettingsStore((s) => providerReady(s.settings));
+
   const dragState = useRef<DragState | null>(null);
 
   // Collapsed: render nothing so the reader keeps the full width.
@@ -62,7 +90,7 @@ export default function AISidebar() {
     if (!drag || drag.pointerId !== event.pointerId) return;
     // Handle sits on the sidebar's LEFT edge: moving left widens the pane.
     const delta = drag.startClientX - event.clientX;
-    setWidth(drag.startWidth + delta); // store clamps into [320, 600]
+    setWidth(drag.startWidth + delta); // store clamps into [320, 900]
   };
 
   const endDrag = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -140,24 +168,60 @@ export default function AISidebar() {
             borderBottom: '1px solid var(--color-border)',
           }}
         >
-          <TabList
-            role="tablist"
-            aria-label="AI 侧边栏视图"
-            value={activeTab}
-            onChange={(next) => setActiveTab(next as 'summary' | 'chat')}
-            size="sm"
-          >
-            <Tab value="summary" label="总结" panelId="ai-panel-summary" icon={<Sparkles size={12} aria-hidden />} />
-            <Tab value="chat" label="伴读" panelId="ai-panel-chat" icon={<MessageSquare size={12} aria-hidden />} />
-          </TabList>
-          <HStack gap={1} vAlign="center">
+          {view === 'shelf' ? (
+            <HStack gap={2} vAlign="center" data-testid="sidebar-shelf-header" style={{ flexShrink: 0 }}>
+              <Sparkles size={14} aria-hidden />
+              <Text weight="semibold" size="sm">
+                AI 伴读
+              </Text>
+              <Token size="sm" label="书架中" />
+            </HStack>
+          ) : (
+            <TabList
+              role="tablist"
+              aria-label="AI 侧边栏视图"
+              value={activeTab}
+              onChange={(next) => setActiveTab(next as 'summary' | 'chat')}
+              size="sm"
+              style={{ flexShrink: 0 }}
+            >
+              <Tab value="summary" label="总结" panelId="ai-panel-summary" icon={<Sparkles size={12} aria-hidden />} />
+              <Tab value="chat" label="伴读" panelId="ai-panel-chat" icon={<MessageSquare size={12} aria-hidden />} />
+            </TabList>
+          )}
+          <HStack gap={2} vAlign="center" style={{ minWidth: 0 }}>
+            {/* Which model both tabs are talking to. The chip absorbs the free
+                space so the name sits beside the tabs and truncates (with
+                Text's truncation tooltip) when the pane is at its 320px
+                minimum; before a key is configured it says so instead of
+                naming a model nothing can call. */}
+            <HStack
+              gap={1}
+              vAlign="center"
+              data-testid="sidebar-model-chip"
+              style={{ flex: '1 1 auto', minWidth: 0 }}
+            >
+              <Cpu
+                size={12}
+                aria-hidden
+                style={{ flexShrink: 0, color: 'var(--color-text-secondary)', opacity: 0.8 }}
+              />
+              <Text
+                type="supporting"
+                color={hasProvider ? 'secondary' : 'accent'}
+                maxLines={1}
+                style={{ minWidth: 0, opacity: hasProvider ? 0.9 : 1 }}
+              >
+                {hasProvider ? model : '未配置模型'}
+              </Text>
+            </HStack>
             <IconButton
               label="AI 设置"
               variant="ghost"
               size="sm"
-              tooltip="AI Provider 设置"
+              tooltip="AI 设置"
               icon={<Settings2 size={14} aria-hidden />}
-              onClick={() => setSettingsOpen(true)}
+              onClick={openSettings}
             />
             <IconButton
               label="关闭 AI 侧边栏"
@@ -171,7 +235,7 @@ export default function AISidebar() {
         </HStack>
 
         <div
-          id={`ai-panel-${activeTab}`}
+          id={view === 'shelf' ? 'ai-panel-shelf' : `ai-panel-${activeTab}`}
           role="tabpanel"
           style={{
             flex: 1,
@@ -180,10 +244,60 @@ export default function AISidebar() {
             padding: 'var(--spacing-3)',
           }}
         >
-          {activeTab === 'summary' ? <SummaryTab /> : <ChatTab />}
+          {view === 'shelf' ? (
+            <VStack
+              data-testid="sidebar-shelf-empty"
+              gap={4}
+              vAlign="center"
+              hAlign="center"
+              style={{
+                height: '100%',
+                justifyContent: 'center',
+                padding: 'var(--spacing-6) var(--spacing-4)',
+                textAlign: 'center',
+              }}
+            >
+              <div
+                style={{
+                  width: 48,
+                  height: 48,
+                  borderRadius: 'var(--radius-full)',
+                  background: 'var(--color-background-muted)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'var(--color-text-secondary)',
+                }}
+              >
+                <BookOpen size={24} aria-hidden />
+              </div>
+              <VStack gap={2} vAlign="center" style={{ maxWidth: 280 }}>
+                <Text weight="semibold" type="large">
+                  未打开书籍
+                </Text>
+                <Text type="supporting" color="secondary" style={{ lineHeight: 1.6 }}>
+                  打开书籍后，可在此查看章节总结与 AI 伴读。
+                </Text>
+              </VStack>
+              {currentHash && (
+                <Button
+                  label={`继续阅读《${bookTitle || '未命名'}》`}
+                  variant="secondary"
+                  size="sm"
+                  data-testid="sidebar-resume-reading"
+                  icon={<History size={14} aria-hidden />}
+                  onClick={resumeReading}
+                />
+              )}
+            </VStack>
+          ) : activeTab === 'summary' ? (
+            <SummaryTab />
+          ) : (
+            <ChatTab />
+          )}
         </div>
 
-        {settingsOpen && <AISettingsPanel open onClose={() => setSettingsOpen(false)} />}
+        {settingsOpen && <AISettingsPanel open onClose={closeSettings} />}
       </aside>
     </>
   );

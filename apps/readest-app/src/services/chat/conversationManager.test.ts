@@ -29,12 +29,12 @@ const makeManager = () => {
 describe('startConversation', () => {
   it('creates a fresh topic with zero turns, open state and normalized title', async () => {
     const manager = makeManager();
-    const conversation = await manager.startConversation({ bookHash: 'book-a', nodeIndex: 2 });
+    const conversation = await manager.startConversation({ bookHash: 'book-a', spineIndex: 2 });
 
     expect(conversation).toMatchObject({
       id: 'm1-1',
       bookHash: 'book-a',
-      nodeIndex: 2,
+      spineIndex: 2,
       turnCount: 0,
       isClosed: false,
       createdAt: 1010,
@@ -50,14 +50,14 @@ describe('startConversation', () => {
 
     const untitled = await manager.startConversation({ bookHash: 'book-a' });
     expect(untitled.title).toBe('新话题');
-    expect(untitled.nodeIndex).toBeUndefined();
+    expect(untitled.spineIndex).toBeUndefined();
   });
 });
 
 describe('sendMessage', () => {
   it('persists user + assistant messages with quotes and bumps conversation.updatedAt', async () => {
     const manager = makeManager();
-    const conversation = await manager.startConversation({ bookHash: 'book-b', nodeIndex: 0 });
+    const conversation = await manager.startConversation({ bookHash: 'book-b', spineIndex: 0 });
 
     const user = await manager.sendMessage(conversation, {
       role: 'user',

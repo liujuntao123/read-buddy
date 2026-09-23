@@ -13,6 +13,29 @@ import type { ConversationRepository } from '@/services/db/repositories';
 export const DEFAULT_TOPIC_TITLE = '新话题';
 export const TOPIC_TITLE_MAX_CHARS = 30;
 
+/**
+ * The **one** Turn Quota rule (ADR 0006 / 候选 epilogue).
+ *
+ * The rule used to be written three times — `completeTurn`'s `turnCount >=
+ * maxTurns`, `chatStore`'s `computeInputDisabled`, and `ChatTab`'s own `isClosed`
+ * — while both convenience helpers (`canSend`, `turnLabel`) were called only by
+ * their own tests. The cap itself was read from two stores: `aiSettingsStore` for
+ * the pill's display and the injected settings for enforcement. If the two ever
+ * disagreed the pill read 「1 / 10」 while the topic locked at 2.
+ */
+export const isQuotaReached = (turnCount: number, maxTurns: number): boolean =>
+  turnCount >= maxTurns;
+
+/** The quota pill's text — the same expression the store enforces. */
+export const turnQuotaLabel = (
+  conversation: Conversation | null | undefined,
+  maxTurns: number,
+): string => `${conversation?.turnCount ?? 0} / ${maxTurns}`;
+
+/** A topic accepts a turn unless the quota already closed it. */
+export const canSend = (conversation: Conversation | null | undefined): boolean =>
+  !(conversation?.isClosed ?? false);
+
 export interface ConversationManagerDeps {
   repository: ConversationRepository;
   idFactory?: () => string;
@@ -21,7 +44,8 @@ export interface ConversationManagerDeps {
 
 export interface StartConversationInput {
   bookHash: string;
-  nodeIndex?: number;
+  /** Physical position the topic starts at (see `Conversation.spineIndex`). */
+  spineIndex?: number;
   title?: string;
 }
 
@@ -63,12 +87,12 @@ export function createConversationManager(deps: ConversationManagerDeps): Conver
   const now = deps.now ?? Date.now;
 
   return {
-    startConversation: async ({ bookHash, nodeIndex, title }) => {
+    startConversation: async ({ bookHash, spineIndex, title }) => {
       const timestamp = now();
       const conversation: Conversation = {
         id: newId(),
         bookHash,
-        nodeIndex,
+        spineIndex,
         title: normalizeTitle(title),
         turnCount: 0,
         isClosed: false,
@@ -102,14 +126,14 @@ export function createConversationManager(deps: ConversationManagerDeps): Conver
       const updated: Conversation = {
         ...conversation,
         turnCount,
-        isClosed: turnCount >= maxTurns,
+        isClosed: isQuotaReached(turnCount, maxTurns),
         updatedAt: now(),
       };
       await deps.repository.put(updated);
       return updated;
     },
 
-    canSend: (conversation) => !conversation.isClosed,
+    canSend: (conversation) => canSend(conversation),
 
     getConversation: (id) => deps.repository.get(id),
 

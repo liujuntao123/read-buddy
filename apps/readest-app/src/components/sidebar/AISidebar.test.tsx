@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AISidebar from './AISidebar';
 import Workspace from '@/components/Workspace';
 import { useAISidebarStore } from '@/store/aiSidebarStore';
+import { useAISettingsStore } from '@/store/aiSettingsStore';
+import { useLibraryStore } from '@/store/libraryStore';
+import { DEFAULT_AI_SETTINGS } from '@/types/ai';
 
 const originalMatchMedia = window.matchMedia;
 
@@ -22,6 +25,10 @@ function mockMatchMedia(matches: boolean) {
 beforeEach(() => {
   mockMatchMedia(false);
   useAISidebarStore.setState({ expanded: false, width: 400, activeTab: 'summary' });
+  useLibraryStore.setState({ view: 'shelf', currentHash: null });
+  useAISettingsStore.setState({
+    settings: { ...DEFAULT_AI_SETTINGS, provider: 'deepseek', apiKey: 'sk-test', model: 'deepseek-chat' },
+  });
 });
 
 afterEach(() => {
@@ -111,5 +118,42 @@ describe('AISidebar responsive drawer mode', () => {
     fireEvent.click(screen.getByRole('button', { name: '切换 AI 侧边栏' }));
     expect(screen.getByTestId('ai-sidebar').getAttribute('data-mode')).toBe('inline');
     expect(screen.queryByTestId('sidebar-overlay')).toBeNull();
+  });
+
+  it('displays empty state when on bookshelf view (view === "shelf")', () => {
+    mockMatchMedia(false);
+    useAISidebarStore.setState({ expanded: true });
+    // Default libraryStore state starts with view === 'shelf'
+    render(<AISidebar />);
+
+    expect(screen.getByTestId('sidebar-shelf-empty')).toBeTruthy();
+    expect(screen.getByText('未打开书籍')).toBeTruthy();
+    expect(screen.getByText(/打开书籍后，可在此查看章节总结与 AI 伴读/)).toBeTruthy();
+  });
+
+  it('reports the shared model at the tab level, for both tabs', () => {
+    mockMatchMedia(false);
+    useAISidebarStore.setState({ expanded: true });
+    useLibraryStore.setState({ view: 'reader', currentHash: 'demo-book' });
+    render(<AISidebar />);
+
+    const chip = screen.getByTestId('sidebar-model-chip');
+    expect(chip.textContent).toBe('deepseek-chat');
+    // Header level: the tabs and the chip first meet at a row that is not a tab
+    // panel, so switching 总结 ↔ 伴读 neither hides nor duplicates it.
+    let row: HTMLElement | null = screen.getByRole('tablist');
+    while (row && !row.contains(chip)) row = row.parentElement;
+    expect(row).not.toBeNull();
+    expect(row!.closest('[role="tabpanel"]')).toBeNull();
+    expect(screen.getByRole('tabpanel').contains(chip)).toBe(false);
+  });
+
+  it('says the provider is unconfigured instead of naming an unusable model', () => {
+    mockMatchMedia(false);
+    useAISidebarStore.setState({ expanded: true });
+    useAISettingsStore.setState({ settings: { ...DEFAULT_AI_SETTINGS } }); // no API key
+    render(<AISidebar />);
+
+    expect(screen.getByTestId('sidebar-model-chip').textContent).toBe('未配置模型');
   });
 });

@@ -210,7 +210,7 @@ describe('createFoliateEngine', () => {
     expect(engine.spineCount).toBe(3);
     // Flattening keeps document order and stamps the level each row came
     // from, so 「第三章」 stays recognisable as a 节 under 「卷二」.
-    expect(engine.tocItems()).toEqual([
+    expect(engine.tocEntries().map(({ label, href, depth }) => ({ label, href, depth }))).toEqual([
       { label: '第一章 迷雾之城', href: 'ch1.xhtml', depth: 0 },
       { label: '第二章 图书馆的密语', href: 'ch2.xhtml', depth: 0 },
       { label: '卷二', href: 'ch2.xhtml', depth: 0 },
@@ -225,7 +225,7 @@ describe('createFoliateEngine', () => {
     const engine = makeEngine();
     await engine.prepare();
     expect(engine.getSpineTitle(1)).toBe('第 2 节');
-    expect(engine.tocItems()).toEqual([]);
+    expect(engine.tocEntries().map(({ label, href, depth }) => ({ label, href, depth }))).toEqual([]);
   });
 
   it('openIn attaches the view, renders and reports the first location', async () => {
@@ -367,50 +367,94 @@ describe('createFoliateEngine', () => {
     expect(FakeFoliateView.fractionCalls).toEqual([0]);
   });
 
-  it('setTheme forwards theme styles to the renderer', async () => {
+  it('applyPresentation forwards theme styles to the renderer', async () => {
     const engine = makeEngine();
     const container = document.createElement('div');
     await engine.openIn(container);
     const view = container.firstElementChild as FakeFoliateView;
 
-    engine.setTheme?.('dark');
+    engine.applyPresentation({ theme: 'dark' });
     expect(view.stylesApplied).toContain('background-color: #1d1d20');
     expect(view.stylesApplied).toContain('color: #cbd5e1');
 
-    engine.setTheme?.('sepia');
+    engine.applyPresentation({ theme: 'sepia' });
     expect(view.stylesApplied).toContain('background-color: #faf5ea');
 
-    engine.setTheme?.('light');
+    engine.applyPresentation({ theme: 'light' });
     expect(view.stylesApplied).toContain('background-color: #ffffff');
   });
 
-  it('setPageMode updates column count and flow on renderer', async () => {
+  it('applyPresentation maps page mode onto column count and flow', async () => {
     const engine = makeEngine();
     const container = document.createElement('div');
     await engine.openIn(container);
     const view = container.firstElementChild as FakeFoliateView;
 
-    engine.setPageMode?.('single');
+    engine.applyPresentation({ theme: 'light', layout: { pageMode: 'single', contentWidth: 720, pageMargin: 48, columnGap: 24 } });
     expect(view.maxColumnCount).toBe(1);
     // Single page = single-column infinite scroll (paginator flow=scrolled).
     expect(view.attrs['flow']).toBe('scrolled');
 
-    engine.setPageMode?.('double');
+    engine.applyPresentation({ theme: 'light', layout: { pageMode: 'double', contentWidth: 720, pageMargin: 48, columnGap: 24 } });
     expect(view.maxColumnCount).toBe(2);
     expect(view.attrs['flow']).toBe('paginated');
   });
 
-  it('setLayout maps typography-adjacent knobs onto renderer attributes', async () => {
+  it('reports which route carried each presentation knob instead of failing silently', async () => {
+    // The vendored view exposes layout through `renderer.setAttribute` but NOT
+    // through the element setters (this is the fake's real shape, and how a Foliate
+    // build can differ). Before `presentationDiagnostics`, that difference was
+    // invisible: the `?.`-probed setter simply did nothing and nothing said so.
+    const engine = makeEngine();
+    const container = document.createElement('div');
+    await engine.openIn(container);
+
+    engine.applyPresentation({ theme: 'light', layout: { pageMode: 'single', contentWidth: 900, pageMargin: 72, columnGap: 10 } });
+    const report = engine.presentationDiagnostics();
+
+    expect(report.viaRendererFallback).toEqual(
+      expect.arrayContaining(['max-column-count', 'flow', 'max-inline-size', 'margin', 'gap']),
+    );
+    // Everything reached the view one way or another, so nothing is stale.
+    expect(report.unsupported).toEqual([]);
+
+    // Styles go through `renderer.setStyles` on this view.
+    engine.applyPresentation({ theme: 'dark' });
+    expect(engine.presentationDiagnostics().viaRendererFallback).toContain('styles');
+  });
+
+  it('names a knob that reached neither route as unsupported', async () => {
+    // A build whose renderer lacks `setAttribute` and whose element lacks the
+    // setters: the reader keeps the old layout, and now that fact is reportable.
+    const engine = makeEngine();
+    const container = document.createElement('div');
+    await engine.openIn(container);
+    const view = container.firstElementChild as FakeFoliateView;
+    const renderer = view.renderer as { setAttribute?: unknown };
+    const saved = renderer.setAttribute;
+    delete renderer.setAttribute;
+
+    engine.applyPresentation({ theme: 'light', layout: { pageMode: 'double', contentWidth: 700, pageMargin: 60, columnGap: 24 } });
+
+    expect(engine.presentationDiagnostics().unsupported).toEqual(
+      expect.arrayContaining(['max-inline-size']),
+    );
+    renderer.setAttribute = saved;
+
+    // Restoring the route clears the report rather than accumulating.
+    engine.applyPresentation({ theme: 'light', layout: { pageMode: 'double', contentWidth: 700, pageMargin: 60, columnGap: 24 } });
+    expect(engine.presentationDiagnostics().unsupported).toEqual([]);
+  });
+
+  it('applyPresentation maps typography-adjacent knobs onto renderer attributes', async () => {
     const engine = makeEngine();
     const container = document.createElement('div');
     await engine.openIn(container);
     const view = container.firstElementChild as FakeFoliateView;
 
-    engine.setLayout?.({
-      pageMode: 'single',
-      contentWidth: 900,
-      pageMargin: 72,
-      columnGap: 10,
+    engine.applyPresentation({
+      theme: 'light',
+      layout: { pageMode: 'single', contentWidth: 900, pageMargin: 72, columnGap: 10 },
     });
     expect(view.attrs['max-column-count']).toBe('1');
     expect(view.attrs['flow']).toBe('scrolled');
@@ -418,71 +462,35 @@ describe('createFoliateEngine', () => {
     expect(view.attrs['margin']).toBe('72');
     expect(view.attrs['gap']).toBe('10');
 
-    engine.setLayout?.({ pageMode: 'double' });
+    engine.applyPresentation({ theme: 'light', layout: { pageMode: 'double', contentWidth: 900, pageMargin: 72, columnGap: 10 } });
     expect(view.attrs['max-column-count']).toBe('2');
     expect(view.attrs['flow']).toBe('paginated');
     // Other knobs persist across partial updates.
     expect(view.attrs['max-inline-size']).toBe('900');
   });
 
-  it('setTypography merges reader css with the theme stylesheet', async () => {
+  it('applyPresentation merges reader css with the theme stylesheet', async () => {
     const engine = makeEngine();
     const container = document.createElement('div');
     await engine.openIn(container);
     const view = container.firstElementChild as FakeFoliateView;
 
-    engine.setTheme?.('dark');
-    engine.setTypography?.('html { font-size: 21px !important; }');
+    engine.applyPresentation({ theme: 'dark' });
+    engine.applyPresentation({ theme: 'dark', typographyCss: 'html { font-size: 21px !important; }' });
 
     // One stylesheet carries both the theme and the reader typography —
     // the paginator's setStyles replaces the previous content wholesale.
     expect(view.stylesApplied).toContain('background-color: #1d1d20');
     expect(view.stylesApplied).toContain('font-size: 21px');
 
-    engine.setTheme?.('light');
+    engine.applyPresentation({ theme: 'light' });
     expect(view.stylesApplied).toContain('background-color: #ffffff');
     expect(view.stylesApplied).toContain('font-size: 21px');
   });
 
-  it('getTocIndex resolves location to matching TOC index', async () => {
-    const engine = makeEngine();
-    await engine.prepare();
-
-    expect(
-      engine.getTocIndex?.({
-        index: 1,
-        fraction: 0.5,
-        tocItemHref: 'ch2.xhtml',
-      }),
-    ).toBe(1);
-
-    // When tocItemHref is missing, falls back to spine section mapping
-    // In SPEC, section 2 (ch3.xhtml) is TOC item 3 ("第三章 长夜漫漫")
-    expect(
-      engine.getTocIndex?.({
-        index: 2,
-        fraction: 0.8,
-      }),
-    ).toBe(3);
-  });
-
-  it('nextChapter and prevChapter advance and retreat across distinct chapters', async () => {
-    const engine = makeEngine();
-    await engine.openIn(document.createElement('div'));
-    expect(engine.currentLocation()!.index).toBe(0);
-
-    await engine.nextChapter?.();
-    expect(engine.currentLocation()!.index).toBe(1);
-
-    await engine.nextChapter?.();
-    expect(engine.currentLocation()!.index).toBe(2);
-
-    await engine.prevChapter?.();
-    expect(engine.currentLocation()!.index).toBe(1);
-
-    await engine.prevChapter?.();
-    expect(engine.currentLocation()!.index).toBe(0);
-  });
+  // The "which TOC row is the reader on" ladder moved to
+  // `services/reader/chapterNavigation` (候选 7) and is covered by its own suite;
+  // the engine no longer publishes a second answer.
 
   it('close tears down the view, releases the book and drops listeners', async () => {
     const engine = makeEngine();
@@ -664,17 +672,19 @@ describe('engineToContent', () => {
     expect(content.getSpineTitle(1)).toBe('第二章 图书馆的密语');
     // current chapter (rendered) is cached and extractable for the AI features
     expect(content.getSpineHtml(0)).toContain('灯火在雾中摇曳');
-    expect(content.getSpineText(0)).toContain('灯火在雾中摇曳');
+    expect(await content.getSpineText(0)).toContain('灯火在雾中摇曳');
     // the directory + its anchors travel through the registry adapter too
-    expect(content.getTocEntries?.().map((entry) => [entry.label, entry.depth])).toEqual([
+    expect(content.getTocEntries().map((entry) => [entry.label, entry.depth])).toEqual([
       ['第一章 迷雾之城', 0],
       ['第二章 图书馆的密语', 0],
       ['卷二', 0],
       ['第三章 长夜漫漫', 1],
     ]);
-    expect(content.getSpineAnchors?.(0)).toEqual([]);
-    // engine books are never monolithic
-    expect(content.getMonolithicText).toBeUndefined();
+    expect(content.getSpineAnchors(0)).toEqual([]);
+    // An engine book states its kind and reports no monolithic text. This used
+    // to be tested as method *absence* — the type-tag probing 候选 8 removed.
+    expect(content.kind).toBe('engine');
+    expect(content.getMonolithicText()).toBeUndefined();
 
     clearOpenedBook(hash);
   });
