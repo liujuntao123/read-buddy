@@ -249,3 +249,4 @@ docs/               架构说明、ADR、发布流程
 - [readest](https://github.com/readest/readest) —— 本项目的架构与交互设计从中受益良多
 - [foliate-js](https://github.com/johnfactotum/foliate-js) —— 分页渲染引擎
 - [Tauri](https://tauri.app/) · [Next.js](https://nextjs.org/) · [Vercel AI SDK](https://sdk.vercel.ai/)
+- https://linux.do/ -- 学AI，上L站
