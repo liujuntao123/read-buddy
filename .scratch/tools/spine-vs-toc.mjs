@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
-const require = createRequire('file:///C:/Users/admin/myspace/readest-plus/apps/readest-app/package.json');
+const require = createRequire('file:///C:/Users/admin/myspace/read-buddy/apps/read-buddy-app/package.json');
 const JSZip = require('jszip');
 
 const zip = await JSZip.loadAsync(readFileSync(process.argv[2]));

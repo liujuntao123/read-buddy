@@ -8,10 +8,10 @@
  * | File                                            | Who reads it                     |
  * | ----------------------------------------------- | -------------------------------- |
  * | `package.json`                                  | the workspace, the tag name       |
- * | `apps/readest-app/package.json`                 | the app package                   |
- * | `apps/readest-app/src-tauri/tauri.conf.json`    | `tauri build` (installer name)    |
- * | `apps/readest-app/src-tauri/Cargo.toml`         | the Rust crate                    |
- * | `apps/readest-app/src-tauri/Cargo.lock`         | `cargo` (a stale lock dirties CI) |
+ * | `apps/read-buddy-app/package.json`                 | the app package                   |
+ * | `apps/read-buddy-app/src-tauri/tauri.conf.json`    | `tauri build` (installer name)    |
+ * | `apps/read-buddy-app/src-tauri/Cargo.toml`         | the Rust crate                    |
+ * | `apps/read-buddy-app/src-tauri/Cargo.lock`         | `cargo` (a stale lock dirties CI) |
  *
  * Hand-editing five files is how a release ends up shipping an installer named
  * `0.2.0` from a crate that says `0.1.0`. So the workspace root `package.json`
@@ -44,7 +44,7 @@ export const SOURCE_FILE = 'package.json';
  * (`replace`, keeping the surrounding text byte-identical and the diff minimal).
  * Every pattern is anchored on enough structure to hit the *right* key: the
  * first `"version"` of a JSON file, the one inside `[package]`, the one inside
- * the `readest-plus` entry of the lock file.
+ * the `read-buddy` entry of the lock file.
  */
 export const TARGETS = [
   {
@@ -53,27 +53,27 @@ export const TARGETS = [
     regex: /^(\s*"version"\s*:\s*")([^"]*)(")/m,
   },
   {
-    file: 'apps/readest-app/package.json',
+    file: 'apps/read-buddy-app/package.json',
     label: '前端应用包',
     regex: /^(\s*"version"\s*:\s*")([^"]*)(")/m,
   },
   {
-    file: 'apps/readest-app/src-tauri/tauri.conf.json',
+    file: 'apps/read-buddy-app/src-tauri/tauri.conf.json',
     label: 'Tauri 打包配置（决定安装包文件名）',
     regex: /^(\s*"version"\s*:\s*")([^"]*)(")/m,
   },
   {
-    file: 'apps/readest-app/src-tauri/Cargo.toml',
+    file: 'apps/read-buddy-app/src-tauri/Cargo.toml',
     label: 'Rust crate 清单',
     regex: /(\[package\][\s\S]*?^\s*version\s*=\s*")([^"]*)(")/m,
   },
   {
-    file: 'apps/readest-app/src-tauri/Cargo.lock',
+    file: 'apps/read-buddy-app/src-tauri/Cargo.lock',
     label: 'Rust 锁文件',
     // `\r?\n`, not `\n`: a Windows checkout has CRLF here while CI has LF, and
     // this pattern is the only one that spans lines. Only the matched span is
     // rewritten, so each file keeps whatever line endings it already had.
-    regex: /(\[\[package\]\]\r?\nname = "readest-plus"\r?\nversion = ")([^"]*)(")/,
+    regex: /(\[\[package\]\]\r?\nname = "read-buddy"\r?\nversion = ")([^"]*)(")/,
   },
 ];
 

@@ -10,7 +10,7 @@
 # 1) 准备运行时输入（不入库，见 .gitignore）
 $h = ".scratch\continuous-harness"
 New-Item -ItemType Directory -Force -Path "$h\vendor" | Out-Null
-Copy-Item "apps\readest-app\vendor\foliate-js" "$h\vendor\" -Recurse -Force
+Copy-Item "apps\read-buddy-app\vendor\foliate-js" "$h\vendor\" -Recurse -Force
 Copy-Item ".scratch\fixtures\mist-city.epub" "$h\" -Force
 node "$h\make-long-book.mjs" "$h\long-book.epub" 10 60   # 10 章 × 60 段的高书
 

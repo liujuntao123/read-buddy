@@ -4,7 +4,7 @@
 Accepted
 
 ## Context
-`readest-plus` is a personal, client-side offline-first desktop reading application. Storing third-party AI credentials (API keys) can either utilize:
+`read-buddy` is a personal, client-side offline-first desktop reading application. Storing third-party AI credentials (API keys) can either utilize:
 1. **OS Keychain / Stronghold Encryption**: Requires native system keystore bridge plugins, password unlocks, and platform-specific native dependencies.
 2. **Plaintext Local Storage**: Persisting configuration directly into the client's local IndexedDB / SQLite database.
 

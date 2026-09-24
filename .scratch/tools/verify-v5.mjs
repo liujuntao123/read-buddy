@@ -7,7 +7,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
 const sha = createHash('sha256')
-  .update(readFileSync('apps/readest-app/src/services/bookNodes/nodeContent.ts'))
+  .update(readFileSync('apps/read-buddy-app/src/services/bookNodes/nodeContent.ts'))
   .digest('hex')
   .slice(0, 12);
 console.log(`(compared against nodeContent.ts sha256=${sha})\n`);

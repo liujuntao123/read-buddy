@@ -32,7 +32,7 @@ while (s < to && count < 20) {
     try { inflateRawSync(buf.subarray(hit.st, e)); minE = e; break; } catch {}
   }
   console.log(`stream start=${hit.st} end=${minE} len=${hit.out.length}`);
-  writeFileSync(`C:/Users/admin/myspace/readest-plus/.scratch/debug/stream_${hit.st}.xml`, hit.out);
+  writeFileSync(`C:/Users/admin/myspace/read-buddy/.scratch/debug/stream_${hit.st}.xml`, hit.out);
   s = minE + 1;
   count++;
 }

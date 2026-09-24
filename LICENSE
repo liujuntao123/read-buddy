@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 readest-plus contributors
+Copyright (c) 2026 read-buddy contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -24,7 +24,7 @@ SOFTWARE.
 
 Third-party components bundled with this software keep their own licenses:
 
-- foliate-js (vendored under apps/readest-app/vendor/foliate-js) — MIT
+- foliate-js (vendored under apps/read-buddy-app/vendor/foliate-js) — MIT
 - pdf.js standard fonts and cmaps (vendored under
-  apps/readest-app/vendor/foliate-js/vendor/pdfjs) — SIL OFL 1.1 / Foxit BSD-style,
+  apps/read-buddy-app/vendor/foliate-js/vendor/pdfjs) — SIL OFL 1.1 / Foxit BSD-style,
   see the LICENSE files alongside them

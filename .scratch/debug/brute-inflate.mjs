@@ -15,7 +15,7 @@ for (let s = from; s < to; s++) {
     if (text.includes('<') && /[a-zA-Z]{3}/.test(text)) {
       found.push({ s, e, len: out.length, text });
       console.log(`HIT start=${s} end=${e} len=${out.length}`);
-      writeFileSync(`C:/Users/admin/myspace/readest-plus/.scratch/debug/recovered_${s}.xml`, out);
+      writeFileSync(`C:/Users/admin/myspace/read-buddy/.scratch/debug/recovered_${s}.xml`, out);
       // skip past this stream
       s = e;
       break;

@@ -11,7 +11,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-const ROOT = 'apps/readest-app/src';
+const ROOT = 'apps/read-buddy-app/src';
 const DRY = process.argv.includes('--dry');
 
 /** Order matters: longer / more specific first. */

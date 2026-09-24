@@ -1,0 +1,1232 @@
+/* Astryx design system: reset, base component styles, and the app themes. */
+@import '@astryxdesign/core/reset.css';
+@import '@astryxdesign/core/astryx.css';
+@import '../theme/read-buddy.css';
+@import '../theme/read-buddy-sepia.css';
+/* LXGW WenKai reading face: 97 unicode-range subsets, only the slices with
+   glyphs actually rendered are fetched at runtime. */
+@import 'lxgw-wenkai-webfont/lxgwwenkai-regular.css';
+
+/* The Astryx <Theme> provider renders a plain wrapper div; make it the app
+   frame so the header + workspace row below can flex to the viewport. */
+[data-astryx-theme] {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  /* One continuous app surface: the header merges into the page instead of
+     floating as a separate band over the body canvas. */
+  background: var(--color-background-surface);
+}
+
+/* TopNav is layout-only; keep it transparent so the unified surface shows
+   through (defensive against themes that paint it). */
+.astryx-top-nav {
+  background: transparent;
+}
+
+/* Foliate engine view fills its container (mirrors the original readest app:
+   without this the custom element defaults to display:inline and the
+   paginator's scroll container doesn't get a proper box). */
+foliate-view {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Markdown rendering (MarkdownView): scoped to .markdown-content wrappers
+   so chat bubbles / summaries share one global stylesheet instead of
+   per-instance <style> tags. */
+.markdown-content p {
+  margin-block: 0 0.5em;
+}
+.markdown-content p:last-child {
+  margin-bottom: 0;
+}
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4,
+.markdown-content h5,
+.markdown-content h6 {
+  margin-top: 0.8em;
+  margin-bottom: 0.3em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.markdown-content h1 { font-size: 1.25em; }
+.markdown-content h2 { font-size: 1.15em; }
+.markdown-content h3 { font-size: 1.05em; }
+.markdown-content ul,
+.markdown-content ol {
+  margin-block: 0.3em 0.5em;
+  padding-inline-start: 1.4em;
+}
+.markdown-content li {
+  margin-block: 0.2em;
+}
+.markdown-content pre {
+  background: var(--color-background-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-container);
+  padding: var(--spacing-2) var(--spacing-3);
+  overflow-x: auto;
+  margin-block: 0.5em;
+  font-family: monospace;
+  font-size: 0.9em;
+}
+.markdown-content code {
+  background: var(--color-background-muted);
+  border-radius: var(--radius-container);
+  padding: 0.1em 0.3em;
+  font-family: monospace;
+  font-size: 0.9em;
+}
+.markdown-content pre code {
+  background: transparent;
+  padding: 0;
+}
+.markdown-content blockquote {
+  border-inline-start: 3px solid var(--color-accent);
+  padding-inline-start: var(--spacing-3);
+  margin-inline: 0;
+  margin-block: 0.4em;
+  color: var(--color-text-secondary);
+}
+.markdown-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-block: 0.5em;
+}
+.markdown-content th,
+.markdown-content td {
+  border: 1px solid var(--color-border);
+  padding: var(--spacing-1) var(--spacing-2);
+  text-align: start;
+}
+.markdown-content th {
+  background: var(--color-background-muted);
+  font-weight: 600;
+}
+.markdown-content a {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+.markdown-content hr {
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  margin-block: 0.8em;
+}
+.markdown-content img {
+  max-width: 100%;
+}
+
+/* Live-generation cursor appended while a model is still streaming. */
+.markdown-streaming-cursor {
+  display: inline-block;
+  font-weight: bold;
+  color: var(--color-accent);
+  animation: markdown-blink 1s step-start infinite;
+  margin-left: var(--spacing-1);
+}
+
+@keyframes markdown-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Floating reader dock (ReaderDock): a vertical strip of reading controls at
+   the bottom-right corner of the reading pane. Hidden until the pointer
+   enters its corner zone (or a control inside gains focus / a popover from
+   it is open), so it never competes with the page itself. */
+.reader-dock-zone {
+  position: absolute;
+  /* Clears the shortcut-hint line, which owns the bottom edge of the pane
+     (the progress strip lives at the top now — see "Reading progress strip"). */
+  inset-block-end: var(--spacing-7);
+  inset-inline-end: 0;
+  z-index: 20;
+  /* Generous hover catcher around the strip. */
+  padding: var(--spacing-4);
+}
+
+.reader-dock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2);
+  border-radius: var(--radius-container);
+  border: 1px solid var(--color-border);
+  background: var(--color-background-surface);
+  box-shadow: var(--shadow-low);
+  opacity: 0;
+  transform: translateY(var(--spacing-1));
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+  pointer-events: none;
+}
+
+.reader-dock-zone:hover .reader-dock,
+.reader-dock-zone:focus-within .reader-dock,
+.reader-dock[data-open='true'],
+/* Opening a book lets the dock show itself once (ReaderDock's peek): a reader
+   who has never hovered that corner would otherwise never learn the 目录 /
+   排版 controls live there at all. */
+.reader-dock[data-peek='true'] {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+/* The peek is a state change, not a gesture answer: under reduced motion it
+   still happens — instantly, without the fade/slide. */
+@media (prefers-reduced-motion: reduce) {
+  .reader-dock {
+    transition: none;
+  }
+}
+
+/* Edge page-turn controls (PageTurnEdges): the 双页 reader's mouse affordance.
+   Two full-height strips pinned to the pane's edges, revealed when the pointer
+   reaches that edge (the pane watches coordinates — the strips themselves never
+   intercept anything, see useEdgeHover).
+
+   `visibility: hidden` while off screen is deliberate: an invisible-but-live
+   button would still take Tab focus and turn the page out of nowhere. */
+.reader-page-edge {
+  position: absolute;
+  inset-block: 0;
+  z-index: 15;
+  width: 56px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease,
+    visibility 160ms;
+}
+
+.reader-page-edge[data-side='prev'] {
+  inset-inline-start: 0;
+  transform: translateX(calc(-1 * var(--spacing-1)));
+}
+
+.reader-page-edge[data-side='next'] {
+  inset-inline-end: 0;
+  transform: translateX(var(--spacing-1));
+}
+
+.reader-page-edge[data-visible='true'] {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reader-page-edge {
+    transition: none;
+  }
+}
+
+/* Shelf cards: gentle lift on hover, settle on press. Disabled under
+   prefers-reduced-motion. */
+.shelf-card {
+  transition:
+    transform 220ms cubic-bezier(0.23, 1, 0.32, 1),
+    box-shadow 220ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.shelf-card:hover {
+  transform: translateY(-6px) scale(1.015);
+  box-shadow: 0 20px 28px -8px rgba(0, 0, 0, 0.38), 0 8px 14px -4px rgba(0, 0, 0, 0.22);
+}
+
+.shelf-card:active {
+  transform: translateY(-2px) scale(0.99);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shelf-card,
+  .shelf-card:hover,
+  .shelf-card:active {
+    transition: none;
+    transform: none;
+  }
+}
+
+/* ==========================================================================
+   Modern Flat-Skeuomorphic Bookshelf System (现代扁平拟物化书架系统)
+   ========================================================================== */
+
+/* Bookshelf canvas: clean transparent canvas inheriting app theme surface */
+.modern-bookshelf-canvas {
+  position: relative;
+  min-height: 100%;
+  background: transparent;
+}
+
+/* Shelf grid cell */
+.shelf-grid-cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 3D Modern Flat-Skeuomorphic Book Entity */
+.skeuo-book-entity {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border-radius: 3px 8px 8px 3px;
+  background: var(--color-background-card);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.05),
+    0 8px 20px -4px rgba(0, 0, 0, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+  user-select: none;
+  transition:
+    transform 200ms cubic-bezier(0.2, 0.9, 0.3, 1),
+    box-shadow 200ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+[data-theme='dark'] .skeuo-book-entity {
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.4),
+    0 12px 24px -6px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* Sleek Modern Format Badge */
+.modern-format-badge {
+  position: absolute;
+  top: 8px;
+  inset-inline-start: 14px;
+  z-index: 25;
+  font-family: var(--font-family-code);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 2px 7px;
+  border-radius: var(--radius-container, 4px);
+  background: rgba(18, 14, 12, 0.65);
+  backdrop-filter: blur(8px);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+
+/* Modern Archival Scrim Overlay */
+.modern-cover-overlay {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 16;
+  padding: var(--spacing-6) var(--spacing-3) var(--spacing-2) var(--spacing-3);
+  background: linear-gradient(
+    to top,
+    rgba(10, 8, 7, 0.88) 0%,
+    rgba(10, 8, 7, 0.6) 55%,
+    transparent 100%
+  );
+  border-bottom-left-radius: 3px;
+  border-bottom-right-radius: 8px;
+}
+
+/* Modern Flat-Skeuomorphic Import Card */
+.modern-import-card {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  width: 100%;
+  border-radius: 3px 8px 8px 3px;
+  border: 1.5px dashed var(--color-border-emphasized);
+  background: var(--color-background-muted);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    transform 200ms cubic-bezier(0.2, 0.9, 0.3, 1),
+    box-shadow 200ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+.modern-import-card:hover {
+  border-color: var(--color-accent);
+  background: var(--color-background-surface);
+  transform: translateY(-4px);
+  box-shadow:
+    0 4px 8px rgba(0, 0, 0, 0.05),
+    0 16px 24px -6px rgba(0, 0, 0, 0.12);
+}
+
+.modern-import-card:active {
+  transform: translateY(-1px) scale(0.99);
+}
+
+.modern-import-icon-bubble {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-full);
+  background: var(--color-background-surface);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-accent);
+  transition: transform 160ms ease;
+}
+
+.modern-import-card:hover .modern-import-icon-bubble {
+  transform: scale(1.08);
+}
+
+/* 伴读输入框（ChatTab composer）：高度由布局固定，并关闭原生拖拽调节。
+   Astryx TextArea 把 `style` / `xstyle` / `className` 一律交给外层包裹 div，
+   真正的 <textarea> 在组件内部：`data-testid` 才是透传到它的钩子，所以这条
+   规则是唯一能命中原生拖拽手柄的地方（用户反馈输入框可被拖大拖小）。 */
+textarea[data-testid='chat-input'] {
+  height: 84px;
+  min-height: 84px;
+  max-height: 84px;
+  resize: none;
+  /* 给右下角的发送按钮留出位置。 */
+  padding-bottom: 32px;
+  padding-right: 48px;
+}
+
+/* 全书章节脉络手风琴（PanoramaDialog 全书脉络 tab）。
+   一节卡片的一行内边距只在这里定义一处：卡片用它做内边距，折叠触发器再用等量
+   负外边距把命中区撑回整张卡片——于是点击 / 悬停 / 聚焦的范围永远等于整个 item
+   行，而不只是文字那一窄条（用户反馈：交互区只有文本高度，不够协调）。
+   Collapsible 的触发器自带 `all: unset`，所以内边距与圆角要在这里补。 */
+.panorama-outline {
+  --panorama-row-padding-block: var(--spacing-3);
+  --panorama-row-padding-inline: var(--spacing-4);
+}
+
+.panorama-accordion .astryx-collapsible-trigger {
+  /* 触发器连同两侧负外边距一起铺满卡片。必须显式加宽：`width: 100%` 只是内容盒
+   宽度（负外边距会把盒子整体左移、右侧留空），而按钮的 `width: auto` 是
+   fit-content，会缩成文字宽度。 */
+  width: calc(100% + 2 * var(--panorama-row-padding-inline));
+  padding-block: var(--panorama-row-padding-block);
+  padding-inline: var(--panorama-row-padding-inline);
+  margin-block: calc(-1 * var(--panorama-row-padding-block));
+  margin-inline: calc(-1 * var(--panorama-row-padding-inline));
+  border-radius: var(--radius-tile);
+}
+
+.panorama-accordion .astryx-collapsible-trigger:hover {
+  background: var(--color-overlay-hover);
+}
+
+.panorama-accordion .astryx-collapsible-trigger:active {
+  background: var(--color-overlay-pressed);
+}
+
+/* 行已经贴到卡片边缘，光环朝外画会被列表滚动容器裁掉，改为画进行内。 */
+.panorama-accordion .astryx-collapsible-trigger:focus-visible {
+  outline-offset: calc(-1 * var(--focus-outline-width));
+}
+
+/* 触发器用负外边距把命中区撑满整行后，它的下内边距会压在第一个子行上：悬停底色
+   与子行背景重叠，那一小条也会变成折叠命中区。把内容区上内边距提到「一行内边距 +
+   子行间距」，子行就从悬停带下面让开，且间距与子行之间的间距一致。 */
+.panorama-accordion .astryx-collapsible-content {
+  padding-block-start: calc(var(--panorama-row-padding-block) + var(--spacing-2));
+}
+
+/* ==========================================================================
+   Panorama Dialog Refined Empty / Building Styling (全书画像空态与构建中精细样式)
+   ========================================================================== */
+
+.panorama-empty-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  background: var(--color-background-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-container);
+  box-shadow: var(--shadow-low);
+  padding: var(--spacing-6) var(--spacing-5);
+  margin-block: var(--spacing-3);
+  gap: var(--spacing-4);
+  position: relative;
+  overflow: hidden;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.panorama-hero-icon-container {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  background: var(--color-background-muted);
+  border: 1px solid var(--color-border);
+  color: var(--color-accent);
+  transition: transform 200ms cubic-bezier(0.23, 1, 0.32, 1);
+  flex-shrink: 0;
+}
+
+.panorama-hero-icon-container.indexing {
+  background: rgba(var(--color-accent-rgb, 50, 117, 216), 0.08);
+  border-color: rgba(var(--color-accent-rgb, 50, 117, 216), 0.35);
+}
+
+.panorama-hero-halo {
+  position: absolute;
+  inset: -6px;
+  border-radius: var(--radius-full);
+  background: radial-gradient(circle, rgba(var(--color-accent-rgb, 50, 117, 216), 0.22) 0%, transparent 72%);
+  animation: panorama-halo-pulse 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes panorama-halo-pulse {
+  0%, 100% {
+    transform: scale(0.96);
+    opacity: 0.55;
+  }
+  50% {
+    transform: scale(1.18);
+    opacity: 1;
+  }
+}
+
+@keyframes panorama-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes panorama-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 0.85;
+  }
+}
+
+.panorama-spin-icon {
+  animation: panorama-spin 1.2s linear infinite;
+}
+
+.panorama-pulse-icon {
+  animation: panorama-pulse 2s ease-in-out infinite;
+}
+
+.panorama-shimmer-bar {
+  width: 100%;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(
+    90deg,
+    var(--color-border) 0%,
+    var(--color-accent) 50%,
+    var(--color-border) 100%
+  );
+  background-size: 200% 100%;
+  animation: panorama-shimmer 2s ease-in-out infinite;
+}
+
+@keyframes panorama-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.panorama-pipeline-card {
+  width: 100%;
+  max-width: 460px;
+  background: var(--color-background-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-container);
+  padding: var(--spacing-3-5, 14px) var(--spacing-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  text-align: start;
+  box-sizing: border-box;
+}
+
+.panorama-pipeline-step {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-xs);
+}
+
+.panorama-pipeline-step-left {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+.panorama-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-2);
+  width: 100%;
+  max-width: 500px;
+  margin-block: var(--spacing-1);
+  box-sizing: border-box;
+}
+
+.panorama-feature-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2-5, 10px) var(--spacing-3);
+  background: var(--color-background-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-tile);
+  text-align: start;
+  box-sizing: border-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panorama-spin-icon,
+  .panorama-pulse-icon,
+  .panorama-hero-halo,
+  .panorama-shimmer-bar {
+    animation: none;
+  }
+}
+
+/* ==========================================================================
+   Summary Tab Refined Styling (辅助栏总结 Tab 高信息密度一体化样式)
+   ========================================================================== */
+
+/* Summary Main Scope Card */
+.summary-main-card {
+  background: var(--color-background-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-container);
+  padding: var(--spacing-3) var(--spacing-4);
+  box-shadow: var(--shadow-low);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+/* Status indicator badge */
+.summary-status-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-text-secondary);
+  opacity: 0.6;
+}
+
+/* Progress / stage pill */
+.summary-stage-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  background: rgba(var(--color-accent-rgb, 50, 117, 216), 0.1);
+  border: 1px solid rgba(var(--color-accent-rgb, 50, 117, 216), 0.2);
+  width: fit-content;
+}
+
+/* Markdown typography in summary tab.
+   阅读排版（用户反馈：整体再收一点，长脉络尤其要收）：总结常是长文，字号收在
+   正文之下（16px × 0.875 = 14px），行高则放宽到 ~2.0（主题的
+   --text-body-leading 是 1.5，为 UI 文本设计，中文长段落远远不够）。
+   宽度**不设上限**：侧栏本身就是可拖拽调宽的，行宽由读者决定，正文占满可用宽度。
+
+   ⚠️ 字号/行高必须**逐个块级元素**声明，不能只写在容器上：主题的 `@layer reset`
+   里有 `:where(p) { font-size: var(--text-body-size); line-height: var(--text-body-leading) }`，
+   那是直接作用在 <p> 上的声明，而容器上的同名字号只是「继承」——继承永远输给直接
+   声明（与选择器特异性无关）。只改容器时，段落纹丝不动，只有 <li>（没有这条 reset）
+   跟着变，这就是「部分生效」的由来。 */
+.summary-markdown-wrapper {
+  background: var(--color-background-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-container);
+  padding: var(--spacing-3-5, 14px);
+  box-shadow: var(--shadow-low);
+}
+
+.summary-markdown-wrapper .markdown-content,
+.summary-markdown-wrapper .markdown-content p,
+.summary-markdown-wrapper .markdown-content li,
+.summary-markdown-wrapper .markdown-content blockquote,
+.summary-markdown-wrapper .markdown-content td,
+.summary-markdown-wrapper .markdown-content th {
+  font-size: calc(var(--font-size-base) * 0.875);
+  line-height: calc(var(--text-body-leading) * 1.35);
+}
+
+.summary-markdown-wrapper .markdown-content {
+  letter-spacing: 0.01em;
+  /* 自适应：不设 max-width，占满侧栏可用宽度。 */
+  width: 100%;
+}
+
+.summary-markdown-wrapper .markdown-content p {
+  margin-block: 0 0.6em;
+}
+
+.summary-markdown-wrapper .markdown-content li {
+  margin-block: 0.3em;
+}
+
+/* 去除分割线：总结面板依赖区块卡片划分与自然留白，不使用生硬的横向/纵向分割线 */
+.summary-markdown-wrapper hr,
+.summary-markdown-wrapper .markdown-content hr {
+  display: none !important;
+}
+
+.summary-markdown-wrapper .markdown-content h1,
+.summary-markdown-wrapper .markdown-content h2,
+.summary-markdown-wrapper .markdown-content h3,
+.summary-markdown-wrapper .markdown-content h4 {
+  color: var(--color-text-primary);
+  border: none !important;
+}
+
+/* 三段式总结小标题：依靠留白与手风琴自带层级区分，去除冗余的横向分割线 */
+.summary-markdown-wrapper .markdown-content h2,
+.summary-markdown-wrapper .markdown-content h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 1.1em;
+  margin-bottom: 0.4em;
+  border-bottom: none;
+  line-height: calc(var(--text-body-leading) * 1.05);
+}
+
+.summary-markdown-wrapper .markdown-content h2 {
+  font-size: 1.06em;
+}
+
+.summary-markdown-wrapper .markdown-content h3 {
+  font-size: 1em;
+}
+
+/* ==========================================================================
+   Summary Accordion (三段式总结折叠手风琴与区块划分)
+   ========================================================================== */
+
+.summary-accordion-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2-5, 10px);
+}
+
+.summary-accordion-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2, 8px);
+  padding-inline: var(--spacing-1, 4px);
+  padding-block-end: var(--spacing-0-5, 2px);
+  min-width: 0;
+}
+
+.summary-preface-card {
+  background: var(--color-background-muted);
+  border-radius: var(--radius-element);
+  padding: var(--spacing-2-5, 10px) var(--spacing-3, 12px);
+  color: var(--color-text-secondary);
+  font-size: calc(var(--font-size-base) * 0.85);
+  line-height: calc(var(--text-body-leading) * 1.35);
+}
+
+.summary-accordion-item {
+  background: var(--color-background-muted);
+  border-radius: var(--radius-element);
+  border: none;
+  overflow: hidden;
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+
+.summary-accordion-item .astryx-collapsible-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-2, 8px) var(--spacing-3, 12px);
+  margin-inline: 0;
+  border-radius: var(--radius-element);
+  cursor: pointer;
+  user-select: none;
+  border: none;
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+
+.summary-accordion-item .astryx-collapsible-trigger:hover {
+  background: var(--color-overlay-hover);
+}
+
+.summary-accordion-item .astryx-collapsible-trigger:active {
+  background: var(--color-overlay-pressed);
+}
+
+.summary-accordion-item .astryx-collapsible-trigger:focus-visible {
+  outline: 2px solid var(--color-focus-ring, var(--color-accent));
+  outline-offset: -2px;
+}
+
+.summary-section-trigger-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: var(--spacing-2);
+  padding-inline-end: var(--spacing-1);
+}
+
+.summary-accordion-item .astryx-collapsible-chevron {
+  color: var(--color-text-tertiary);
+  transition: color var(--duration-fast) var(--ease-standard);
+  flex-shrink: 0;
+}
+
+.summary-accordion-item .astryx-collapsible-trigger:hover .astryx-collapsible-chevron {
+  color: var(--color-text-secondary);
+}
+
+.summary-accordion-item .astryx-collapsible-content {
+  padding-inline: var(--spacing-3, 12px);
+  padding-block-start: var(--spacing-1, 4px);
+  padding-block-end: var(--spacing-3, 12px);
+}
+
+/* 核心要义：通栏纯净卡片，去除左侧生硬的竖向分割线 */
+.summary-markdown-wrapper .summary-content-core p,
+.summary-markdown-wrapper .summary-content-core ul {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  color: var(--color-text-primary);
+}
+
+.summary-markdown-wrapper .summary-content-core p,
+.summary-markdown-wrapper .summary-content-core ul > li {
+  font-size: calc(var(--font-size-base) * 0.875);
+  line-height: calc(var(--text-body-leading) * 1.45);
+}
+
+.summary-markdown-wrapper .summary-content-core ul {
+  padding-inline-start: var(--spacing-4, 16px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1-5, 6px);
+}
+
+.summary-markdown-wrapper .summary-content-core ul > li {
+  margin: 0;
+}
+
+.summary-markdown-wrapper .summary-content-core ul > li::marker {
+  color: var(--color-accent);
+}
+
+.summary-markdown-wrapper .summary-content-core ul > li strong,
+.summary-markdown-wrapper .summary-content-core ul > li > p > strong {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+/* 关键内容脉络：主干要点突出有序数字，子项以圆点层次呈现，去除生硬横/竖分割线 */
+.summary-content-outline ol {
+  margin: 0;
+  padding-inline-start: var(--spacing-4, 16px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2, 8px);
+}
+
+.summary-markdown-wrapper .summary-content-outline ol > li {
+  margin: 0;
+  font-size: calc(var(--font-size-base) * 0.875);
+  line-height: calc(var(--text-body-leading) * 1.4);
+  color: var(--color-text-primary);
+}
+
+.summary-content-outline ol > li::marker {
+  color: var(--color-accent);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-content-outline ol > li strong,
+.summary-content-outline ol > li > p > strong {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+/* 脉络要点下的展开与子项：通过缩进与次级字色自然区分，去除硬线边框 */
+.summary-content-outline ol > li ul {
+  margin-block: var(--spacing-1, 4px) 0;
+  padding-inline-start: var(--spacing-2);
+  list-style-type: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1, 4px);
+  border-inline-start: none;
+}
+
+.summary-markdown-wrapper .summary-content-outline ol > li ul > li {
+  position: relative;
+  padding-inline-start: var(--spacing-2-5, 10px);
+  margin: 0;
+  font-size: calc(var(--font-size-base) * 0.85);
+  line-height: calc(var(--text-body-leading) * 1.35);
+  color: var(--color-text-secondary);
+}
+
+.summary-content-outline ol > li ul > li::before {
+  content: "•";
+  position: absolute;
+  inset-inline-start: 0;
+  color: var(--color-text-tertiary, var(--color-border-emphasized));
+  font-size: 0.9em;
+}
+
+/* 核心概念与关键术语：微卡片区块化呈现，去除词条多余分割线，提升对比度 */
+.summary-content-terms ul {
+  margin: 0;
+  padding: 0;
+  list-style-type: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1-5, 6px);
+}
+
+.summary-markdown-wrapper .summary-content-terms ul > li {
+  margin: 0;
+  padding: var(--spacing-2, 8px) var(--spacing-2-5, 10px);
+  background: var(--color-background-surface);
+  border: none;
+  border-radius: var(--radius-inner);
+  line-height: calc(var(--text-body-leading) * 1.35);
+  font-size: calc(var(--font-size-base) * 0.85);
+  color: var(--color-text-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+.summary-content-terms ul > li strong,
+.summary-content-terms ul > li > p > strong {
+  color: var(--color-accent);
+  font-weight: 600;
+  margin-inline-end: 4px;
+}
+
+.summary-markdown-wrapper .markdown-content > :first-child,
+.summary-markdown-wrapper .markdown-content > div > :first-child {
+  margin-top: 0;
+}
+
+.summary-markdown-wrapper .markdown-content blockquote {
+  background: var(--color-background-surface);
+  border: none;
+  border-radius: var(--radius-inner);
+  padding: var(--spacing-2, 8px) var(--spacing-3, 12px);
+  margin-block: 0.6em;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+/* 伴读消息的阅读排版：气泡内正文与纯文本气泡统一放宽行高（消息密度高，行距是
+   可读性的主要来源），段落之间留出呼吸。同样必须逐个元素声明：`:where(p)` 的
+   reset 直接作用在段落上，只改容器对段落无效（见上方说明）。 */
+.chat-message-list .markdown-content,
+.chat-message-list .markdown-content p,
+.chat-message-list .markdown-content li,
+.chat-message-list .markdown-content blockquote,
+.chat-message-list .astryx-chat-message-bubble {
+  line-height: calc(var(--text-body-leading) * 1.15);
+}
+
+/* 一条消息里的三种信息，三种字号/字体档位（用户反馈：要能一眼区分）：
+     引用原文  14px 衬线阅读字体  ← 书里的话
+     我的提问  15px 无衬线 UI 字体
+     模型回答  16px 无衬线 UI 字体（.astryx-chat-message-bubble 的正文）
+   必须排在上面的 .chat-message-list 规则**之后**：两者特异性相同，靠顺序决出胜负；
+   字号同样要逐元素声明（reset 的 :where(p) 直接写在段落上）。 */
+.quote-block .markdown-content,
+.quote-block .markdown-content p,
+.quote-block .markdown-content li,
+.quote-block .markdown-content blockquote {
+  font-family: var(--font-family-heading);
+  font-size: calc(var(--font-size-base) * 0.875);
+  line-height: calc(var(--text-body-leading) * 1.1);
+  letter-spacing: 0.01em;
+}
+
+.chat-question {
+  font-size: calc(var(--font-size-base) * 0.9375);
+}
+
+/* 可折叠引用：触发器整行可点（Collapsible 自带 `all: unset`，所以命中区、
+   悬停底色、焦点环都补在这里）。左右不加内边距，让折叠标题和展开后的原文
+   左边缘对齐；纵向给一点内边距把命中区撑到 ~20px 高。 */
+.quote-block .astryx-collapsible-trigger {
+  padding-block: var(--spacing-1);
+  border-radius: var(--radius-tile);
+}
+
+.quote-block .astryx-collapsible-trigger:hover {
+  background: var(--color-overlay-hover);
+}
+
+.quote-block .astryx-collapsible-trigger:active {
+  background: var(--color-overlay-pressed);
+}
+
+.quote-block .astryx-collapsible-trigger:focus-visible {
+  outline-offset: calc(-1 * var(--focus-outline-width));
+}
+
+/* Slim token-colored scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-emphasized);
+}
+
+/* ==========================================================================
+   Reading progress strip (进度轨 + 百分比 + 位置)
+   ==========================================================================
+   阅读视窗**顶部**的一条 28px 静默细条，与底部的快捷键提示分居正文两侧——两条
+   细条之间隔着整块正文，谁都不需要分割线，靠自己的底色与正文分开就够。进度条的
+   对比度按「一眼可读」给满：读数存在的意义就是被瞥见，低对比度等于没有读数；指针
+   进入或键盘聚焦时轨道再加粗提亮，说的是「这里可以点」。 */
+
+.reader-progress {
+  flex-shrink: 0;
+  height: var(--spacing-7);
+  background: var(--color-background-surface);
+}
+
+.reader-progress-track {
+  /* 命中区：4px 的细轨外面套 16px 的一行——让人去点一条发丝是不合理的。 */
+  display: flex;
+  align-items: center;
+  height: var(--spacing-4);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.reader-progress-rail {
+  position: relative;
+  flex: 1;
+  height: var(--spacing-1);
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: var(--color-track);
+  transition:
+    height var(--duration-fast) ease,
+    background-color var(--duration-fast) ease;
+}
+
+.reader-progress-fill {
+  height: 100%;
+  /* 静止态就用全对比度的 accent：填充与轨道（--color-track）要一眼分得开，
+     进度才「看得清」；hover 不再改变填充颜色，只把轨道加粗提亮。 */
+  background: var(--color-accent);
+  transition: background-color var(--duration-fast) ease;
+}
+
+/* 交互态（悬停 / 键盘聚焦）：轨道变亮、变粗一点——静止态说的是「进度在哪」，
+   这里说的是「这里可以点」。 */
+.reader-progress:hover .reader-progress-rail,
+.reader-progress-track:focus-visible .reader-progress-rail {
+  height: var(--spacing-1-5);
+  background: var(--color-border-emphasized);
+}
+
+.reader-progress-track:focus-visible {
+  outline: var(--focus-outline-width) var(--focus-outline-style) var(--focus-outline-color);
+  outline-offset: calc(-1 * var(--focus-outline-offset));
+  border-radius: var(--radius-element);
+}
+
+/* 读数用等宽数字：百分比在 9% → 10% 之间跳动时不会左右晃。 */
+.reader-progress-percent,
+.reader-progress-position {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.reader-progress-percent {
+  min-inline-size: 4ch;
+  text-align: end;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reader-progress-rail,
+  .reader-progress-fill {
+    transition: none;
+  }
+}
+
+/* ==========================================================================
+   Reading footer hint (ReaderShortcutsHint：阅读区底边的一行快捷键小字)
+   ==========================================================================
+   阅读区底边的一行小字：按键 + 做什么。进度条在视窗顶部，这一行独占底边；不加
+   分割线，靠自己的底色与正文分开（dock 的 inset-block-end 按它让开，见
+   .reader-dock-zone）。静止时是整屏里最轻的一行——读者需要它时一眼找到，不需要时
+   它不该和正文抢注意力。窄视窗下宁可裁掉尾项，也不换行把正文挤走。 */
+
+.reader-shortcuts {
+  flex-shrink: 0;
+  height: var(--spacing-7);
+  overflow: hidden;
+  background: var(--color-background-surface);
+  white-space: nowrap;
+}
+
+/* 键帽：只描一圈边、给一点底，不做成按键的样子——它提示的是键位，不是控件。 */
+.reader-shortcuts-key {
+  padding-inline: var(--spacing-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-element);
+  background: var(--color-background-muted);
+}
+
+/* 一节读完的收尾（ReaderPane 的滚动阅读器）。它是正文的最后一屏，所以跟着正文
+   的版心居中，只留一段安静的空隙——读者该看到的是「这里还有下一节」，不是
+   一个新的界面元素。 */
+.reader-section-end {
+  display: flex;
+  justify-content: center;
+  padding-block: var(--spacing-8) var(--spacing-6);
+}
+
+/* ==========================================================================
+   书架与划线的安静交互 (shelf & highlights quiet affordances)
+   --------------------------------------------------------------------------
+   1. `.shelf-hero` — 继续阅读条：书架的主动作，用一条发丝线划出，不做成横幅；
+   2. `.shelf-progress-*` — 封面底边的阅读进度发丝条（0..1，由 Bookshelf 推导）；
+   3. `.shelf-card-action` / `.highlight-row-action` — 常驻的删除 ✕ 与「问 AI」
+      只在悬停或键盘聚焦时出现：静止的书架 / 划线列表说的是内容，不是操作。
+   ========================================================================== */
+
+/* 继续阅读条：极淡的一层底色 + 发丝分界线，重心仍留给下方的书。 */
+.shelf-hero {
+  padding: var(--spacing-4) var(--spacing-6);
+  border-bottom: 1px solid var(--color-border);
+  background: linear-gradient(to bottom, var(--color-background-muted), transparent);
+}
+
+/* 封面底边的进度条。
+   轨道用封面自身 chrome 的半透明炭黑（同 `.modern-format-badge`）：它要盖在任何
+   一张封面图上，而 token 里没有「压在任意图片上」的颜色；填充用主题的 accent。 */
+.shelf-progress-track {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 22;
+  height: var(--spacing-1);
+  background: rgba(18, 14, 12, 0.55);
+  pointer-events: none;
+}
+
+.shelf-progress-fill {
+  height: 100%;
+  background: var(--color-accent);
+}
+
+/* ---------------------------------------------------------------------------
+   伴读消息的复制动作（ticket 14 item 9）
+   每条回答下面的「复制」不该常驻：它是答完之后的动作，不是回答的一部分。
+   与书架卡片同一条规则——悬停或键盘聚焦该消息时显现，隐藏时连命中一起关掉；
+   刚刚复制过的按钮（data-copied）保持可见，免得「已复制」两个字闪一下就不见。
+   位置放在书架那一段**之前**：BookCover 的测试用 `lastIndexOf` 找文件里最后一个
+   prefers-reduced-motion 块来断言封面动作，追加在末尾会让它找错块。 */
+.astryx-chat-message .chat-copy-action {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.astryx-chat-message:hover .chat-copy-action,
+.astryx-chat-message:focus-within .chat-copy-action,
+.astryx-chat-message .chat-copy-action[data-copied='true'] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .astryx-chat-message .chat-copy-action,
+  .astryx-chat-message:hover .chat-copy-action,
+  .astryx-chat-message:focus-within .chat-copy-action {
+    transition: none;
+  }
+}
+
+/* 悬停 / 聚焦才出现的操作：隐藏时连命中一起关掉，免得点到看不见的按钮。
+   选择器带上卡片本身（两个类），所以不依赖样式注入的先后顺序。 */
+.shelf-card .shelf-card-action,
+.highlight-row .highlight-row-action {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.shelf-card:hover .shelf-card-action,
+.shelf-card:focus-within .shelf-card-action,
+.highlight-row:hover .highlight-row-action,
+.highlight-row:focus-within .highlight-row-action {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shelf-card .shelf-card-action,
+  .highlight-row .highlight-row-action,
+  .shelf-card:hover .shelf-card-action,
+  .shelf-card:focus-within .shelf-card-action,
+  .highlight-row:hover .highlight-row-action,
+  .highlight-row:focus-within .highlight-row-action {
+    transition: none;
+  }
+}

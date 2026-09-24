@@ -4,7 +4,7 @@
 Accepted
 
 ## Context
-`readest-plus` requires a cross-platform desktop wrapper capable of hosting a modern React frontend, rendering EPUB/PDF electronic books via Foliate-js, and orchestrating streaming AI calls.
+`read-buddy` requires a cross-platform desktop wrapper capable of hosting a modern React frontend, rendering EPUB/PDF electronic books via Foliate-js, and orchestrating streaming AI calls.
 
 Two major desktop application container architectures were evaluated:
 1. **Electron**: Chromium + Node.js bundled runtime.

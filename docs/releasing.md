@@ -2,7 +2,7 @@
 
 面向维护者。**流程的细节以 `scripts/` 与 `.github/workflows/` 为准**——本文只说明它们为什么这样组织，以及手滑时的后果。
 
-用户只需要看 [`CHANGELOG.md`](../CHANGELOG.md) 和 [Releases 页面](https://github.com/liujuntao123/readest-plus/releases)。
+用户只需要看 [`CHANGELOG.md`](../CHANGELOG.md) 和 [Releases 页面](https://github.com/liujuntao123/read-buddy/releases)。
 
 ---
 
@@ -13,10 +13,10 @@
 | 文件 | 谁在读 |
 | --- | --- |
 | `package.json` | 工作区根包 |
-| `apps/readest-app/package.json` | 前端应用包 |
-| `apps/readest-app/src-tauri/tauri.conf.json` | `tauri build`，决定安装包文件名 |
-| `apps/readest-app/src-tauri/Cargo.toml` | Rust crate |
-| `apps/readest-app/src-tauri/Cargo.lock` | `cargo`，锁文件过期会让工作区变脏 |
+| `apps/read-buddy-app/package.json` | 前端应用包 |
+| `apps/read-buddy-app/src-tauri/tauri.conf.json` | `tauri build`，决定安装包文件名 |
+| `apps/read-buddy-app/src-tauri/Cargo.toml` | Rust crate |
+| `apps/read-buddy-app/src-tauri/Cargo.lock` | `cargo`，锁文件过期会让工作区变脏 |
 
 **只有 `scripts/version.mjs` 会写这五个文件。** 手工改就是「安装包叫 0.2.0、里面的 crate 说 0.1.0」这类事故的来源；`pnpm version:check` 在每次 CI 与每次发布的构建前都会拦截它（`release.yml` 的 `build` 作业另加 `--expect`，防止手工推的标签与树里的版本号不符）。
 
@@ -50,7 +50,7 @@ pnpm release 0.2.0             # 正式：改版本号 → 生成变更日志 �
 
 `ci.yml` 的 `verify` 是合并门槛：`pnpm version:check` → `typecheck` → `test` → `build`，所有推送与 PR 都跑。安装包（`windows-installer`）只在非 PR 的推送与手动触发时构建，作为 artifact 上传——Tauri 发布构建很慢，产物是用完即弃的。
 
-发布产物：GitHub Release `v0.2.0`（正文是该版本的变更日志）+ 附件 `readest-plus_0.2.0_x64-setup.exe`。
+发布产物：GitHub Release `v0.2.0`（正文是该版本的变更日志）+ 附件 `read-buddy_0.2.0_x64-setup.exe`。
 
 ## 5. 手滑了怎么办
 

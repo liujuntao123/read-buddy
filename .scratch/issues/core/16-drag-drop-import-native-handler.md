@@ -14,7 +14,7 @@ labels: ["bug", "desktop", "ready-for-agent"]
   `IMPORT_PATTERN` :29，浮层 :235-241），happy-dom 测试覆盖在 `Workspace.test.tsx:124-135`；
 - `src-tauri/tauri.conf.json:13-21` 没有设 `dragDropEnabled: false`，仓库里也没有任何原生
   拖放处理器（grep `dragDropEnabled|onDragDropEvent|onDragDrop|getCurrentWebview|DragDropEvent`
-  在 `apps/readest-app` 下 0 命中）。
+  在 `apps/read-buddy-app` 下 0 命中）。
 
 Tauri 2 的窗口默认由原生拖放处理器接管，Windows 上会吞掉文件 drop，WebView 收不到 HTML5
 `drop` 事件（tauri-apps/tauri#14373）。因此在浏览器调试版（`pnpm dev`）里拖拽导入可用，

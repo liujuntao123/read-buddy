@@ -166,7 +166,7 @@ importers:
 
   .: {}
 
-  apps/readest-app:
+  apps/read-buddy-app:
     dependencies:
       '@ai-sdk/openai-compatible':
         specifier: ^3.0.53

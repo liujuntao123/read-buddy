@@ -1,6 +1,6 @@
 /**
  * Throwaway: run the CURRENT IMPLEMENTATION's rule set
- * (apps/readest-app/src/services/bookNodes/nodeContent.ts) over both real-book
+ * (apps/read-buddy-app/src/services/bookNodes/nodeContent.ts) over both real-book
  * node datasets, to see exactly which nodes it hides.
  *
  * `COPYRIGHT_MAX_LINE` is referenced by that file but NOT defined anywhere, so it

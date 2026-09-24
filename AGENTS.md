@@ -1,6 +1,6 @@
-# readest-plus Agent Configuration
+# read-buddy Agent Configuration
 
-This document specifies conventions and skill links for AI coding agents operating on `readest-plus`.
+This document specifies conventions and skill links for AI coding agents operating on `read-buddy`.
 
 ## Agent skills
 
@@ -40,8 +40,8 @@ Commits by `scripts/changelog.mjs` and must never be hand-edited. A release is
 
 After completing each feature, fix, or delivery task:
 1. Verify type safety and tests: `pnpm verify` (`tsc --noEmit && vitest run && next build`).
-2. Build a fresh Windows installer: `pnpm build:installer` (or `pnpm --filter readest-app tauri build`).
-   - Installer output: `apps/readest-app/src-tauri/target/release/bundle/nsis/readest-plus_<version>_x64-setup.exe`.-->
+2. Build a fresh Windows installer: `pnpm build:installer` (or `pnpm --filter read-buddy-app tauri build`).
+   - Installer output: `apps/read-buddy-app/src-tauri/target/release/bundle/nsis/read-buddy_<version>_x64-setup.exe`.-->
 
 <!-- ASTRYX:START -->
 Astryx v0.6.2 · 90+ components

@@ -6,8 +6,8 @@ coverage/
 .DS_Store
 *.log
 src-tauri/gen/
-apps/readest-app/src-tauri/target/
-apps/readest-app/src-tauri/gen/
+apps/read-buddy-app/src-tauri/target/
+apps/read-buddy-app/src-tauri/gen/
 
 # 工具生成的产物（不入库；缺失时由 next dev / next build 自动重建，
 # 跟踪它只会在 dev 与 build 之间来回翻转工作区）
@@ -21,7 +21,7 @@ initial.png
 ux-shelf.png
 
 # 单页跨章滚动的浏览器验证工装（.scratch/continuous-harness）：脚本入库，
-# 运行时才生成的输入不入库 —— vendor/ 是 apps/readest-app/vendor/foliate-js
+# 运行时才生成的输入不入库 —— vendor/ 是 apps/read-buddy-app/vendor/foliate-js
 # 的拷贝（拷贝一旦入库就会与真身漂移），*.epub 由 make-long-book.mjs 生成。
 .scratch/continuous-harness/vendor/
 .scratch/continuous-harness/*.epub

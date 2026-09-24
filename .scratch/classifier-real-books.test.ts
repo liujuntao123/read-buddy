@@ -6,7 +6,7 @@
  * candidate "not worth summarizing" classifier to every node and dumps the
  * verdicts to .scratch/out/app-nodes.json.
  *
- * Run: pnpm --filter readest-app exec vitest run --config ../../.scratch/vitest.config.mts
+ * Run: pnpm --filter read-buddy-app exec vitest run --config ../../.scratch/vitest.config.mts
  */
 import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -65,7 +65,7 @@ for (const proto of [
   if (happy?.settings) happy.settings.disableCSSFileLoading = true;
 }
 const loadViewModule = async (): Promise<FoliateViewModule> =>
-  (await import('../apps/readest-app/vendor/foliate-js/view.js')) as unknown as FoliateViewModule;
+  (await import('../apps/read-buddy-app/vendor/foliate-js/view.js')) as unknown as FoliateViewModule;
 
 const BOOKS_DIR = 'E:\\书籍';
 const BOOKS = [

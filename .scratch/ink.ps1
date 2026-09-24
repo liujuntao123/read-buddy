@@ -1,6 +1,6 @@
 Add-Type -AssemblyName System.Drawing
 foreach ($f in @('font18','font26')) {
-  $bmp = New-Object System.Drawing.Bitmap("C:\Users\admin\myspace\readest-plus\.scratch\shots\$f.png")
+  $bmp = New-Object System.Drawing.Bitmap("C:\Users\admin\myspace\read-buddy\.scratch\shots\$f.png")
   $w = $bmp.Width; $h = $bmp.Height
   $dark = 0; $total = 0
   $x0 = [int]($w * 0.2); $x1 = [int]($w * 0.8)

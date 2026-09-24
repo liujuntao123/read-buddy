@@ -1,22 +1,22 @@
 {
-  "name": "readest-plus",
+  "name": "read-buddy",
   "private": true,
   "version": "0.1.0",
   "description": "Zero-embedding, chapter-first desktop AI reading companion built on readest architecture",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/liujuntao123/readest-plus.git"
+    "url": "https://github.com/liujuntao123/read-buddy.git"
   },
   "scripts": {
-    "dev": "pnpm --filter readest-app dev",
-    "build": "pnpm --filter readest-app build",
-    "build:installer": "pnpm --filter readest-app tauri build",
-    "tauri": "pnpm --filter readest-app tauri",
+    "dev": "pnpm --filter read-buddy-app dev",
+    "build": "pnpm --filter read-buddy-app build",
+    "build:installer": "pnpm --filter read-buddy-app tauri build",
+    "tauri": "pnpm --filter read-buddy-app tauri",
     "verify": "pnpm version:check && pnpm typecheck && pnpm test && pnpm build",
-    "typecheck": "pnpm --filter readest-app typecheck",
-    "test": "pnpm --filter readest-app test",
-    "test:watch": "pnpm --filter readest-app test:watch",
+    "typecheck": "pnpm --filter read-buddy-app typecheck",
+    "test": "pnpm --filter read-buddy-app test",
+    "test:watch": "pnpm --filter read-buddy-app test:watch",
     "version:show": "node scripts/version.mjs",
     "version:check": "node scripts/version.mjs check",
     "version:set": "node scripts/version.mjs set",

@@ -12,7 +12,7 @@ For long books (e.g. 500k+ Chinese characters or 800-page monographs), full-book
 - Readers frequently only need an immediate overview of the *current chapter* they are reading.
 
 ## Decision
-We adopt a **Zero-Embedding Chapter-First** architecture for `readest-plus`:
+We adopt a **Zero-Embedding Chapter-First** architecture for `read-buddy`:
 1. The AI Companion extracts raw plain text directly from the current active Book Node via the engine / the node model, on demand.
 2. Token consumption is localized to the current node (~2,000 to 8,000 tokens per summary).
 3. Generated summaries are persisted locally in IndexedDB keyed by `${bookHash}:${nodeIndex}` (a Node Summary id — ADR 0015).

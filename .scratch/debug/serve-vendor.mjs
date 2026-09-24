@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 
-const root = normalize('C:/Users/admin/myspace/readest-plus/apps/readest-app/vendor/foliate-js');
+const root = normalize('C:/Users/admin/myspace/read-buddy/apps/read-buddy-app/vendor/foliate-js');
 const types = { '.js': 'text/javascript', '.html': 'text/html', '.epub': 'application/epub+zip' };
 
 createServer(async (req, res) => {

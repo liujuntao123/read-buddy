@@ -1,14 +1,14 @@
 <div align="center">
 
-# Readest+
+# Read Buddy
 
 **A zero-embedding, chapter-first desktop AI reading companion**
 
 Your book on the left, summaries, questions and highlights on the right — everything it takes to understand a book, in one window.
 
-[![CI](https://github.com/liujuntao123/readest-plus/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/liujuntao123/readest-plus/actions/workflows/ci.yml)
-[![Release](https://github.com/liujuntao123/readest-plus/actions/workflows/release.yml/badge.svg)](https://github.com/liujuntao123/readest-plus/actions/workflows/release.yml)
-[![Latest release](https://img.shields.io/github/v/release/liujuntao123/readest-plus?color=blue)](https://github.com/liujuntao123/readest-plus/releases)
+[![CI](https://github.com/liujuntao123/read-buddy/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/liujuntao123/read-buddy/actions/workflows/ci.yml)
+[![Release](https://github.com/liujuntao123/read-buddy/actions/workflows/release.yml/badge.svg)](https://github.com/liujuntao123/read-buddy/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/liujuntao123/read-buddy?color=blue)](https://github.com/liujuntao123/read-buddy/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows-0078D4.svg)](#-install)
 
@@ -20,7 +20,7 @@ Your book on the left, summaries, questions and highlights on the right — ever
 
 ## What it is
 
-Readest+ is a desktop e-book reader for Windows, built for one very specific problem: **you cannot get through a book**.
+Read Buddy is a desktop e-book reader for Windows, built for one very specific problem: **you cannot get through a book**.
 
 Reading calls on attention and comprehension at once — eyes scanning the words, the mind parsing meaning and holding the thread, without ever letting up — and in an age that slices attention into pieces, sustaining that for long stretches is genuinely hard. So the problem it sets out to solve is not "how do I pretend to have finished a book" but **how to make the reading itself less painful, so that you stay in the state of reading**.
 
@@ -41,7 +41,7 @@ It will not suit everyone, but if reading has been hard for you for years, this 
 
 Readers are never in short supply; what is missing is one you can stay with. Compared with a feature-complete reader and with AI tools that finish a book in seconds, the choices here are different:
 
-| | The usual approach | Readest+ |
+| | The usual approach | Read Buddy |
 | --- | --- | --- |
 | **Getting started** | Embed the whole book first; a 500k-word title means minutes of waiting | Open it and read; no whole-book precomputation |
 | **What the AI is for** | Reading for you: whole-book summaries, mind maps and digest notes in seconds | Reading with you: summaries, answers and pointers — the understanding and the internalising stay yours |
@@ -101,11 +101,11 @@ In one line: it does not try to finish the book for you; it tries to keep you re
 
 **Windows 10 / 11 (x64)**
 
-1. Download the latest `readest-plus_x.y.z_x64-setup.exe` from [Releases](https://github.com/liujuntao123/readest-plus/releases/latest);
+1. Download the latest `read-buddy_x.y.z_x64-setup.exe` from [Releases](https://github.com/liujuntao123/read-buddy/releases/latest);
 2. Run the installer;
 3. On first launch Windows SmartScreen may warn about an unknown publisher — the installer is not code-signed yet. Choose **More info** → **Run anyway**.
 
-> Want to follow every commit? CI uploads the installer built from each push to `master` as a build artifact — see [Actions](https://github.com/liujuntao123/readest-plus/actions/workflows/ci.yml).
+> Want to follow every commit? CI uploads the installer built from each push to `master` as a build artifact — see [Actions](https://github.com/liujuntao123/read-buddy/actions/workflows/ci.yml).
 
 ## 🏁 Quick start
 
@@ -198,7 +198,7 @@ pnpm verify           # version + types + tests + build — the full pre-commit 
 **Layout**
 
 ```
-apps/readest-app/
+apps/read-buddy-app/
   src/app/          Next.js App Router shell and global styles
   src/components/   UI (library, reader, companion sidebar, settings)
   src/services/     Core logic: parsing, segmentation, summary, chat, AI, storage, reading agent
@@ -217,7 +217,7 @@ Before diving into the code, read [`CONTEXT.md`](CONTEXT.md) (the domain glossar
 
 ## 📝 Changelog
 
-Every release is documented in **[CHANGELOG.md](CHANGELOG.md)** and on the [Releases](https://github.com/liujuntao123/readest-plus/releases) page.
+Every release is documented in **[CHANGELOG.md](CHANGELOG.md)** and on the [Releases](https://github.com/liujuntao123/read-buddy/releases) page.
 
 The changelog is generated from git history using [Conventional Commits](https://www.conventionalcommits.org/); the release process is documented in [`docs/releasing.md`](docs/releasing.md) (Chinese).
 

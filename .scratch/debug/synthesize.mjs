@@ -4,7 +4,7 @@
 import { readFileSync, writeFileSync, mkdirSync, rmSync, cpSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 
-const root = 'C:/Users/admin/myspace/readest-plus/.scratch/debug';
+const root = 'C:/Users/admin/myspace/read-buddy/.scratch/debug';
 const build = `${root}/synth`;
 rmSync(build, { recursive: true, force: true });
 mkdirSync(`${build}/META-INF`, { recursive: true });

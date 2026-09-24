@@ -1,6 +1,6 @@
-# Domain Glossary: readest-plus
+# Domain Glossary: read-buddy
 
-This document defines the ubiquitous language for the `readest-plus` project. All specifications, ADRs, tickets, and code implementations must adhere strictly to these term definitions.
+This document defines the ubiquitous language for the `read-buddy` project. All specifications, ADRs, tickets, and code implementations must adhere strictly to these term definitions.
 
 ---
 

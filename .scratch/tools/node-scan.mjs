@@ -11,7 +11,7 @@ import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 const require = createRequire(
-  'file:///C:/Users/admin/myspace/readest-plus/apps/readest-app/package.json',
+  'file:///C:/Users/admin/myspace/read-buddy/apps/read-buddy-app/package.json',
 );
 const JSZip = require('jszip');
 

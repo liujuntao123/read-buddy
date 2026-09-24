@@ -127,7 +127,7 @@ jobs:
       - name: 缓存 Rust 构建产物
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: apps/readest-app/src-tauri
+          workspaces: apps/read-buddy-app/src-tauri
 
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
@@ -150,9 +150,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          projectPath: apps/readest-app
+          projectPath: apps/read-buddy-app
           tagName: v${{ needs.resolve.outputs.version }}
-          releaseName: readest-plus v${{ needs.resolve.outputs.version }}
+          releaseName: read-buddy v${{ needs.resolve.outputs.version }}
           # Replaced below with the generated notes. Kept non-empty so a failure
           # in that step still leaves a Release that points at the changelog.
           releaseBody: 完整变更日志见仓库根目录的 CHANGELOG.md。

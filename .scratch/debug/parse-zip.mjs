@@ -6,7 +6,7 @@ const path = process.argv[2];
 const buf = readFileSync(path);
 let off = 0;
 let i = 0;
-mkdirSync('C:/Users/admin/myspace/readest-plus/.scratch/debug/entries', { recursive: true });
+mkdirSync('C:/Users/admin/myspace/read-buddy/.scratch/debug/entries', { recursive: true });
 while (off + 30 <= buf.length && buf.readUInt32LE(off) === 0x04034b50) {
   const ver = buf.readUInt16LE(off + 4);
   const flags = buf.readUInt16LE(off + 6);
@@ -34,7 +34,7 @@ while (off + 30 <= buf.length && buf.readUInt32LE(off) === 0x04034b50) {
   );
   if (out instanceof Buffer) {
     const safe = name.replace(/[\\/]/g, '_');
-    writeFileSync(`C:/Users/admin/myspace/readest-plus/.scratch/debug/entries/${i}_${safe}`, out);
+    writeFileSync(`C:/Users/admin/myspace/read-buddy/.scratch/debug/entries/${i}_${safe}`, out);
   }
   if (hasDataDesc) {
     // scan for data descriptor signature 0x08074b50

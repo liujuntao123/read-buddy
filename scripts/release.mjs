@@ -168,7 +168,7 @@ function main(argv) {
   }
   if (git(['tag', '--list', tag]).trim()) throw new Error(`标签 ${tag} 已经存在。`);
 
-  console.log(`发布 readest-plus ${before} → ${version}（标签 ${tag}）`);
+  console.log(`发布 read-buddy ${before} → ${version}（标签 ${tag}）`);
 
   if (options.dryRun) {
     console.log('\n--dry-run：只预览，不写任何文件。变更日志将变成：\n');
@@ -213,7 +213,7 @@ function main(argv) {
 
   // 4. An annotated tag: it is the release's identity, and the workflow keys
   //    the build off it.
-  git(['tag', '-a', tag, '-m', `readest-plus ${tag}`], { inherit: true });
+  git(['tag', '-a', tag, '-m', `read-buddy ${tag}`], { inherit: true });
   console.log(`  已打标签：${tag}`);
 
   // 5. Push. The tag is what starts the installer build.

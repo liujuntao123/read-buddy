@@ -63,4 +63,4 @@ labels: ["reader", "agent", "summary", "toc", "ready-for-agent"]
 - **前置页算章。** 《何为良好生活》的 10 个第一层节点里有 3 条是前置页（目录/版权页合并后的序言/…）。节点模型只认层级，不判断文学意义上的「是不是真章」；issue 12 里写的「11 章」正是这 3 条 + 8 个正文章。
 - **测试环境限制（非本次改动引入）。** happy-dom 的 XML 解析器（vendored foliate 与 `parseEpub` 都经由它）会拒绝《思考快与慢》的 `content.opf` 与《看见孩子》的 `toc.ncx`，报 `XML parsing error`，而两个文件本身都是良构的（真实浏览器可正常解析，《何为良好生活》的同结构 NCX 在同样环境下解析正常）。因此这两本书的「平铺目录 → 两级节点」规则由单测覆盖，真实书籍用例只断言目录不可读时诚实退回物理段节点（不臆造层级）。`epubParser` 的 OPF/spine 读取代码本次未被改动，已在 diff 中确认。
 - **未做。** 「AI 校正章节表」（issue 12 的 Layer 3）仍未做，规则够不到的目录按现状处理。
-- 本次改动的迁移守卫：`ReadestPlusDatabase` 的表属性名必须与 `stores()` 里的 store 名一致（Dexie 只在 store 名下挂载属性），否则类型通过而运行时是 `undefined`。
+- 本次改动的迁移守卫：`ReadBuddyDatabase` 的表属性名必须与 `stores()` 里的 store 名一致（Dexie 只在 store 名下挂载属性），否则类型通过而运行时是 `undefined`。

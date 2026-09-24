@@ -10,7 +10,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
-const src = readFileSync('apps/readest-app/src/services/bookNodes/nodeContent.ts', 'utf8');
+const src = readFileSync('apps/read-buddy-app/src/services/bookNodes/nodeContent.ts', 'utf8');
 console.log(`nodeContent.ts sha256=${createHash('sha256').update(src).digest('hex').slice(0, 12)} bytes=${src.length}`);
 
 // ---- (A) current implementation -------------------------------------------------

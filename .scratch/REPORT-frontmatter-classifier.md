@@ -6,7 +6,7 @@
 >
 > 复现脚本（全部在 `.scratch/`，未改任何 `src/`）：
 > `frontmatter-scan.mjs`（按文件扫前附页）、`node-scan.mjs`（按锚点切节点）、`rule-eval.mjs`、`report-table.mjs`、`margin.mjs`、`toc-rule-check.mjs`、`impl-eval.mjs`、`compare.mjs`、`verify-v5.mjs`；
-> 真管线取证器 `classifier-real-books.test.ts` + `vitest.config.mts`（`pnpm --filter readest-app exec vitest run --config ../../.scratch/vitest.config.mts`，6 秒）。输出在 `.scratch/out/*.txt`。
+> 真管线取证器 `classifier-real-books.test.ts` + `vitest.config.mts`（`pnpm --filter read-buddy-app exec vitest run --config ../../.scratch/vitest.config.mts`，6 秒）。输出在 `.scratch/out/*.txt`。
 
 ## 1. 真实前后附页节点（14 本 / 1295 节点中只找到 20 个）
 
@@ -202,4 +202,4 @@ isTocList = ls.length >= 8 && median(ls.map(l => l.length)) <= 25
 
 - 我的改动**只有** `.scratch/` 下的新增文件（脚本 + 报告 + `vitest.config.mts` + 证据 JSON；`.scratch/out/` 已被 `.gitignore` 的 `out/` 规则忽略）。
 - `git status --short` 里 `src/` 下的 10 个 `M` 与 `?? nodeContent.ts / nodeContent.test.ts` **不是我改的** —— 它们在我调查期间由并行的实现工作写入（文件 mtime 11:43–11:47，我全程只对 `src/` 做过读取）。
-- 我创建的临时目录 `apps/readest-app/.scratch/`（vitest 的 cwd 造成）已删除，确认不存在。
+- 我创建的临时目录 `apps/read-buddy-app/.scratch/`（vitest 的 cwd 造成）已删除，确认不存在。

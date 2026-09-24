@@ -1,14 +1,14 @@
 <div align="center">
 
-# Readest+
+# Read Buddy
 
 **零嵌入 · 章节优先的桌面 AI 阅读伴侣**
 
 左边读书，右边总结、提问、划线 —— 读懂一本书需要的一切都在同一个窗口里。
 
-[![CI](https://github.com/liujuntao123/readest-plus/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/liujuntao123/readest-plus/actions/workflows/ci.yml)
-[![Release](https://github.com/liujuntao123/readest-plus/actions/workflows/release.yml/badge.svg)](https://github.com/liujuntao123/readest-plus/actions/workflows/release.yml)
-[![最新版本](https://img.shields.io/github/v/release/liujuntao123/readest-plus?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=blue)](https://github.com/liujuntao123/readest-plus/releases)
+[![CI](https://github.com/liujuntao123/read-buddy/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/liujuntao123/read-buddy/actions/workflows/ci.yml)
+[![Release](https://github.com/liujuntao123/read-buddy/actions/workflows/release.yml/badge.svg)](https://github.com/liujuntao123/read-buddy/actions/workflows/release.yml)
+[![最新版本](https://img.shields.io/github/v/release/liujuntao123/read-buddy?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=blue)](https://github.com/liujuntao123/read-buddy/releases)
 [![许可证](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![平台](https://img.shields.io/badge/platform-Windows-0078D4.svg)](#-下载安装)
 
@@ -20,7 +20,7 @@
 
 ## 这是什么
 
-Readest+ 是一款 Windows 桌面电子书阅读器，为一个很具体的问题而做：**读不下去**。
+Read Buddy 是一款 Windows 桌面电子书阅读器，为一个很具体的问题而做：**读不下去**。
 
 读书要同时占用注意力和理解力 —— 眼睛扫视文字，大脑解析语义、串联上下文，一刻都不能松；在一个注意力被无限切割的时代，要求自己长时间维持这种强度，本来就难。所以它要解决的不是「如何假装读完一本书」，而是**如何降低阅读过程中的痛苦，让你维持在「读起来」的状态**。
 
@@ -41,7 +41,7 @@ Readest+ 是一款 Windows 桌面电子书阅读器，为一个很具体的问�
 
 阅读器从来不缺，缺的是能让你读下去的那个。和「功能齐全的阅读器」以及「几秒读完一本书的 AI 工具」相比，它的选择不太一样：
 
-| | 常见做法 | Readest+ |
+| | 常见做法 | Read Buddy |
 | --- | --- | --- |
 | **开始用** | 先为全书做向量嵌入，几十万字要等上几分钟 | 打开就能读，翻到哪讲到哪，没有全书预计算 |
 | **AI 的定位** | 替你读：几秒生成全书总结、思维导图、精华笔记 | 陪你读：总结、答疑、定位，理解与内化始终留给你自己 |
@@ -101,11 +101,11 @@ Readest+ 是一款 Windows 桌面电子书阅读器，为一个很具体的问�
 
 **Windows 10 / 11（x64）**
 
-1. 到 [Releases](https://github.com/liujuntao123/readest-plus/releases/latest) 下载最新的 `readest-plus_x.y.z_x64-setup.exe`；
+1. 到 [Releases](https://github.com/liujuntao123/read-buddy/releases/latest) 下载最新的 `read-buddy_x.y.z_x64-setup.exe`；
 2. 运行安装程序；
 3. 首次启动时 Windows SmartScreen 可能提示「未知发布者」—— 安装包目前未做代码签名，选择「更多信息」→「仍要运行」即可。
 
-> 想跟进每一次提交？CI 会把每次推送到 `master` 构建出的安装包作为 artifact 上传，见 [Actions](https://github.com/liujuntao123/readest-plus/actions/workflows/ci.yml)。
+> 想跟进每一次提交？CI 会把每次推送到 `master` 构建出的安装包作为 artifact 上传，见 [Actions](https://github.com/liujuntao123/read-buddy/actions/workflows/ci.yml)。
 
 ## 🏁 快速上手
 
@@ -198,7 +198,7 @@ pnpm verify           # 版本号 + 类型 + 测试 + 构建（提交前的完�
 **目录结构**
 
 ```
-apps/readest-app/
+apps/read-buddy-app/
   src/app/          Next.js App Router 外壳与全局样式
   src/components/   界面组件（书架 / 阅读器 / 伴读侧栏 / 设置）
   src/services/     核心逻辑：解析、分段、总结、对话、AI 接入、存储、伴读 Agent
@@ -217,7 +217,7 @@ docs/               架构说明、ADR、发布流程
 
 ## 📝 变更日志
 
-每个版本的变更见 **[CHANGELOG.md](CHANGELOG.md)** 或 [Releases](https://github.com/liujuntao123/readest-plus/releases) 页面。
+每个版本的变更见 **[CHANGELOG.md](CHANGELOG.md)** 或 [Releases](https://github.com/liujuntao123/read-buddy/releases) 页面。
 
 变更日志依据[约定式提交](https://www.conventionalcommits.org/zh-hans/v1.0.0/)从 git 历史自动生成，发布流程见 [`docs/releasing.md`](docs/releasing.md)。
 

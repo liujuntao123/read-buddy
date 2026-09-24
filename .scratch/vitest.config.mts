@@ -1,10 +1,10 @@
 // Plain-object vitest config (no `vitest/config` import: this file lives at the
 // repo root, where the vitest package itself is not resolvable — it is
-// installed under apps/readest-app/node_modules).
+// installed under apps/read-buddy-app/node_modules).
 import path from 'node:path';
 
 const repo = path.resolve(import.meta.dirname, '..');
-const app = path.resolve(repo, 'apps/readest-app');
+const app = path.resolve(repo, 'apps/read-buddy-app');
 
 export default {
   root: repo,
