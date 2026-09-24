@@ -41,7 +41,7 @@ export interface UseTextSelectionResult {
 }
 
 /**
- * Selection capture for the scroll reader's article (design doc 4.4.3, ADR 0007).
+ * Selection capture for the scroll reader's article (ADR 0007).
  * A thin React wrapper: the gesture events and the eligibility rule are shared with
  * the iframe adapter.
  */

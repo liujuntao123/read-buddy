@@ -29,7 +29,7 @@ import { initDesktopFileOpen } from '@/services/desktop/desktopBridge';
 const IMPORT_PATTERN = /\.(epub|mobi|azw3?|prc|fb2|fbz|cbz|txt)$/i;
 
 /**
- * Client shell for the split-screen reading workspace (design doc 3):
+ * Client shell for the split-screen reading workspace (ADR 0003):
  * HeaderBar (book title + library entry points + AI sidebar toggle) above the
  * reader/bookshelf pane and the collapsible, drag-resizable AI companion
  * sidebar (ADR 0003).

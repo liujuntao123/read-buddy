@@ -16,7 +16,7 @@ import { useSegmentationStore } from '@/store/segmentationStore';
 import { bookNodeId, type BookNode } from '@/types/readingAgent';
 
 /**
- * 阅读进度条（设计文档 §3 FooterBar）。两条取数路径各测一遍：
+ * 阅读进度条（ReaderProgressBar）。两条取数路径各测一遍：
  * 引擎书籍看 `relocate.fraction` 并以 `goToFraction` 跳转；TXT 看
  * `spineIndex / spineCount`（段内滚动细化）并以 Reading Position 跳转。
  * 位置那句「第 3 / 12 节」的层词一律来自节点模型。

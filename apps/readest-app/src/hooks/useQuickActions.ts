@@ -6,7 +6,7 @@ import { useAISidebarStore } from '@/store/aiSidebarStore';
 import { useChatStore } from '@/store/chatStore';
 
 /**
- * Selection AI quick action (design doc 4.4.3, ADR 0007), shared by the
+ * Selection AI quick action (ADR 0007), shared by the
  * scroll reader (ReaderPane) and the Foliate engine pane (ticket 07).
  *
  * Always expands the sidebar onto the chat tab; `ask` only fills the quote

@@ -1,6 +1,5 @@
 /**
- * Four-layer context pyramid assembler (reading-agent architecture doc §5.2
- * + §5.4): builds the whole-book-specialist system prompt.
+ * Four-layer context pyramid assembler (docs/architecture.md): builds the whole-book-specialist system prompt.
  *
  * L2 (panorama + full TOC micro-brief matrix) is the System Prompt backbone
  * giving the agent its god's-eye view; L1 (current chapter viewport) rides
@@ -57,7 +56,7 @@ export interface AssembleSystemPromptOptions {
 export const CURRENT_CHAPTER_EXCERPT_CHARS = 1_500;
 
 /**
- * Render the full-book TOC matrix of micro-briefs (design doc §5.4) with
+ * Render the full-book TOC matrix of micro-briefs (docs/architecture.md) with
  * the hierarchical node model: depth-1 节 nodes are indented under their
  * 章-level container so the model can reason about book structure. Each row
  * names its level with the shared vocabulary (`nodeKindLabel`) — never the

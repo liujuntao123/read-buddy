@@ -13,10 +13,10 @@ For long books (e.g. 500k+ Chinese characters or 800-page monographs), full-book
 
 ## Decision
 We adopt a **Zero-Embedding Chapter-First** architecture for `readest-plus`:
-1. The AI Companion extracts raw plain text directly from the current active `Section` via the Foliate engine DOM/spine on demand.
-2. Token consumption is localized exclusively to the active chapter (~2,000 to 8,000 tokens per summary).
-3. Generated summaries are persisted locally in IndexedDB keyed by `${bookHash}:${sectionIndex}`.
-4. Full RAG indexing is retained only as an optional advanced mode, not a prerequisite for chapter summarization or discussion.
+1. The AI Companion extracts raw plain text directly from the current active Book Node via the engine / the node model, on demand.
+2. Token consumption is localized to the current node (~2,000 to 8,000 tokens per summary).
+3. Generated summaries are persisted locally in IndexedDB keyed by `${bookHash}:${nodeIndex}` (a Node Summary id — ADR 0015).
+4. **No embedding index exists anywhere in this app** — not even as an optional mode. Whole-Book awareness is bought differently: a model-free node index on every Book open, plus the reader-triggered panorama and micro-briefs (ADR 0004, ADR 0010), which is what the companion's system prompt is built from. See ADR 0005 and `docs/architecture.md`.
 
 ## Consequences
 
@@ -26,4 +26,4 @@ We adopt a **Zero-Embedding Chapter-First** architecture for `readest-plus`:
 - **Cost Reduction**: Minimal token expenditure per reading session.
 
 ### Negative / Trade-offs
-- **Cross-Chapter Omniscience**: The model lacks awareness of distant previous chapters unless explicitly referenced or injected.
+- **Cross-Chapter Omniscience**: without vectors, the model only knows distant chapters through the node outline, the panorama and its own tool calls — which is exactly why those exist (ADR 0004, ADR 0010).

@@ -16,6 +16,13 @@ Canonical 5-state triage vocabulary mapped 1:1. See `docs/agents/triage-labels.m
 
 Single-context layout (`CONTEXT.md` at root, ADRs under `docs/adr/`). See `docs/agents/domain.md`.
 
+### Architecture
+
+`docs/architecture.md` is the module map plus the invariants that cross module boundaries
+(node vocabulary, physical-vs-logical position, the offset space, the one navigation rule).
+Read it before changing anything under `src/services/` or `src/store/`. Behaviour, constants
+and wording belong to the code; the ADRs record why.
+
 ## Verification
 
 Default to cheap checks — typecheck, unit tests, diff review — which catch most defects in a fraction of the time.

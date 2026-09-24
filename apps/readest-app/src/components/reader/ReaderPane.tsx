@@ -181,7 +181,7 @@ export default function ReaderPane({
     // 「暂无内容」，那时没有 scroll 容器可听）。
   }, [setSectionFraction, spineIndex, section]);
 
-  // Agent → reader jump (reading-agent doc §5.3 locate_in_reader): hop to the
+  // Agent → reader jump (locate_in_reader): hop to the
   // target virtual section, then breathe-highlight the quoted snippet. For TXT
   // the virtual sections share the agent pipeline's node space (same layered
   // segmenter), so `request.nodeIndex` maps 1:1 onto the physical ordinal.
@@ -263,7 +263,7 @@ export default function ReaderPane({
   };
 
   /**
-   * Selection AI quick action (design doc 4.4.3, ADR 0007) — shared with the
+   * Selection AI quick action (ADR 0007) — shared with the
    * Foliate engine pane via `useQuickActions` (ticket 07); see the hook for
    * the sidebar/quote/send behaviour.
    */
@@ -287,7 +287,7 @@ export default function ReaderPane({
 
   // Segmentation feedback + reading-progress mapping: `open` has already
   // auto-applied the segmentation, so switch the reader onto the generated
-  // Virtual Sections and toast the count (design doc 4.2).
+  // Virtual Sections and toast the count (ADR 0005).
   useEffect(() => {
     if (!segmentation || segmentation.virtualSections.length === 0) return;
     const key = `${segmentation.bookHash}:${segmentation.strategy}:${segmentation.virtualSections.length}`;

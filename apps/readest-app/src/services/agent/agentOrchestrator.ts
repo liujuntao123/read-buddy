@@ -1,5 +1,5 @@
 /**
- * Agent turn orchestrator (reading-agent architecture doc §5): wires the
+ * Agent turn orchestrator (docs/architecture.md): wires the
  * four-layer context pyramid, the reading tools and the streaming seam into
  * one companion-chat turn.
  *

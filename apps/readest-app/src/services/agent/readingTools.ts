@@ -1,5 +1,5 @@
 /**
- * First-party reading toolbox (reading-agent architecture doc §5.3): the
+ * First-party reading toolbox (docs/architecture.md): the
  * four JSON-schema tools mounted onto the model's tool-calling stream.
  *
  *   get_book_outline     — TOC + micro-brief matrix (paged)

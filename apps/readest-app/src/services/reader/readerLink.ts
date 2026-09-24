@@ -1,5 +1,5 @@
 /**
- * Reader ⇄ agent link bus (reading-agent architecture doc §3.3 & §5.3):
+ * Reader ⇄ agent link bus (docs/architecture.md):
  * `locate_in_reader` publishes jump payloads here; the reader panes
  * (TXT scroll pane / Foliate engine pane) subscribe and perform the smooth
  * jump + highlight breathing animation. Keeps the agent layer fully

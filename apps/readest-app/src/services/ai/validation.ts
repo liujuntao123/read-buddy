@@ -4,7 +4,7 @@ import { AI_PROVIDERS } from './providerReadiness';
 
 /**
  * Field-level validation for the AI provider configuration center
- * (design doc 4.1). An empty error map means the settings are legal to
+ * (docs/architecture.md). An empty error map means the settings are legal to
  * persist; `testConnection` intentionally bypasses the apiKey rule so a
  * half-configured provider can still be probed.
  */

@@ -1,5 +1,5 @@
 /**
- * Turn-bounded conversation manager (ticket 04, design doc 4.4, ADR 0006).
+ * Turn-bounded conversation manager (ticket 04, ADR 0006).
  *
  * Owns the Conversation/Message lifecycle on top of ConversationRepository:
  * starting topics, appending messages, incrementing the visible turn counter

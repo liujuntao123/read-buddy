@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * Agent 思考与工具调用轨迹手风琴 (reading-agent doc §7.2 + user request):
+ * Agent 思考与工具调用轨迹手风琴 (docs/architecture.md + user request):
  * a two-level accordion — the outer toggle collapses the whole trail, each
  * tool call inside is an independently expandable row revealing its
  * parameters, result snippet and duration. Running calls pulse until their

@@ -208,7 +208,7 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
     };
   }, [engine, attach, addMarkTarget, attachClicks, bindPointer, clearTarget, close]);
 
-  // Agent → reader jump (reading-agent doc §5.3 locate_in_reader): the request
+  // Agent → reader jump (locate_in_reader): the request
   // names a book node, so the node model resolves the destination first — its
   // href (目录锚点 included) or physical spine. Only when the book has no
   // context / no such node do we fall back to scanning every spine by text.

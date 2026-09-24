@@ -1,5 +1,5 @@
 /**
- * Book panorama generator (reading-agent architecture doc §4.1 Phase 3).
+ * Book panorama generator (docs/architecture.md).
  *
  * A single model call over the node outline + opening/closing slices produces
  * the whole-book portrait (genre / summary / world setting / main characters)

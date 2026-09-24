@@ -1,5 +1,5 @@
 /**
- * Whole-book agent companion chat store (reading-agent architecture doc §7):
+ * Whole-book agent companion chat store (docs/architecture.md):
  * turn-bounded topics whose replies stream through the reading-specialist
  * orchestrator — four-layer context pyramid, autonomous reading tools and
  * reader-synced citations included.
@@ -12,7 +12,7 @@
  *   already persisted, so nothing is duplicated on screen or in the topic.
  * - Aborting keeps the partial answer on screen but never persists an
  *   assistant message for the interrupted turn (ADR 0006 behaviour kept).
- * - Failures surface as `describeAIError` copy (设计文档 §6), never the SDK's
+ * - Failures surface as `describeAIError` copy (docs/architecture.md), never the SDK's
  *   own English message.
  *
  * Factory `createChatStore` takes injectable manager/runTurn/settings/
@@ -248,11 +248,11 @@ export function createChatStore(deps: ChatStoreDeps): ChatStoreHook {
         controller = null;
         if (isAbortError(err)) {
           // User stopped the answer: keep the partial text on screen, persist
-          // nothing for this turn and stay usable (design doc 4.4.3).
+          // nothing for this turn and stay usable (ADR 0007).
           patch({ phase: 'idle', error: null });
           return;
         }
-        // 设计文档 §6: one classified, reader-facing sentence — never the
+        // 分类后的一句读者文案（docs/architecture.md）——绝不透出
         // SDK's own message (see `services/ai/errorMessages`).
         patch({ phase: 'error', error: describeAIError(err).message, streamingText: '' });
         return;

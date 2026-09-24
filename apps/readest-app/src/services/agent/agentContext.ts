@@ -1,5 +1,5 @@
 /**
- * In-memory whole-book agent context (reading-agent architecture doc §5).
+ * In-memory whole-book agent context (docs/architecture.md).
  *
  * One registered context per opened book: the book nodes over the unified
  * global character space, the joined full text backing them, and the query

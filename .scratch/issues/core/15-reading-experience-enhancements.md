@@ -1,7 +1,7 @@
 ---
 id: "15"
 title: "阅读体验增强：跨章无限滚动、划线点击工具条、双页边缘翻页"
-status: "in-progress"
+status: "closed"
 blocked_by: []
 labels: ["reader", "ux", "ready-for-agent"]
 ---

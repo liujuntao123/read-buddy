@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * 章节总结 Tab (ticket 03, design doc 4.3, ADR 0004 + user review).
+ * 章节总结 Tab (ticket 03, ADR 0004 + user review).
  *
  * Strictly manual trigger: the component only opens the chapter (cache check)
  * when the reader moves; every model call comes from an explicit button
@@ -689,7 +689,7 @@ export default function SummaryTab({ store = useSummaryStore }: SummaryTabProps 
         ) : (
           <Card variant="red" role="alert" padding={4}>
             <VStack gap={3}>
-              {/* 分类后的中文文案（设计文档 §6）：网络 / Key / 限流 / 模型 / 上下文 / 服务端。 */}
+              {/* 分类后的中文文案（docs/architecture.md）：网络 / Key / 限流 / 模型 / 上下文 / 服务端。 */}
               <Text data-testid="summary-error-text" weight="medium" style={{ lineHeight: 1.6 }}>
                 {error || '生成失败'}
               </Text>

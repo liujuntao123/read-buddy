@@ -1,6 +1,5 @@
 /**
- * Minimal-node micro-brief pipeline (reading-agent architecture doc §4.1
- * Phase 4 + §4.2): a priority-scheduled background queue generating 50~100
+ * Minimal-node micro-brief pipeline (docs/architecture.md): a priority-scheduled background queue generating 50~100
  * char node briefs (+ key entities) from "head 2,000 + tail 1,000" slices.
  *
  * **Only minimal nodes are briefed** (CONTEXT.md / ADR 0010): the 节 of a

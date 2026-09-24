@@ -1,5 +1,5 @@
 /**
- * Selection quick actions (ticket 04 design doc 4.4.3; UI wiring lands in
+ * Selection quick actions (ticket 04, ADR 0007; UI wiring lands in
  * ticket 05). Each action turns the reader's current selection into a chat
  * turn, except `ask` which only fills the quote into the composer and lets the
  * user type their own question.

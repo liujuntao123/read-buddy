@@ -1,6 +1,5 @@
 /**
- * Reader highlight breathing service (reading-agent architecture doc §3.3 +
- * §7.2): wraps a quoted snippet inside a rendered chapter (the TXT scroll
+ * Reader highlight breathing service (docs/architecture.md): wraps a quoted snippet inside a rendered chapter (the TXT scroll
  * article or a Foliate iframe document) in <mark.readest-agent-highlight>
  * nodes, drives a 2-second breathing animation and scrolls the first mark into
  * view.

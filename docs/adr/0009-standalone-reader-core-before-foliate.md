@@ -16,5 +16,5 @@ Tickets 01–05 were scoped as AI-companion features premised on an inherited re
 - The debt is now visible in the tracker instead of living in code comments.
 
 ### Negative / Trade-offs
-- Scroll-per-section rendering, no CFI, no paginated layout, EPUB CSS fidelity reduced, MOBI/AZW3/FB2/PDF unsupported until Foliate lands (ticket 07).
+- At the time, scroll-per-section rendering only, no CFI, no paginated layout, reduced EPUB CSS fidelity, and MOBI/AZW3/FB2/PDF unsupported. **Ticket 07 has since landed the Foliate-js engine**, which brought pagination, CFI and the Kindle/FictionBook/comic formats; PDF remains unsupported (`bookLibrary.detectFormat`).
 - One session of implementation cost was spent on a throwaway demo path that ticket 06 then replaced at the seams.

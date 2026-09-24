@@ -11,7 +11,7 @@ const TEST_CONNECTION_TIMEOUT_MS = 10_000;
 
 /**
  * Lightweight OpenAI-compatible health probe: `GET {baseUrl}/models`
- * (design doc 4.1 "健康检测"). The fetch implementation is injectable so
+ * (docs/architecture.md「健康检测」). The fetch implementation is injectable so
  * unit tests never touch the real network.
  */
 export async function testConnection(

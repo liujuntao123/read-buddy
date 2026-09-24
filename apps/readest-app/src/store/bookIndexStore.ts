@@ -1,5 +1,5 @@
 /**
- * Whole-book node indexing store (reading-agent architecture doc §4.1).
+ * Whole-book node indexing store (docs/architecture.md).
  *
  * `ensureIndexed` is the Phase 1+2 entry: it resolves the opened book's text
  * (TXT monolithic / engine spine + directory / demo scan context), runs the

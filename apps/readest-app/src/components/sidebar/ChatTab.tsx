@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * 伴读 Agent 工作台 (reading-agent architecture doc §7): the upgraded
+ * 伴读 Agent 工作台 (docs/architecture.md): the upgraded
  * companion chat tab. Every assistant reply may carry a collapsed tool-trace
  * accordion (思考与工具调用轨迹) and whole-book evidence citation cards that
  * jump the reader viewport; a silent indexing status row tracks the import
@@ -377,7 +377,7 @@ export default function ChatTab({ store = useChatStore }: ChatTabProps) {
           <StreamingMessage streamingText={streamingText} liveTraces={liveTraces} />
         )}
         {/* Failure belongs in the stream, where the answer would have been —
-            with the two ways out of it (设计文档 §6, ticket 14 item 6). */}
+            with the two ways out of it (docs/architecture.md, ticket 14 item 6). */}
         {error && (
           <Banner
             data-testid="chat-error"

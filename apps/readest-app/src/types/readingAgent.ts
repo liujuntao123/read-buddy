@@ -1,6 +1,6 @@
 /**
  * Whole-book reading-specialist agent domain types
- * (docs/technical-solution-reading-agent-architecture.md §3.3 & §6.1).
+ * (docs/architecture.md).
  *
  * The BookNode family establishes the unified global continuous character
  * coordinate space shared by the reader, the DOM selection tracking and every

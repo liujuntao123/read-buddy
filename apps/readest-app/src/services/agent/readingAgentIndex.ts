@@ -1,7 +1,7 @@
 /**
  * Reading Agent Index — the AI half of preparing a Book (读书代理索引).
  *
- * The reading-agent architecture doc §4.1 describes four phases: segment the book
+ * The import pipeline (docs/architecture.md) has four phases: segment the book
  * (1), register the node model (2), build the panorama (3), then queue the
  * per-minimal-node micro-briefs (4). Phases 1–2 need no model and live in the
  * index store's synchronous path; **phases 3–4 are this module**.

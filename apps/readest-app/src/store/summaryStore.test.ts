@@ -311,7 +311,7 @@ describe('generate', () => {
 
     const state = harness.store.getState();
     expect(state.phase).toBe('error');
-    // 设计文档 §6: one classified sentence; the raw upstream text stays out.
+    // 分类后的一句话；SDK 原文不外露（docs/architecture.md）。
     expect(state.error).toBe(describeAIError(new Error('boom: rate limited')).message);
     expect(state.error).toContain('额度');
     expect(state.error).not.toContain('boom');

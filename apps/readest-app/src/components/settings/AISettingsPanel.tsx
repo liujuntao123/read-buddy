@@ -15,7 +15,7 @@ import { normalizeBaseUrl } from '@/services/ai/modelsEndpoint';
 import { MAX_TURNS_PER_TOPIC, MIN_TURNS_PER_TOPIC, type AIProvider, type AISettings } from '@/types/ai';
 import type { AISettingsErrors } from '@/services/ai/validation';
 
-/** Base URL presets applied when the provider changes (design doc 4.1). */
+/** Base URL presets applied when the provider changes (docs/architecture.md). */
 const PROVIDER_BASE_URL_PRESETS: Record<AIProvider, string> = {
   'openai-compatible': 'https://api.openai.com/v1',
   deepseek: 'https://api.deepseek.com/v1',
@@ -37,7 +37,7 @@ interface AISettingsPanelProps {
 }
 
 /**
- * AI Provider 配置中心 (design doc 4.1 / ADR 0008): OpenAI-compatible
+ * AI Provider 配置中心 (ADR 0008): OpenAI-compatible
  * endpoint + credentials + turn quota, persisted as plaintext in IndexedDB
  * and masked in the UI. Rendered as a modal dialog over the sidebar.
  */

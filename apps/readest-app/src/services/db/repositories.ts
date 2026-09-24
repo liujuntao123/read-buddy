@@ -116,7 +116,7 @@ export class ConversationRepository {
 }
 
 /**
- * Chapter node persistence (reading-agent design doc §6.1): the unified
+ * Chapter node persistence (ADR 0010): the unified
  * global-offset chapter map plus the import-time micro-briefs. Rows are
  * written by the segmentation pass and updated chapter-by-chapter by the
  * brief scheduler, so partial updates use `put` on the computed primary key.

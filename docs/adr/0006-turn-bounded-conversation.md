@@ -8,7 +8,7 @@ In reading companion chat interfaces, managing conversation history across long 
 1. **Silent Sliding Window**: The UI renders 50+ messages, but silently truncates context sent to the API to the latest $N$ turns (e.g., last 6 turns).
    - *Problem*: The user expects the assistant to remember messages they still see directly on screen, leading to confusing failures and broken continuity.
 2. **Turn-Bounded Topics (Turn Quota)**: Conversations have an explicit, user-visible turn limit (e.g. 10 or 15 Q&A pairs per topic).
-   - Once the quota is reached, the UI clearly notifies the user: *“当前话题已达探讨上限（10/10），建议开启新话题以保持解答精准度”*.
+   - Once the quota is reached, the UI clearly notifies the user: *「当前话题已达轮数上限（10/10），建议开启新话题以保持回答质量。」*
    - All turns within the active topic are sent as context without hidden pruning.
 
 ## Decision

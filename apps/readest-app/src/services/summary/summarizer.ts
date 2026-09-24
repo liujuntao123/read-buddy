@@ -1,5 +1,5 @@
 /**
- * Chapter summarizer (ticket 03, design doc 4.3, ADR 0004/0005).
+ * Chapter summarizer (ticket 03, ADR 0004/0005).
  *
  * One stream seam call per model turn:
  * - chapters ≤ 12,000 chars: single streaming call emitting `delta` events;

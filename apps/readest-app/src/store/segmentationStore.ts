@@ -1,6 +1,5 @@
 /**
- * Segmentation store (ADR 0005, superseded flow per the reading-agent
- * architecture doc §3.2): orchestrates segmentation → persisted virtual
+ * Segmentation store (ADR 0005): orchestrates segmentation → persisted virtual
  * sections for monolithic TXT books.
  *
  * Flow: `scanAndPrompt` loads any persisted segmentation (idempotent re-scan),

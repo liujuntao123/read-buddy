@@ -1,6 +1,6 @@
 /**
  * Agent streaming seam over the Vercel AI SDK with tool calling
- * (reading-agent architecture doc §5.3).
+ * (docs/architecture.md).
  *
  * This is the single module that binds the real OpenAI-compatible transport
  * to a multi-step tool loop: `streamText` + `stopWhen: stepCountIs(maxSteps)`

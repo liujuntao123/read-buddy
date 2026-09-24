@@ -254,7 +254,7 @@ export function createSummaryStore({
           // Keep whatever streamed before the stop; user can restart.
           set({ phase: 'aborted', stageLabel: '' });
         } else {
-          // 设计文档 §6: classify before the reader sees it — the SDK's own
+          // 分类先于读者看到（docs/architecture.md）——the SDK's own
           // English message (with an HTTP status buried in it) becomes one
           // readable Chinese sentence (`services/ai/errorMessages`).
           set({

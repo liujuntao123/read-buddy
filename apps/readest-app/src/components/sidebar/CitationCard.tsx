@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * 全书证据卡片 (reading-agent architecture doc §7.1/§7.2): renders one
+ * 全书证据卡片 (docs/architecture.md): renders one
  * `locate_in_reader` citation as a structured evidence card; clicking
  * [📍 跳转至该章节] re-dispatches the reader jump (the original locate
  * already drove the reader once — this lets the reader hop back after

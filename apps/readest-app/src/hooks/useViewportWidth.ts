@@ -10,7 +10,7 @@ export interface ViewportWidth {
 }
 
 /**
- * Responsive breakpoint hook (design doc 6: <768px drawer mode).
+ * Responsive breakpoint hook (ADR 0003: <768px drawer mode).
  * SSR-safe: starts at `false` and only updates after mount; stays `false`
  * when `matchMedia` is unavailable.
  */

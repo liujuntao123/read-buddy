@@ -22,7 +22,7 @@ export const AI_SETTINGS_KEY = 'global';
  * verbatim so the library is fully offline and re-openable.
  *
  * Table history:
- * - v3 added the whole-book agent index tables (design doc §6.2). Its first
+ * - v3 added the whole-book agent index tables. Its first
  *   draft created `chapter_nodes` with an `id` primary key; while that draft
  *   was hot-reloading through running dev servers, some browsers installed a
  *   v3 database with that broken store (writes then failed with

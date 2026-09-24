@@ -1,5 +1,5 @@
 /**
- * Prompt builders for node summarization (ticket 03, design doc 4.3).
+ * Prompt builders for node summarization (ticket 03, ADR 0004/0005).
  *
  * Pure functions only: every builder returns the full user prompt as a string
  * so tests can assert on node titles, the three-part section headings and the
@@ -50,7 +50,7 @@ import { nodeKindLabel } from '@/services/bookNodes/nodeKind';
 import { SUMMARY_SINGLE_PASS_MAX_CHARS } from '@/types/ai';
 import type { NodeKind } from '@/types/readingAgent';
 
-/** Section 1 heading of the mandated three-part structure (design doc 4.3.3). */
+/** Section 1 heading of the mandated three-part structure (docs/architecture.md). */
 export const SUMMARY_HEADING_CORE = '### 📌 核心要义';
 
 /** Section 2 heading of the mandated three-part structure. */

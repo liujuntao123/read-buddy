@@ -1,6 +1,5 @@
 /**
- * Map-phase chunking for over-length chapters (ticket 03, design doc 4.3.2,
- * ADR 0005): split the chapter into ~6,000~8,000 char blocks whose neighbours
+ * Map-phase chunking for over-length chapters (ticket 03, ADR 0005): split the chapter into ~6,000~8,000 char blocks whose neighbours
  * share a fixed 500-char overlap, tiling [0, length) with no lost characters.
  *
  * The summarizer only calls this for chapters longer than
@@ -12,7 +11,7 @@ import { SEGMENT_CHUNK_MAX_CHARS, SEGMENT_CHUNK_MIN_CHARS } from '@/types/ai';
 /** Default target block length, midway inside the 6,000~8,000 window. */
 export const DEFAULT_SUMMARY_CHUNK_CHARS = 7_000;
 
-/** Fixed overlap shared by neighbouring blocks (design doc 4.3.2). */
+/** Fixed overlap shared by neighbouring blocks (ADR 0005). */
 export const SUMMARY_CHUNK_OVERLAP = 500;
 
 const clampTarget = (targetChunkChars: number): number =>

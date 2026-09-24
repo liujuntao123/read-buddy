@@ -87,7 +87,7 @@ export function computeToolbarPosition(
 }
 
 /**
- * Floating action group for the reader selection (design doc 4.4.3, ADR 0007).
+ * Floating action group for the reader selection (ADR 0007).
  *
  * Two kinds of action, deliberately separated by a divider instead of sorted into
  * one row: **划线 marks the text** (a reader-owned mark that outlives the

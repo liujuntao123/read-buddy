@@ -1,6 +1,5 @@
 /**
- * HTML sanitizer for imported EPUB spine sections (ticket 06, design doc
- * "EPUB 展示安全过滤").
+ * HTML sanitizer for imported EPUB spine sections (ticket 06).
  *
  * Imported markup is untrusted: everything outside a tag/attribute
  * whitelist is dropped or unwrapped before the reader renders it via

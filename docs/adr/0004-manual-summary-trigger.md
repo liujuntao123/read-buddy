@@ -13,10 +13,11 @@ If chapter summarization triggers automatically on section changes:
 
 ## Decision
 We enforce a **Strictly Manual / Explicit Trigger** mechanism:
-1. Navigating to a new section checks local IndexedDB cache first.
+1. Navigating to a new node checks local IndexedDB cache first (`node_summaries`, ADR 0015).
 2. If cached, the summary renders immediately.
-3. If not cached, the sidebar presents an empty-state action card: `“生成本章总结” (Generate Summary for this Chapter)`, initiating AI generation only upon explicit user click.
-4. An active generation can be cancelled via an Abort button at any point.
+3. If not cached, the sidebar presents an empty-state action card whose button is `总结当前{章|节|段}` — the level word comes from the node model (ADR 0010) — initiating AI generation only upon explicit user click.
+4. An active generation can be cancelled via a 停止 button at any point, and the partial text is kept.
+5. The same policy governs the whole-book companion index: the panorama and the micro-briefs never start on import (ADR 0002 ¶4).
 
 ## Consequences
 

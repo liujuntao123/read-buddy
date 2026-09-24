@@ -40,7 +40,7 @@ interface DragState {
  * width (320~900px) is driven through the shared aiSidebarStore, so it is
  * clamped there and remembered across restarts via the persist middleware.
  *
- * Responsive (design doc 6): below 768px the pane detaches into a fixed
+ * Responsive (ADR 0003): below 768px the pane detaches into a fixed
  * overlay drawer (86vw, max 400px) with a click-to-close backdrop so the
  * reader keeps the full width; the drag handle is desktop-only.
  */

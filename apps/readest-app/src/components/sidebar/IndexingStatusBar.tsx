@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * 导入索引进度指示条 (reading-agent architecture doc §7.2 item 3 + user
+ * 导入索引进度指示条 (docs/architecture.md + user
  * request): a minimal status row above the conversation stream. Clicking the
  * bar opens the whole-book panorama dialog (画像弹窗); the ↻ button on the
  * right re-runs the import pipeline (重新索引) behind a confirmation, for

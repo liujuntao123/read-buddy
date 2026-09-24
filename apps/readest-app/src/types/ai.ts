@@ -2,9 +2,8 @@
  * Shared domain types for readest-plus.
  *
  * Single source of truth, mirroring:
- * - .scratch/issues/spec/001-readest-plus-core-spec.md ("Core Schemas")
- * - docs/readest-plus 桌面端应用设计文档.md section 5 (数据模型与存储设计)
- * - CONTEXT.md domain glossary
+ * - CONTEXT.md (domain glossary)
+ * - docs/architecture.md (存储与数据模型)
  */
 
 /**

@@ -289,7 +289,7 @@ describe('send', () => {
 
     const state = store.getState();
     expect(state.phase).toBe('error');
-    // 设计文档 §6: the SDK's own message is classified before the reader sees it.
+    // 分类先于读者看到：SDK 原文不外露（docs/architecture.md）。
     expect(state.error).toBe(describeAIError(new Error('provider unreachable')).message);
     expect(state.error).toContain('网络');
     expect(state.error).not.toContain('provider unreachable');

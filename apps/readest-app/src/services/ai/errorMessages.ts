@@ -1,5 +1,5 @@
 /**
- * AI 错误分类与文案——设计文档 §6「异常处理与边界情况」的唯一实现。
+ * AI 错误分类与文案——docs/architecture.md「错误分类」的唯一实现。
  *
  * 模型调用失败时，SDK 交出来的是一段面向开发者的英文文本（HTTP 状态码藏在
  * `APICallError.statusCode`、供应商的 JSON 藏在 `responseBody`），直接渲染到
@@ -156,7 +156,7 @@ export function describeAIError(err: unknown): AIErrorDescription {
   if (status === 401 || status === 403) return { kind: 'auth', message: AUTH_MESSAGE };
 
   // 3. 限流与余额：状态码 (402 / 429) 或正文里的限流/额度措辞。余额不足在语义上
-  //    是配额问题（设计文档 §6 的「配额用尽/429」是一条），所以归同一类。
+  //    是配额问题（docs/architecture.md 的「配额用尽/429」是一条），所以归同一类。
   if (
     status === 402 ||
     status === 429 ||

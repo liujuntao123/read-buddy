@@ -1,6 +1,6 @@
 /**
  * Three-level progressive node segmentation engine
- * (reading-agent architecture doc §3.2, replacing the single-regex detector
+ * (ADR 0005 / ADR 0010, replacing the single-regex detector
  * as the import-time segmentation backbone).
  *
  * Level 1 — the book's own directory (`buildTocNodes`): nodes come from the
@@ -74,7 +74,7 @@ const LEVEL3_SNAP_WINDOW = 1_200;
 const PREAMBLE_MIN_CHARS = 100;
 
 /**
- * Multi-pattern heading regex matrix (design doc §3.2.2). Each pattern is
+ * Multi-pattern heading regex matrix (ADR 0005). Each pattern is
  * line-anchored; `matchAll` over the full text yields every candidate.
  */
 const HEADING_PATTERNS: readonly RegExp[] = [
@@ -193,7 +193,7 @@ const lineEnd = (fullText: string, offset: number): number => {
 };
 
 /**
- * Front TOC-page filter (design doc §3.2.2 item 1): inside the first
+ * Front TOC-page filter (ADR 0005): inside the first
  * `TOC_PAGE_SCAN_WINDOW` chars, a run of ≥5 consecutive candidates whose
  * body spans are < `TOC_PAGE_MAX_GAP` is a table-of-contents manifest.
  * Returns the offset after which real chapter headings must be searched.
@@ -302,7 +302,7 @@ export const monotonicityScore = (
 };
 
 /**
- * Confidence scoring (design doc §3.2.2 item 3): monotonic ordinals 40%
+ * Confidence scoring (ADR 0005): monotonic ordinals 40%
  * (per hierarchy level), chapter length sanity 30%, chapter density 30%.
  */
 export function scoreConfidence(

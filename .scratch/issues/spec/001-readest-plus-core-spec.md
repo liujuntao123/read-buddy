@@ -1,10 +1,30 @@
 ---
 id: "001"
 title: "readest-plus Core Architecture & AI Companion Specification"
-status: "open"
+status: "closed"
 blocked_by: []
 labels: ["ready-for-agent"]
 ---
+
+> **已被取代（superseded）**：本规格是项目起步时的草案，其中的 schema 与交互细节在
+> ADR 0010（统一节点模型）、ADR 0011（持久化位置字段改名）、ADR 0014/0015 之后已不成立。
+> 现行约定只看 [`CONTEXT.md`](../../../CONTEXT.md)、[`docs/adr/`](../../../docs/adr/) 与
+> [`docs/architecture.md`](../../../docs/architecture.md)，实现以代码为准。
+>
+> 保留本文仅作历史。已知与现状不符之处：
+>
+> - provider 只有 `openai-compatible` / `deepseek` 两种，没有 `claude` / `ollama`
+>   （`types/ai.ts`）；`temperature` 界面不写、默认不设，但设置里若存在会随请求发出
+>   （`services/ai/providerTransport.ts`）。
+> - `ChapterSummary` → `NodeSummary`、`sectionIndex` → `nodeIndex`、`chapterTitle` →
+>   `nodeTitle`（ADR 0010）；Dexie v5 起表名为 `book_nodes` / `node_summaries`。
+> - 侧栏宽度 `320–900px`（不是 320–600），且不再有「是否应用分段」的交互式询问——
+>   分段全自动，界面只给一个 5 秒 toast（ADR 0005 / `store/segmentationStore.ts`）。
+> - 对话上下文不是「当前章节 + 历史」两层，而是全书画像 + 全书微大纲 + 当前节点 +
+>   引文的四层金字塔，并带 4 个阅读工具（`services/agent/promptPyramid.ts`）。
+> - 「防剧透」约束已移除，且降级链路的测试断言它不存在（`promptAssembly.test.ts`）。
+> - 章节切分是三级（原生目录 → 多正则 + 置信度 → 语义定长），不是单一正则
+>   （`services/segmentation/layeredSegmenter.ts`）。
 
 ## Problem Statement
 

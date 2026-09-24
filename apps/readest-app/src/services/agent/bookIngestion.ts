@@ -1,7 +1,7 @@
 /**
  * Book Ingestion — the segmentation half of preparing a Book (候选 epilogue).
  *
- * Phases 1–2 of the reading-agent architecture doc §4.1: resolve the Book's text,
+ * Phases 1–2 of the import pipeline (docs/architecture.md): resolve the Book's text,
  * derive its **Book Nodes** (`段` for a structureless book, `章`/`节` from the
  * Directory or the title classifier), and persist them. No model is involved, so
  * this runs on every book open and must stay fast.
