@@ -56,9 +56,10 @@ labels: ["reader", "ux", "ready-for-agent"]
 
 ### 验证
 
-- 单测：818 passed（新增 22 条：painter 标记与命中、工具条双态、TXT/引擎两支路点击
-  划线、边缘 hover 坐标判定与揭示、快捷键提示的双模式文案与底边排布、引擎
-  `continuous` 属性与 `unload` 契约）。
+- 单测：821 passed（本次新增 22 条：painter 标记与命中、工具条双态、TXT/引擎两支路
+  点击划线、边缘 hover 坐标判定与揭示、快捷键提示的双模式文案与底边排布、引擎
+  `continuous` 属性与 `unload` 契约）。仓库改名 `readest-app → read-buddy-app` 之后
+  按新路径复跑 `pnpm verify`（version:check + typecheck + test + build）全绿。
 - 真实浏览器（agent-browser + CDP）：连续流 24 项断言、分页回归 9 项断言，均 0 失败
   （vendored 引擎独立工装，见 `.scratch/continuous-harness/`）。工装发现并修掉三个
   真实缺陷：`unload` 未转发、同一章并发加载两次产生重复 entry、章节文档已被移除后
