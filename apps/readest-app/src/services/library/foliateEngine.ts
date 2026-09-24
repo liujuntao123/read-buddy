@@ -68,6 +68,13 @@ export interface FoliateVendorView {
   setMaxInlineSize?(px: number | string): void;
   setMargin?(value: number | string): void;
   setGap?(value: number | string): void;
+  /**
+   * Continuous scrolled reading (readest-plus patch to the vendored paginator):
+   * with `flow="scrolled"` the chapters are one scroll flow instead of one
+   * chapter per scroll container. Declared here for the same reason as the rest —
+   * a renamed setter must become a diagnostic, not a silent no-op.
+   */
+  setContinuous?(value: boolean): void;
 }
 
 /**
@@ -230,6 +237,13 @@ export function getReaderThemeStyles(theme: ReaderTheme): string {
 
 export type RelocateListener = (location: EngineLocation) => void;
 export type LoadListener = (payload: { doc: Document; index: number }) => void;
+/**
+ * A chapter's document was thrown away (the paginator replaced it, or the
+ * continuous flow pushed it out of the live window). Everything wired to that
+ * document — selection capture, 划线 marks — is wired to a dead document from
+ * here on.
+ */
+export type UnloadListener = (payload: { doc: Document; index: number }) => void;
 
 export interface FoliateEngineHandle {
   /**
@@ -250,6 +264,8 @@ export interface FoliateEngineHandle {
   goToFraction(fraction: number): Promise<void>;
   onRelocate(callback: RelocateListener): () => void;
   onLoad(callback: LoadListener): () => void;
+  /** A chapter document went away — release whatever was wired to it. */
+  onUnload(callback: UnloadListener): () => void;
   /** Plain text of a section (cached after it has been loaded once). */
   getSpineText(index: number): Promise<string>;
   /** Cached sanitized chapter HTML ('' when the section was never loaded). */
@@ -558,6 +574,7 @@ export function createFoliateEngine(file: File, deps: FoliateEngineDeps = {}): F
 
   const relocateListeners = new Set<RelocateListener>();
   const loadListeners = new Set<LoadListener>();
+  const unloadListeners = new Set<UnloadListener>();
   const htmlCache = new Map<number, string>();
   const textCache = new Map<number, string>();
   /** Directory anchors located inside a section, aligned with `textCache`. */
@@ -650,6 +667,8 @@ export function createFoliateEngine(file: File, deps: FoliateEngineDeps = {}): F
     const v = vendor();
     const renderer = v?.renderer;
     const viaRenderer = typeof renderer?.setAttribute === 'function';
+    const viaElement = typeof v?.setContinuous === 'function';
+    const hasRendererAttr = typeof renderer?.removeAttribute === 'function';
 
     /** Element setter when present, plus the renderer-attribute fallback. */
     const applyKnob = (
@@ -661,6 +680,24 @@ export function createFoliateEngine(file: File, deps: FoliateEngineDeps = {}): F
       if (viaRenderer) renderer!.setAttribute!(attribute, String(value));
       recordPresentation(attribute, setter !== null, viaRenderer);
     };
+
+    /**
+     * Continuous reading is a **mode**, not a value: single-page books flow from
+     * one chapter into the next, double-page books paginate one chapter at a time.
+     * Leaving the mode has to happen *before* the flow flips (so the paginator
+     * dismantles its chapter stack while it still is a scroller); entering it has
+     * to happen *after* (so the stack is built on top of a scrolled renderer).
+     */
+    const applyContinuous = (on: boolean): void => {
+      if (viaElement) v!.setContinuous!(on);
+      if (viaRenderer && hasRendererAttr) {
+        if (on) renderer!.setAttribute!('continuous', '');
+        else renderer!.removeAttribute!('continuous');
+      }
+      recordPresentation('continuous', viaElement, viaRenderer && hasRendererAttr);
+    };
+
+    if (!single) applyContinuous(false);
 
     applyKnob(
       'max-column-count',
@@ -679,6 +716,9 @@ export function createFoliateEngine(file: File, deps: FoliateEngineDeps = {}): F
       typeof v?.setMargin === 'function' ? () => v!.setMargin!(margin) : null,
     );
     applyKnob('gap', gap, typeof v?.setGap === 'function' ? () => v!.setGap!(gap) : null);
+
+    if (single) applyContinuous(true);
+
     renderer?.render?.();
   };
 
@@ -762,6 +802,12 @@ export function createFoliateEngine(file: File, deps: FoliateEngineDeps = {}): F
     for (const callback of loadListeners) callback({ doc: payload.doc, index: payload.index });
   };
 
+  const handleUnload = (detail: unknown): void => {
+    const payload = detail as { doc?: Document; index?: number } | undefined;
+    if (!payload || typeof payload.index !== 'number' || !payload.doc) return;
+    for (const callback of unloadListeners) callback({ doc: payload.doc, index: payload.index });
+  };
+
   const prepare = async (): Promise<void> => {
     if (opened || closed) return;
     // Importing the module registers <foliate-view> (side effect).
@@ -771,6 +817,9 @@ export function createFoliateEngine(file: File, deps: FoliateEngineDeps = {}): F
       handleRelocate((event as CustomEvent).detail),
     );
     element.addEventListener('load', (event: Event) => handleLoad((event as CustomEvent).detail));
+    element.addEventListener('unload', (event: Event) =>
+      handleUnload((event as CustomEvent).detail),
+    );
     view = element;
     await element.open(file);
     book = element.book ?? null;
@@ -933,6 +982,11 @@ export function createFoliateEngine(file: File, deps: FoliateEngineDeps = {}): F
       return () => loadListeners.delete(callback);
     },
 
+    onUnload: (callback) => {
+      unloadListeners.add(callback);
+      return () => unloadListeners.delete(callback);
+    },
+
     getSpineText: async (index: number) => {
       await cacheSection(index);
       return textCache.get(index) ?? '';
@@ -973,6 +1027,7 @@ export function createFoliateEngine(file: File, deps: FoliateEngineDeps = {}): F
       closed = true;
       relocateListeners.clear();
       loadListeners.clear();
+      unloadListeners.clear();
       try {
         view?.close();
       } catch {

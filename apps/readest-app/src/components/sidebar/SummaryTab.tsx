@@ -17,8 +17,8 @@
  * asynchronously get a bounded retry before the "no extractable text" warning is
  * shown, and the summary content card appears only when content exists.
  */
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Clock, RefreshCw, Settings2, Sparkles, Square } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Clock, FoldVertical, RefreshCw, Settings2, Sparkles, Square, UnfoldVertical } from 'lucide-react';
 import { Banner } from '@astryxdesign/core/Banner';
 import { Button } from '@astryxdesign/core/Button';
 import { Card } from '@astryxdesign/core/Card';
@@ -53,6 +53,14 @@ const TEXT_RETRY_DELAY_MS = 700;
 const SETUP_DESCRIPTION = '配置模型后，可以为当前节点生成三段式总结：核心要义、内容脉络与关键术语。';
 
 /**
+ * Strips raw horizontal rules (---, ***, ___) from parsed section markdown.
+ */
+function cleanSectionLines(lines: string[]): string {
+  const filtered = lines.filter((l) => !/^\s*[-*_]{3,}\s*$/.test(l));
+  return filtered.join('\n').trim();
+}
+
+/**
  * Parses markdown into three-part sections if headings are present.
  */
 export interface SummarySection {
@@ -83,7 +91,7 @@ export function parseSummarySections(markdown: string): {
         sections.push({
           id: `section-${sections.length}`,
           heading: currentHeading,
-          content: currentLines.join('\n').trim(),
+          content: cleanSectionLines(currentLines),
         });
       }
       currentHeading = match[1].trim();
@@ -97,22 +105,59 @@ export function parseSummarySections(markdown: string): {
     sections.push({
       id: `section-${sections.length}`,
       heading: currentHeading,
-      content: currentLines.join('\n').trim(),
+      content: cleanSectionLines(currentLines),
     });
   } else {
     prefaceLines = currentLines;
   }
 
-  const preface = prefaceLines.join('\n').trim();
+  const preface = cleanSectionLines(prefaceLines);
   return { preface: preface || undefined, sections };
 }
 
 /** Classifies a section heading into one of the canonical summary roles. */
 const getSectionKind = (heading: string): 'core' | 'outline' | 'terms' | 'general' => {
-  if (heading.includes('核心要义') || heading.includes('主旨')) return 'core';
-  if (heading.includes('脉络') || heading.includes('内容')) return 'outline';
+  if (heading.includes('核心要义') || heading.includes('主旨') || heading.includes('要义')) return 'core';
+  if (heading.includes('脉络') || heading.includes('内容') || heading.includes('要点')) return 'outline';
   if (heading.includes('概念') || heading.includes('术语')) return 'terms';
   return 'general';
+};
+
+/**
+ * Analyzes section markdown content and returns the number of primary items.
+ */
+const getSectionItemCount = (kind: 'core' | 'outline' | 'terms' | 'general', content: string): number => {
+  if (!content) return 0;
+  const lines = content.split('\n');
+  if (kind === 'outline') {
+    const count = lines.filter((l) => /^\s*\d+\.\s+/.test(l)).length;
+    if (count > 0) return count;
+  }
+  if (kind === 'terms' || kind === 'core') {
+    const count = lines.filter((l) => /^\s*[-*+]\s+/.test(l)).length;
+    if (count > 0) return count;
+  }
+  const genericListCount = lines.filter((l) => /^\s*([*-+]|\d+\.)\s+/.test(l)).length;
+  if (genericListCount > 0) return genericListCount;
+  const paragraphs = content.split(/\n\s*\n/).filter((p) => p.trim().length > 0);
+  return paragraphs.length > 1 ? paragraphs.length : 0;
+};
+
+/**
+ * Produces a human-readable badge text for the count of items in a section.
+ */
+const getSectionCountBadge = (kind: 'core' | 'outline' | 'terms' | 'general', count: number): string | null => {
+  if (count <= 0) return null;
+  switch (kind) {
+    case 'core':
+      return `${count} 条要点`;
+    case 'outline':
+      return `${count} 个要点`;
+    case 'terms':
+      return `${count} 个术语`;
+    default:
+      return `${count} 项`;
+  }
 };
 
 /**
@@ -122,8 +167,36 @@ const getSectionKind = (heading: string): 'core' | 'outline' | 'terms' | 'genera
  * Type size and leading are set by the surrounding `.summary-markdown-wrapper`
  * rules in globals.css (same place the summary's reading typography lives).
  */
-export function SummaryBody({ content, streaming = false }: { content: string; streaming?: boolean }) {
+export function SummaryBody({
+  content,
+  streaming = false,
+  title,
+}: {
+  content: string;
+  streaming?: boolean;
+  title?: string;
+}) {
   const { preface, sections } = useMemo(() => parseSummarySections(content), [content]);
+  const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    // Reset collapse state when content switches (e.g. user moved to another chapter)
+    setOpenMap({});
+  }, [content]);
+
+  const isAllOpen = useMemo(() => {
+    if (sections.length === 0) return true;
+    return sections.every((s) => openMap[s.heading] ?? true);
+  }, [sections, openMap]);
+
+  const toggleAll = useCallback(() => {
+    const nextState = !isAllOpen;
+    const nextMap: Record<string, boolean> = {};
+    for (const s of sections) {
+      nextMap[s.heading] = nextState;
+    }
+    setOpenMap(nextMap);
+  }, [isAllOpen, sections]);
 
   if (sections.length === 0) {
     return (
@@ -135,35 +208,90 @@ export function SummaryBody({ content, streaming = false }: { content: string; s
 
   return (
     <div data-testid="summary-body" className="summary-accordion-group">
+      {sections.length > 1 && (
+        <div className="summary-accordion-toolbar">
+          {title && (
+            <Text
+              type="supporting"
+              color="secondary"
+              weight="medium"
+              maxLines={1}
+              style={{
+                fontSize: 'calc(var(--font-size-base) * 0.75)',
+                opacity: 0.85,
+                minWidth: 0,
+                flex: 1,
+              }}
+              data-testid="summary-toolbar-title"
+            >
+              {title}
+            </Text>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            data-testid="summary-toggle-all"
+            icon={isAllOpen ? <FoldVertical size={13} aria-hidden /> : <UnfoldVertical size={13} aria-hidden />}
+            label={isAllOpen ? '全部折叠' : '全部展开'}
+            onClick={toggleAll}
+            style={{
+              height: '24px',
+              padding: '0 6px',
+              fontSize: 'calc(var(--font-size-base) * 0.75)',
+              flexShrink: 0,
+              marginInlineStart: 'auto',
+            }}
+          />
+        </div>
+      )}
+
       {preface && (
-        <div style={{ marginBottom: 'var(--spacing-3)' }}>
+        <div className="summary-preface-card">
           <MarkdownView content={preface} />
         </div>
       )}
+
       {sections.map((section, idx) => {
         const isLast = idx === sections.length - 1;
         const kind = getSectionKind(section.heading);
+        const isOpen = streaming && isLast ? true : (openMap[section.heading] ?? true);
+        const count = getSectionItemCount(kind, section.content);
+        const countBadge = getSectionCountBadge(kind, count);
+
         return (
           <Collapsible
             key={section.heading}
-            defaultIsOpen={true}
+            isOpen={isOpen}
+            onOpenChange={(next) =>
+              setOpenMap((prev) => ({ ...prev, [section.heading]: next }))
+            }
             className={`summary-accordion-item summary-section-${kind}`}
             data-testid={`summary-accordion-${section.id}`}
             trigger={
-              <Text
-                weight="semibold"
-                style={{
-                  // 小标题比总结正文（14px）大半档，层级靠字号而不是分割线。
-                  fontSize: 'calc(var(--font-size-base) * 0.9375)',
-                  lineHeight: 'calc(var(--text-body-leading) * 1.05)',
-                  color: 'var(--color-text-primary)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                }}
-              >
-                {section.heading}
-              </Text>
+              <div className="summary-section-trigger-row">
+                <Text
+                  weight="semibold"
+                  style={{
+                    fontSize: 'calc(var(--font-size-base) * 0.9375)',
+                    lineHeight: 'calc(var(--text-body-leading) * 1.05)',
+                    color: 'var(--color-text-primary)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  {section.heading}
+                </Text>
+                {countBadge && (
+                  <span style={{ pointerEvents: 'none', display: 'inline-flex' }}>
+                    <Token
+                      size="sm"
+                      color="gray"
+                      label={countBadge}
+                    />
+                  </span>
+                )}
+              </div>
             }
           >
             <div className={`summary-accordion-content summary-content-${kind}`}>
@@ -448,7 +576,7 @@ export default function SummaryTab({ store = useSummaryStore }: SummaryTabProps 
 
         <div className="summary-markdown-wrapper">
           {content ? (
-            <SummaryBody content={content} streaming />
+            <SummaryBody content={content} streaming title={scopeTitle} />
           ) : (
             <Text type="supporting" color="secondary">
               正在生成总结，请稍候…
@@ -541,7 +669,7 @@ export default function SummaryTab({ store = useSummaryStore }: SummaryTabProps 
         {/* Content card is only displayed when there is summary content */}
         {content ? (
           <div className="summary-markdown-wrapper">
-            <SummaryBody content={content} />
+            <SummaryBody content={content} title={scopeTitle} />
           </div>
         ) : null}
       </div>
@@ -626,7 +754,7 @@ export default function SummaryTab({ store = useSummaryStore }: SummaryTabProps 
         }
       />
       <div className="summary-markdown-wrapper">
-        <SummaryBody content={content} />
+        <SummaryBody content={content} title={scopeTitle} />
       </div>
     </div>
   );

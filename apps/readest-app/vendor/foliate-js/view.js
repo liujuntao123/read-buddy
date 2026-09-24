@@ -267,6 +267,12 @@ export class View extends HTMLElement {
         this.renderer.setAttribute('exportparts', 'head,foot,filter')
         this.#applyRendererConfig()
         this.renderer.addEventListener('load', e => this.#onLoad(e.detail))
+        // readest-plus: the paginator throws a chapter's document away on every
+        // chapter change and whenever the continuous flow pushes it out of the
+        // live window. The event is dispatched inside the renderer's shadow root,
+        // so it has to be forwarded like `load` — otherwise nothing outside could
+        // release what it wired to that document (selection capture, 划线 marks).
+        this.renderer.addEventListener('unload', e => this.#emit('unload', e.detail))
         this.renderer.addEventListener('relocate', e => this.#onRelocate(e.detail))
         this.renderer.addEventListener('create-overlayer', e =>
             e.detail.attach(this.#createOverlayer(e.detail)))

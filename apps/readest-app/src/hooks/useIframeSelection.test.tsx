@@ -58,23 +58,35 @@ describe('useIframeSelection', () => {
     expect(result.current.selection).toBeNull();
   });
 
-  it('switches documents on attach, detaching the previous one', () => {
+  it('keeps every attached document live until its own detach runs', () => {
+    // Continuous scroll shows several chapters at once, so attaching a second
+    // document must not silence the first; the chapter that goes away says so
+    // through the detach the engine's `unload` hands back.
     const read = vi.fn(() => ({ text: 'abc', rect: new DOMRect(0, 0, 1, 1) }));
     const { result } = renderHook(() => useIframeSelection(read));
     const first = makeDoc();
     const second = makeDoc();
 
-    act(() => result.current.attach(first));
+    let detachFirst: () => void = () => {};
+    act(() => {
+      detachFirst = result.current.attach(first);
+    });
     act(() => result.current.attach(second));
 
-    read.mockClear();
     act(() => {
-      first.dispatchEvent(new Event('mouseup')); // old doc is detached
+      second.dispatchEvent(new Event('keyup'));
+    });
+    expect(read).toHaveBeenCalledWith(second);
+
+    read.mockClear();
+    act(() => detachFirst());
+    act(() => {
+      first.dispatchEvent(new Event('mouseup')); // detached chapter stays quiet
     });
     expect(read).not.toHaveBeenCalled();
 
     act(() => {
-      second.dispatchEvent(new Event('keyup'));
+      second.dispatchEvent(new Event('mouseup'));
     });
     expect(read).toHaveBeenCalledWith(second);
   });

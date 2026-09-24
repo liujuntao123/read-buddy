@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';import SelectionToolbar, {
 } from './SelectionToolbar';
 import type { QuickAction } from '@/services/chat/quickActions';
 import type { TextSelection } from '@/hooks/useTextSelection';
+import type { HighlightTarget } from '@/hooks/useReaderHighlights';
 
 const rect = (top: number, left: number, width: number, height = 20): DOMRect =>
   ({
@@ -128,5 +129,106 @@ describe('SelectionToolbar', () => {
     render(<SelectionToolbar selection={makeSelection()} onAction={() => {}} onClose={onClose} />);
     fireEvent.keyDown(screen.getByTestId('selection-toolbar'), { key: 'Escape' });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The second subject: a 划线 the reader clicked in the page. Same toolbar, same
+   * four model actions over the marked passage — only 划线 becomes 取消划线.
+   */
+  describe('a clicked 划线', () => {
+    const target = (quote = '划过的一句'): HighlightTarget => ({
+      highlight: {
+        id: 'book:h_1',
+        bookHash: 'book',
+        nodeIndex: 0,
+        nodeTitle: '第一章',
+        spineIndex: 0,
+        quote,
+        createdAt: 1,
+      },
+      rect: rect(300, 200, 80),
+    });
+
+    it('offers 取消划线 in place of 划线, and hands over the clicked row', () => {
+      const onUnhighlight = vi.fn();
+      const clicked = target();
+      render(
+        <SelectionToolbar
+          selection={null}
+          onAction={() => {}}
+          clickedHighlight={clicked}
+          onUnhighlight={onUnhighlight}
+          onClose={() => {}}
+        />,
+      );
+
+      expect(screen.queryByTestId('toolbar-highlight')).toBeNull();
+      const button = screen.getByTestId('toolbar-unhighlight');
+      expect(button.textContent).toContain('取消划线');
+      expect(button.querySelector('svg')).not.toBeNull();
+
+      fireEvent.click(button);
+      expect(onUnhighlight).toHaveBeenCalledWith(clicked);
+    });
+
+    it('acts on the marked passage with the very same four model actions', () => {
+      const onAction = vi.fn();
+      render(
+        <SelectionToolbar
+          selection={null}
+          onAction={onAction}
+          clickedHighlight={target('被划过的原句')}
+          onUnhighlight={() => {}}
+          onClose={() => {}}
+        />,
+      );
+
+      const expected: Array<[QuickAction, string]> = [
+        ['explain', '被划过的原句'],
+        ['translate', '被划过的原句'],
+        ['ask', '被划过的原句'],
+        ['summarize', '被划过的原句'],
+      ];
+      const labels: Record<string, string> = {
+        explain: '解释',
+        translate: '翻译',
+        ask: '追问',
+        summarize: '提炼',
+      };
+      expected.forEach(([action]) => {
+        fireEvent.click(screen.getByRole('button', { name: labels[action] }));
+      });
+      expect(onAction.mock.calls).toEqual(expected);
+    });
+
+    it('renders nothing when there is neither a selection nor a clicked mark', () => {
+      const { container } = render(
+        <SelectionToolbar
+          selection={null}
+          onAction={() => {}}
+          clickedHighlight={null}
+          onUnhighlight={() => {}}
+          onClose={() => {}}
+        />,
+      );
+      expect(container.firstChild).toBeNull();
+    });
+
+    it('lets a live selection win: marking beats unmarking', () => {
+      const selection = makeSelection('新选中的一段');
+      render(
+        <SelectionToolbar
+          selection={selection}
+          onAction={() => {}}
+          onHighlight={() => {}}
+          clickedHighlight={target()}
+          onUnhighlight={() => {}}
+          onClose={() => {}}
+        />,
+      );
+      const toolbar = screen.getByTestId('selection-toolbar');
+      expect(toolbar.getAttribute('data-mode')).toBe('selection');
+      expect(screen.getByTestId('toolbar-highlight').textContent).toContain('划线');
+    });
   });
 });

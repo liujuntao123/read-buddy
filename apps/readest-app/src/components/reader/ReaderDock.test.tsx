@@ -66,6 +66,7 @@ const makeEngine = (
       loaders.add(cb);
       return () => loaders.delete(cb);
     }),
+    onUnload: vi.fn(() => () => {}),
     getSpineText: vi.fn(async () => ''),
     getCachedSpineHtml: vi.fn(() => ''),
     getCachedSpineText: vi.fn(() => ''),

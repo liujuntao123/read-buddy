@@ -376,7 +376,12 @@ class View {
         }
     }
     expand() {
-        const { documentElement } = this.document
+        // readest-plus: a view whose iframe has been removed (a page turn, a
+        // chapter dropped out of the continuous flow) still gets late callbacks —
+        // `doc.fonts.ready` above all. Its document is gone, so there is nothing
+        // to measure and no reason to throw.
+        const { documentElement } = this.document ?? {}
+        if (!documentElement) return
         if (this.#column) {
             const side = this.#vertical ? 'height' : 'width'
             const otherSide = this.#vertical ? 'width' : 'height'
@@ -441,6 +446,9 @@ export class Paginator extends HTMLElement {
     static observedAttributes = [
         'flow', 'gap', 'margin',
         'max-inline-size', 'max-block-size', 'max-column-count',
+        // readest-plus: continuous scrolled reading (several chapters stacked in
+        // one scroll flow). See `#continuous*` below.
+        'continuous',
     ]
     #root = this.attachShadow({ mode: 'open' })
     #observer = new ResizeObserver(() => this.render())
@@ -465,6 +473,17 @@ export class Paginator extends HTMLElement {
     #touchState
     #touchScrolled
     #lastVisibleRange
+    // readest-plus: continuous scrolled mode state. `#entries` are the live
+    // chapters, in document order and contiguous; `#stack` is the single flex
+    // column they live in inside the (still natively scrolling) `#container`.
+    #stack = null
+    #entries = []
+    #stackHeight = 0
+    #materializing = false
+    #scrollFrame = 0
+    #anchorIndex = -1
+    /** In-flight chapter loads, so one index can never be mounted twice. */
+    #loading = new Map()
     constructor() {
         super()
         this.#root.innerHTML = `<style>
@@ -580,10 +599,17 @@ export class Paginator extends HTMLElement {
         this.#footer = this.#root.getElementById('footer')
 
         this.#observer.observe(this.#container)
-        this.#container.addEventListener('scroll', () => this.dispatchEvent(new Event('scroll')))
+        this.#container.addEventListener('scroll', () => {
+            this.dispatchEvent(new Event('scroll'))
+            // readest-plus: keep the continuous flow fed while the reader scrolls.
+            // A frame's worth of work at most; the relocate event stays on the
+            // debounced listener below.
+            if (this.continuous) this.#continuousOnScroll()
+        })
         this.#container.addEventListener('scroll', debounce(() => {
             if (this.scrolled) {
                 if (this.#justAnchored) this.#justAnchored = false
+                else if (this.continuous) this.#continuousAfterScroll('scroll')
                 else this.#afterScroll('scroll')
             }
         }, 250))
@@ -644,7 +670,7 @@ export class Paginator extends HTMLElement {
         })
 
         this.#mediaQueryListener = () => {
-            if (!this.#view) return
+            if (!this.#view?.document?.defaultView) return
             this.#background.style.background = getBackground(this.#view.document)
         }
         this.#mediaQuery.addEventListener('change', this.#mediaQueryListener)
@@ -653,6 +679,12 @@ export class Paginator extends HTMLElement {
         switch (name) {
             case 'flow':
                 this.render()
+                break
+            case 'continuous':
+                // readest-plus: entering/leaving the continuous flow rebuilds (or
+                // dismantles) the stack. `render()` re-renders whatever is left.
+                if (this.continuous) this.#continuousInit()
+                else this.#continuousTeardown()
                 break
             case 'gap': {
                 const val = typeof value === 'string' && value.endsWith('%') ? value : `${parseFloat(value) || 7}%`
@@ -716,6 +748,405 @@ export class Paginator extends HTMLElement {
         })
         this.#container.append(this.#view.element)
         return this.#view
+    }
+
+    // ---------------------------------------------------------------------
+    // readest-plus: continuous scrolled reading
+    //
+    // Upstream's `flow="scrolled"` stacks exactly one section in the scroll
+    // container: reaching the end of a chapter is a wall, and crossing the
+    // boundary is a page turn that throws the document away. Continuous mode
+    // keeps a small window of chapters mounted in one flex column inside the
+    // same natively-scrolling `#container`, so scrolling simply continues into
+    // the next chapter — and "go to chapter N" becomes what it should be in a
+    // flowing text: a scroll to that chapter's (or anchor's) position.
+    //
+    // Nothing here runs unless the `continuous` attribute is set: the
+    // paginated and plain-scrolled paths are untouched.
+    // ---------------------------------------------------------------------
+
+    /** How many viewports of content are kept loaded ahead of the reader. */
+    static #PREFETCH_SCREENS = 1.5
+    /** Live chapters at most: unbounded iframes would grow without limit. */
+    static #MAX_LIVE_SECTIONS = 5
+    /** Materialization steps per pass, so one scroll cannot load a whole book. */
+    static #MAX_FILL_STEPS = 6
+
+    /** Scrolled **and** continuous. Both halves matter: leave one and the flow ends. */
+    get continuous() {
+        return this.scrolled && this.hasAttribute('continuous')
+    }
+    #isContinuous() {
+        return this.continuous
+    }
+    #continuousStack() {
+        if (!this.#stack) {
+            this.#stack = document.createElement('div')
+            Object.assign(this.#stack.style, {
+                display: 'flex',
+                flexDirection: 'column',
+                width: '100%',
+                // The reader's eye must stay on the same text when a chapter is
+                // prepended above it; browser scroll anchoring would fight the
+                // manual `scrollTop` compensation below.
+                overflowAnchor: 'none',
+            })
+            this.#container.append(this.#stack)
+        }
+        return this.#stack
+    }
+    /** Adopt the already-rendered view into the stack (entering continuous mode). */
+    #continuousInit() {
+        const stack = this.#continuousStack()
+        // Never adopt while a chapter is being loaded: `#view` may already point at
+        // the view that load is about to register, and adopting it here would give
+        // one chapter two entries (see `#continuousLoad`).
+        if (this.#entries.length === 0 && this.#view && this.#loading.size === 0) {
+            stack.append(this.#view.element)
+            this.#entries = [{
+                index: this.#index,
+                view: this.#view,
+                element: this.#view.element,
+                height: 0,
+                offset: 0,
+            }]
+            this.#anchorIndex = this.#index
+        }
+        this.#measure()
+        void this.#continuousFill()
+    }
+    /** Dismantle the stack, keeping only the chapter the reader is on. */
+    #continuousTeardown() {
+        if (!this.#stack) return
+        const current = this.#continuousCurrent()
+        const keep = current ?? this.#entries[0] ?? null
+        for (const entry of [...this.#entries]) {
+            if (entry === keep) continue
+            this.#dropEntry(entry)
+        }
+        if (keep) {
+            this.#container.append(keep.element)
+            this.#view = keep.view
+            this.#index = keep.index
+        }
+        this.#stack.remove()
+        this.#stack = null
+        this.#stackHeight = 0
+        this.render()
+    }
+    /** Record every live chapter's height and its offset inside the stack. */
+    #measure() {
+        let offset = 0
+        for (const entry of this.#entries) {
+            entry.offset = offset
+            entry.height = entry.view.document
+                ? entry.element.getBoundingClientRect().height
+                : 0
+            offset += entry.height
+        }
+        this.#stackHeight = offset
+    }
+    /** The chapter the viewport's top edge is in (the reader's position). */
+    #continuousCurrent() {
+        if (!this.#entries.length) return null
+        const top = this.#container.scrollTop + 1
+        return this.#entries.find(entry => top < entry.offset + entry.height)
+            ?? this.#entries[this.#entries.length - 1]
+    }
+    /** Throw one chapter's document away (and tell the world it is gone). */
+    #removeEntry(entry) {
+        this.dispatchEvent(new CustomEvent('unload', {
+            detail: { doc: entry.view.document, index: entry.index },
+        }))
+        entry.view.destroy?.()
+        entry.element.remove()
+        this.sections?.[entry.index]?.unload?.()
+        // `#view` must never outlive the element it points at.
+        if (this.#view === entry.view) this.#view = null
+    }
+    /** Drop one chapter from the flow. */
+    #dropEntry(entry) {
+        const index = this.#entries.indexOf(entry)
+        if (index >= 0) this.#entries.splice(index, 1)
+        this.#removeEntry(entry)
+    }
+    /**
+     * Load one section as a new view inside the stack.
+     *
+     * Idempotent per index: two callers can ask for the same chapter in the same
+     * breath (the initial navigation and the fill it triggers, a scroll and a
+     * jump), and a second view for one section would be a duplicate the whole
+     * offset model cannot survive — the chapter would be counted twice while the
+     * container scrolls it once.
+     *
+     * `prepend` inserts it above the current chapters and compensates the scroll
+     * position by exactly the height it added, so the text under the reader's eye
+     * does not move.
+     */
+    async #continuousLoad(index, { prepend = false } = {}) {
+        if (!this.#isContinuous() || !this.#canGoToIndex(index)) return null
+        const existing = this.#entries.find(entry => entry.index === index)
+        if (existing) return existing
+        const inFlight = this.#loading.get(index)
+        if (inFlight) return inFlight
+        const task = this.#loadEntry(index, prepend)
+        this.#loading.set(index, task)
+        try {
+            return await task
+        } finally {
+            this.#loading.delete(index)
+        }
+    }
+    async #loadEntry(index, prepend) {
+        const section = this.sections[index]
+        if (!section) return null
+        let src
+        try {
+            src = await section.load()
+        } catch (e) {
+            console.warn(e)
+            return null
+        }
+        if (!src || !this.#isContinuous()) return null
+
+        const view = new View({
+            container: this,
+            onExpand: () => this.#continuousOnExpand(index),
+        })
+        const entry = { index, view, element: view.element, height: 0, offset: 0 }
+        const stack = this.#continuousStack()
+        if (prepend) stack.prepend(entry.element)
+        else stack.append(entry.element)
+
+        const beforeRender = this.#beforeRender.bind(this)
+        const afterLoad = doc => {
+            if (doc.head) {
+                const $styleBefore = doc.createElement('style')
+                doc.head.prepend($styleBefore)
+                const $style = doc.createElement('style')
+                doc.head.append($style)
+                this.#styleMap.set(doc, [$styleBefore, $style])
+                this.#applyStylesTo(doc)
+            }
+        }
+        const scrollTopBefore = this.#container.scrollTop
+        try {
+            await view.load(src, afterLoad, beforeRender)
+        } catch (e) {
+            console.warn(e)
+            view.destroy?.()
+            entry.element.remove()
+            this.sections[index]?.unload?.()
+            return null
+        }
+        // The window may have been rebuilt while this chapter was loading (a jump
+        // to a far chapter). Its element is already detached; adopting it now
+        // would add a ghost entry that is measured but never laid out.
+        if (!stack.contains(entry.element)) {
+            view.destroy?.()
+            entry.element.remove()
+            this.sections[index]?.unload?.()
+            return null
+        }
+        // The entry joins the flow only once it has a height: a half-loaded view
+        // in `#entries` would briefly report an offset of 0 and make the reader's
+        // position jump.
+        this.#entries.push(entry)
+        this.#entries.sort((a, b) => a.index - b.index)
+        this.#measure()
+        // Prepend compensation: exactly the height that was added above.
+        if (prepend) this.#container.scrollTop = scrollTopBefore + entry.height
+        if (entry.index === this.#index) this.#view = view
+
+        this.dispatchEvent(new CustomEvent('load', {
+            detail: { doc: view.document, index },
+        }))
+        this.dispatchEvent(new CustomEvent('create-overlayer', {
+            detail: {
+                doc: view.document, index,
+                attach: overlayer => view.overlayer = overlayer,
+            },
+        }))
+        return entry
+    }
+    /** Keep one viewport and a half of chapters loaded on both sides. */
+    async #continuousFill() {
+        if (!this.#isContinuous() || this.#materializing || !this.#entries.length) return
+        this.#materializing = true
+        const prefetch = Paginator.#PREFETCH_SCREENS
+        try {
+            for (let step = 0; step < Paginator.#MAX_FILL_STEPS; step += 1) {
+                const { scrollTop, clientHeight } = this.#container
+                this.#measure()
+                const below = this.#stackHeight - (scrollTop + clientHeight)
+                const last = this.#entries[this.#entries.length - 1]
+                if (below >= clientHeight * prefetch) break
+                if (!last) break
+                const next = this.#continuousNeighbor(last.index, 1)
+                if (next === null) break
+                if (!await this.#continuousLoad(next)) break
+                this.#continuousTrim()
+            }
+            for (let step = 0; step < Paginator.#MAX_FILL_STEPS; step += 1) {
+                const { scrollTop, clientHeight } = this.#container
+                const first = this.#entries[0]
+                if (scrollTop > clientHeight * prefetch) break
+                if (!first) break
+                const previous = this.#continuousNeighbor(first.index, -1)
+                if (previous === null) break
+                if (!await this.#continuousLoad(previous, { prepend: true })) break
+                this.#continuousTrim()
+            }
+        } finally {
+            this.#materializing = false
+        }
+    }
+    /**
+     * The next chapter of the **reading flow** from `index` in `dir`, or null.
+     *
+     * `linear="no"` marks auxiliary content (a cover page, a pop-up footnote, an
+     * ad) that the paginated reader deliberately steps over — `#adjacentIndex`
+     * owns that rule there. The flow has to agree, or a reader scrolling on would
+     * hit content neither reader was meant to read as part of the book.
+     */
+    #continuousNeighbor(index, dir) {
+        for (let candidate = index + dir; this.#canGoToIndex(candidate); candidate += dir)
+            if (this.sections[candidate]?.linear !== 'no') return candidate
+        return null
+    }
+    /** Drop chapters from whichever end is farther from the reading position. */
+    #continuousTrim() {
+        const current = this.#continuousCurrent()
+        while (this.#entries.length > Paginator.#MAX_LIVE_SECTIONS) {
+            const first = this.#entries[0]
+            const last = this.#entries[this.#entries.length - 1]
+            if (!first || !last) break
+            const distance = entry => Math.abs(entry.index - (current?.index ?? this.#index))
+            const dropFirst = first !== current
+                && (last === current || distance(first) >= distance(last))
+            const entry = dropFirst ? first : (last !== current ? last : null)
+            if (!entry) break
+            const wasAbove = current ? entry.index < current.index : false
+            const droppedHeight = entry.height
+            this.#dropEntry(entry)
+            if (wasAbove) this.#container.scrollTop -= droppedHeight
+            this.#measure()
+        }
+    }
+    #continuousOnScroll() {
+        if (this.#scrollFrame) return
+        this.#scrollFrame = requestAnimationFrame(() => {
+            this.#scrollFrame = 0
+            void this.#continuousFill()
+        })
+    }
+    /**
+     * A live chapter changed height (fonts, images, a typography change). Every
+     * offset moves; when it is the chapter the reader is looking at, the anchored
+     * range is put back where it was.
+     */
+    #continuousOnExpand(index) {
+        this.#measure()
+        if (index !== this.#anchorIndex) return
+        const entry = this.#entries.find(candidate => candidate.index === index)
+        const anchor = this.#anchor
+        if (!entry || !anchor) return
+        const rects = uncollapse(anchor)?.getClientRects?.()
+        if (!rects?.length) return
+        const rect = Array.from(rects).find(r => r.width > 0 && r.height > 0) ?? rects[0]
+        if (!rect) return
+        this.#container.scrollTop = entry.offset + rect.top
+    }
+    /** The relocate detail for the viewport's current chapter. */
+    #continuousAfterScroll(reason) {
+        const entry = this.#continuousCurrent()
+        if (!entry?.view.document) return
+        const size = this.size
+        const local = Math.max(0, this.#container.scrollTop - entry.offset)
+        const range = getVisibleRange(entry.view.document,
+            local + this.#margin, local + size - this.#margin, this.#getRectMapper())
+        this.#lastVisibleRange = range
+        // Don't set a new anchor if relocation was to scroll to an anchor (same
+        // rule as `#afterScroll`).
+        if (reason !== 'selection' && reason !== 'navigation' && reason !== 'anchor')
+            this.#anchor = range
+        else this.#justAnchored = true
+        this.#index = entry.index
+        this.#anchorIndex = entry.index
+        this.#view = entry.view
+        const detail = { reason, range, index: entry.index }
+        detail.fraction = entry.height > 0
+            ? Math.max(0, Math.min(1, local / entry.height))
+            : 0
+        this.dispatchEvent(new CustomEvent('relocate', { detail }))
+    }
+    /** Scroll to an absolute offset inside the stack (clamped to its extent). */
+    #continuousScrollTo(offset, reason, smooth) {
+        const element = this.#container
+        const max = Math.max(0, this.#stackHeight - this.size)
+        const target = Math.max(0, Math.min(max, offset))
+        const apply = () => {
+            element.scrollTop = target
+            this.#continuousAfterScroll(reason)
+            this.#continuousOnScroll()
+        }
+        if (element.scrollTop === target) return Promise.resolve(apply())
+        if ((reason === 'snap' || smooth) && this.hasAttribute('animated'))
+            return animate(element.scrollTop, target, 300, easeOutQuad,
+                x => element.scrollTop = x).then(apply)
+        return Promise.resolve(apply())
+    }
+    /** Scroll to an anchor (fraction, Element or Range) inside one live chapter. */
+    #continuousScrollToAnchor(entry, anchor, reason = 'anchor') {
+        this.#anchor = anchor
+        this.#anchorIndex = entry.index
+        const rects = uncollapse(anchor)?.getClientRects?.()
+        if (rects?.length) {
+            const rect = Array.from(rects).find(r => r.width > 0 && r.height > 0) ?? rects[0]
+            if (!rect) return Promise.resolve()
+            // `#getRectMapper` maps a rect inside the chapter's iframe viewport into
+            // the view element's own coordinates (it adds the page margin); the
+            // stack offset is what the container scrolls in.
+            const offset = entry.offset + this.#getRectMapper()(rect).left - this.#margin
+            return this.#continuousScrollTo(offset, reason)
+        }
+        if (typeof anchor === 'number')
+            return this.#continuousScrollTo(entry.offset + anchor * entry.height, reason)
+        return Promise.resolve()
+    }
+    /**
+     * Continuous navigation: an already-loaded chapter is reached by **scrolling
+     * to it** (that is the whole point — 章节跳转 == 滚动到锚点); a chapter that is
+     * not mounted yet replaces the window.
+     */
+    async #continuousGoTo({ index, anchor, select }) {
+        if (!this.#canGoToIndex(index)) return
+        let entry = this.#entries.find(candidate => candidate.index === index)
+        if (!entry) {
+            for (const stale of [...this.#entries]) this.#dropEntry(stale)
+            this.#stackHeight = 0
+            this.#index = index
+            entry = await this.#continuousLoad(index)
+        }
+        if (!entry) return
+        this.#index = index
+        this.#view = entry.view
+        const resolved = (typeof anchor === 'function' ? anchor(entry.view.document) : anchor) ?? 0
+        await this.#continuousScrollToAnchor(entry, resolved,
+            select ? 'selection' : 'navigation')
+        void this.#continuousFill()
+    }
+    /** Repaint a chapter's injected stylesheet from the current reader styles. */
+    #applyStylesTo(doc) {
+        const $$styles = this.#styleMap.get(doc)
+        if (!$$styles) return
+        const [$beforeStyle, $style] = $$styles
+        const styles = this.#styles
+        if (Array.isArray(styles)) {
+            const [beforeStyle, style] = styles
+            $beforeStyle.textContent = beforeStyle
+            $style.textContent = style
+        } else $style.textContent = styles ?? ''
     }
     #beforeRender({ vertical, rtl, background }) {
         this.#vertical = vertical
@@ -794,7 +1225,25 @@ export class Paginator extends HTMLElement {
         return { height, width, margin, gap, columnWidth }
     }
     render() {
-        if (!this.isConnected || !this.#view || !this.#view.document?.documentElement) return
+        if (!this.isConnected) return
+        // readest-plus: every live chapter shares one relayout in continuous mode
+        // (a typography or column-width change must reach all of them).
+        if (this.#isContinuous()) {
+            // Idempotent: adopts the view that is already rendered when the mode
+            // was entered before anything was drawn.
+            this.#continuousInit()
+            if (!this.#entries.length) return
+            const layout = this.#beforeRender({ vertical: this.#vertical, rtl: this.#rtl })
+            const anchorIndex = this.#anchorIndex
+            for (const entry of this.#entries) entry.view.render(layout)
+            this.#measure()
+            // Each view's own `expand()` re-anchors the reader's chapter; this is
+            // the floor for the case where none of them did.
+            const anchorEntry = this.#entries.find(entry => entry.index === anchorIndex)
+            if (anchorEntry) this.#continuousScrollToAnchor(anchorEntry, this.#anchor, 'anchor')
+            return
+        }
+        if (!this.#view || !this.#view.document?.documentElement) return
         this.#view.render(this.#beforeRender({
             vertical: this.#vertical,
             rtl: this.#rtl,
@@ -1012,9 +1461,14 @@ export class Paginator extends HTMLElement {
     }
     async #display(promise) {
         const { index, src, anchor, onLoad, select } = await promise
+        const previous = this.#view ? { doc: this.#view.document, index: this.#index } : null
         this.#index = index
         const hasFocus = this.#view?.document?.hasFocus()
         if (src) {
+            // readest-plus: the replaced chapter's document is going away; say so,
+            // or every listener wired to it (selection capture, 划线 marks) would
+            // keep pointing at a detached document.
+            if (previous?.doc) this.dispatchEvent(new CustomEvent('unload', { detail: previous }))
             const view = this.#createView()
             const afterLoad = doc => {
                 if (doc.head) {
@@ -1023,6 +1477,7 @@ export class Paginator extends HTMLElement {
                     const $style = doc.createElement('style')
                     doc.head.append($style)
                     this.#styleMap.set(doc, [$styleBefore, $style])
+                    this.#applyStylesTo(doc)
                 }
                 onLoad?.({ doc, index })
             }
@@ -1044,6 +1499,9 @@ export class Paginator extends HTMLElement {
         return index >= 0 && index <= this.sections.length - 1
     }
     async #goTo({ index, anchor, select}) {
+        // readest-plus: in the continuous flow a chapter is reached by scrolling
+        // to it; only a chapter that is not mounted yet rebuilds the window.
+        if (this.#isContinuous()) return this.#continuousGoTo({ index, anchor, select })
         if (index === this.#index) await this.#display({ index, anchor, select })
         else {
             const oldIndex = this.#index
@@ -1068,6 +1526,12 @@ export class Paginator extends HTMLElement {
     }
     #scrollPrev(distance) {
         if (!this.#view) return true
+        // readest-plus: continuous flow — a page turn is a scroll, never a jump to
+        // another chapter (the chapters are already one flow).
+        if (this.#isContinuous()) {
+            const target = this.start - (distance ?? this.size)
+            return this.#continuousScrollTo(target, 'page').then(() => false)
+        }
         if (this.scrolled) {
             if (this.start > 0) return this.#scrollTo(
                 Math.max(0, this.start - (distance ?? this.size)), null, true)
@@ -1079,6 +1543,10 @@ export class Paginator extends HTMLElement {
     }
     #scrollNext(distance) {
         if (!this.#view) return true
+        if (this.#isContinuous()) {
+            const target = this.start + (distance ?? this.size)
+            return this.#continuousScrollTo(target, 'page').then(() => false)
+        }
         if (this.scrolled) {
             if (this.viewSize - this.end > 2) return this.#scrollTo(
                 Math.min(this.viewSize, distance ? this.start + distance : this.end), null, true)
@@ -1132,6 +1600,13 @@ export class Paginator extends HTMLElement {
         return this.goTo({ index })
     }
     getContents() {
+        // readest-plus: every live chapter is a content, so overlays, CFI lookups
+        // and search can find the one they belong to.
+        if (this.#isContinuous()) return this.#entries.map(entry => ({
+            index: entry.index,
+            overlayer: entry.view.overlayer,
+            doc: entry.view.document,
+        }))
         if (this.#view) return [{
             index: this.#index,
             overlayer: this.#view.overlayer,
@@ -1141,21 +1616,32 @@ export class Paginator extends HTMLElement {
     }
     setStyles(styles) {
         this.#styles = styles
-        const $$styles = this.#styleMap.get(this.#view?.document)
-        if (!$$styles) return
-        const [$beforeStyle, $style] = $$styles
-        if (Array.isArray(styles)) {
-            const [beforeStyle, style] = styles
-            $beforeStyle.textContent = beforeStyle
-            $style.textContent = style
-        } else $style.textContent = styles
-
-        // NOTE: needs `requestAnimationFrame` in Chromium
-        requestAnimationFrame(() =>
-            this.#background.style.background = getBackground(this.#view.document))
-
-        // needed because the resize observer doesn't work in Firefox
-        this.#view?.document?.fonts?.ready?.then(() => this.#view.expand())
+        // readest-plus: in continuous mode the stylesheet has to reach every live
+        // chapter, not just the one `#view` happens to point at.
+        const views = this.#isContinuous()
+            ? this.#entries.map(entry => entry.view)
+            : (this.#view ? [this.#view] : [])
+        for (const view of views) {
+            const doc = view.document
+            if (!doc) continue
+            this.#applyStylesTo(doc)
+            // needed because the resize observer doesn't work in Firefox
+            doc.fonts?.ready?.then(() => {
+                // A chapter can be gone by the time its fonts settle (a page turn,
+                // the continuous flow dropping it): expanding a detached document
+                // throws, and nothing is left to expand.
+                if (view.document === doc) view.expand()
+            })
+        }
+        // NOTE: needs `requestAnimationFrame` in Chromium — and the document it
+        // reads must still be alive when the frame runs, which is why it is
+        // captured (and re-checked) here rather than read inside the callback.
+        const primary = this.#view
+        if (!primary?.document) return
+        requestAnimationFrame(() => {
+            const doc = primary.document
+            if (doc?.defaultView) this.#background.style.background = getBackground(doc)
+        })
     }
     focusView() {
         this.#view.document.defaultView.focus()
@@ -1169,6 +1655,13 @@ export class Paginator extends HTMLElement {
     destroy() {
         this.#observer.unobserve(this.#container)
         this.#observer.disconnect()
+        if (this.#entries.length) {
+            for (const entry of [...this.#entries]) this.#dropEntry(entry)
+            this.#stack?.remove()
+            this.#stack = null
+            this.#stackHeight = 0
+            this.#view = null
+        }
         this.#view?.destroy?.()
         this.#view = null
         this.sections[this.#index]?.unload?.()

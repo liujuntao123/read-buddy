@@ -1,8 +1,9 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ReaderPane from './ReaderPane';
 import { DEMO_BOOK } from '@/services/reader/demoBook';
 import { getDatabase } from '@/services/db/database';
+import { useChatStore } from '@/store/chatStore';
 import { useHighlightStore } from '@/store/highlightStore';
 import { useReaderSettingsStore } from '@/store/readerSettingsStore';
 import { useReaderStore } from '@/store/readerStore';
@@ -129,5 +130,54 @@ describe('ReaderPane 划线', () => {
   it('does not mark a selection that is not in the article', () => {
     render(<ReaderPane sections={DEMO_BOOK.sections} />);
     expect(screen.queryByTestId('toolbar-highlight')).toBeNull();
+  });
+
+  /**
+   * The other half of 划线: the mark the reader made is a handle on itself. A click
+   * on it brings back the *same* toolbar over the marked passage, with 划线
+   * becoming 取消划线.
+   */
+  it('re-opens the toolbar on a clicked mark and 取消划线 deletes it', async () => {
+    render(<ReaderPane sections={DEMO_BOOK.sections} />);
+    const paragraph = article().querySelector('p')?.firstChild ?? null;
+    selectContents(paragraph);
+    fireEvent.mouseUp(article());
+    fireEvent.click(screen.getByTestId('toolbar-highlight'));
+    await waitFor(() => expect(marks()).toHaveLength(1));
+
+    fireEvent.click(marks()[0]!);
+
+    // Same toolbar, and the mark control now removes instead of creating.
+    const remove = await screen.findByTestId('toolbar-unhighlight');
+    expect(remove.textContent).toContain('取消划线');
+    expect(screen.queryByTestId('toolbar-highlight')).toBeNull();
+    expect(screen.getByTestId('toolbar-explain')).toBeTruthy();
+
+    fireEvent.click(remove);
+
+    // Gone from the page and from the store the sidebar lists.
+    await waitFor(() => expect(marks()).toHaveLength(0));
+    expect(useHighlightStore.getState().highlights).toHaveLength(0);
+    expect(screen.queryByTestId('selection-toolbar')).toBeNull();
+  });
+
+  it('asks the companion about the clicked mark rather than about a selection', async () => {
+    render(<ReaderPane sections={DEMO_BOOK.sections} />);
+    selectContents(article().querySelector('p')?.firstChild ?? null);
+    fireEvent.mouseUp(article());
+    fireEvent.click(screen.getByTestId('toolbar-highlight'));
+    await waitFor(() => expect(marks()).toHaveLength(1));
+    const quote = marks()[0]!.textContent ?? '';
+
+    // Clicking the mark collapses the native selection, so the AI action can only
+    // be reading the mark's own quote.
+    clearSelection();
+    fireEvent.click(marks()[0]!);
+    const sendSpy = vi.spyOn(useChatStore.getState(), 'send').mockResolvedValue(undefined);
+    fireEvent.click(await screen.findByTestId('toolbar-explain'));
+
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(sendSpy.mock.calls[0]![1]).toBe(quote);
+    sendSpy.mockRestore();
   });
 });

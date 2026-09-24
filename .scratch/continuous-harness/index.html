@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>foliate continuous harness</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; }
+    #host { position: absolute; inset: 0; }
+    #hud {
+      position: fixed; top: 8px; right: 8px; z-index: 99;
+      font: 12px/1.4 ui-monospace, monospace; background: #fffd;
+      border: 1px solid #999; border-radius: 6px; padding: 6px 8px; white-space: pre;
+    }
+  </style>
+</head>
+<body>
+  <div id="host"></div>
+  <div id="hud">harness</div>
+  <script type="module">
+    import './vendor/foliate-js/view.js';
+
+    const host = document.getElementById('host');
+    const hud = document.getElementById('hud');
+    const logs = [];
+    let view = null;
+
+    window.addEventListener('error', (e) => logs.push({ type: 'error', message: String(e.message) }));
+    window.addEventListener('unhandledrejection', (e) =>
+      logs.push({ type: 'rejection', message: String((e.reason && e.reason.stack) || e.reason) }));
+
+    const renderer = () => (view ? view.renderer : null);
+    const container = () => {
+      const r = renderer();
+      return r && r.shadowRoot ? r.shadowRoot.getElementById('container') : null;
+    };
+
+    const metrics = () => {
+      const c = container();
+      const r = renderer();
+      const last = view && view.lastLocation;
+      const stack = c && c.firstElementChild && c.firstElementChild.tagName === 'DIV'
+        ? c.firstElementChild
+        : null;
+      return {
+        scrollTop: c ? Math.round(c.scrollTop) : null,
+        scrollHeight: c ? Math.round(c.scrollHeight) : null,
+        clientHeight: c ? Math.round(c.clientHeight) : null,
+        contents: r ? r.getContents().map((x) => x.index) : [],
+        lastIndex: last ? (typeof last.index === 'number' ? last.index : last.section && last.section.current) : null,
+        lastLabel: last && last.tocItem ? last.tocItem.label : null,
+        fraction: last ? last.fraction : null,
+        iframes: c ? c.querySelectorAll('iframe').length : 0,
+        stackChildren: stack ? stack.childElementCount : 0,
+        stackHeight: stack ? Math.round(stack.getBoundingClientRect().height) : 0,
+        rangeText: (() => {
+          const r = last && last.range;
+          if (!r) return null;
+          const node = r.startContainer;
+          const text = node && node.nodeType === 3 ? node.nodeValue : node && node.textContent;
+          return text ? text.slice(0, 24) : null;
+        })(),
+      };
+    };
+
+    const drawHud = () => {
+      const m = metrics();
+      hud.textContent = [
+        'single' + (view && view.renderer && view.renderer.hasAttribute('continuous') ? '+continuous' : ''),
+        'scrollTop ' + m.scrollTop + ' / ' + (m.scrollHeight - m.clientHeight),
+        'height ' + m.scrollHeight,
+        'iframes ' + m.iframes,
+        'contents [' + m.contents.join(',') + ']',
+        'index ' + m.lastIndex + ' frac ' + (m.fraction === null ? '-' : m.fraction.toFixed(3)),
+        'label ' + m.lastLabel,
+      ].join('\n');
+    };
+
+    async function open({ continuous = true, pageMode = 'single', book = 'mist-city.epub' } = {}) {
+      if (view) { try { view.close(); } catch {} view.remove(); view = null; }
+      host.replaceChildren();
+      logs.length = 0;
+
+      view = document.createElement('foliate-view');
+      host.append(view);
+      view.addEventListener('relocate', (e) => {
+        const d = e.detail || {};
+        logs.push({ type: 'relocate', index: d.index, fraction: d.fraction });
+        drawHud();
+      });
+      view.addEventListener('load', (e) => {
+        logs.push({ type: 'load', index: e.detail && e.detail.index });
+        drawHud();
+      });
+      view.addEventListener('unload', (e) => {
+        logs.push({ type: 'unload', index: e.detail && e.detail.index });
+        drawHud();
+      });
+
+      const res = await fetch('./' + book);
+      const file = new File([await res.blob()], book, { type: 'application/epub+zip' });
+      await view.open(file);
+      // The layout knobs live on the *renderer* (foliate-view forwards its own
+      // setters); setting them on <foliate-view> alone would be a no-op, exactly
+      // as it would be for the app — `foliateEngine` drives `renderer.setAttribute`.
+      const r = view.renderer;
+      r.setAttribute('max-inline-size', '720');
+      r.setAttribute('margin', '48');
+      r.setAttribute('gap', '7');
+      if (pageMode === 'single') {
+        r.setAttribute('max-column-count', '1');
+        r.setAttribute('flow', 'scrolled');
+        if (continuous) r.setAttribute('continuous', '');
+      } else {
+        r.setAttribute('max-column-count', '2');
+        r.setAttribute('flow', 'paginated');
+      }
+      await view.init({});
+      await new Promise((res2) => setTimeout(res2, 800));
+      drawHud();
+      return metrics();
+    }
+
+    window.h = {
+      open,
+      metrics,
+      logs,
+      async scrollTo(y) {
+        const c = container();
+        c.scrollTop = y;
+        await new Promise((r) => setTimeout(r, 700));
+        drawHud();
+        return metrics();
+      },
+      /** Set the scroll position and report at once (no settle wait). */
+      scrollToNow(y) {
+        const c = container();
+        c.scrollTop = y;
+        drawHud();
+        return metrics();
+      },
+      async scrollToBottom() {
+        const c = container();
+        c.scrollTop = c.scrollHeight;
+        await new Promise((r) => setTimeout(r, 900));
+        drawHud();
+        return metrics();
+      },
+      async next(n = 1) {
+        for (let i = 0; i < n; i += 1) { await view.next(); await new Promise((r) => setTimeout(r, 150)); }
+        await new Promise((r) => setTimeout(r, 500));
+        drawHud();
+        return metrics();
+      },
+      async goTo(target) {
+        await view.goTo(target);
+        await new Promise((r) => setTimeout(r, 700));
+        drawHud();
+        return metrics();
+      },
+      async goToFraction(fraction) {
+        await view.goToFraction(fraction);
+        await new Promise((r) => setTimeout(r, 700));
+        drawHud();
+        return metrics();
+      },
+      async setFlow(flow, continuousAttr) {
+        const r = renderer();
+        r.setAttribute('flow', flow);
+        if (continuousAttr) r.setAttribute('continuous', '');
+        else r.removeAttribute('continuous');
+        await new Promise((res) => setTimeout(res, 700));
+        drawHud();
+        return metrics();
+      },
+      wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+      styles(css) {
+        const r = renderer();
+        r.setStyles(css);
+        const doc = r.getContents()[0] && r.getContents()[0].doc;
+        const injected = doc ? Array.from(doc.head.querySelectorAll('style')) : [];
+        return injected.map((s) => s.textContent);
+      },
+      logs: () => logs.slice(),
+      clearLogs: () => { logs.length = 0; },
+      async prev(n = 1) {
+        for (let i = 0; i < n; i += 1) { await view.prev(); await new Promise((r) => setTimeout(r, 150)); }
+        await new Promise((r) => setTimeout(r, 500));
+        drawHud();
+        return metrics();
+      },
+      text: () => {
+        const r = renderer();
+        return r ? r.getContents().map((x) => ({
+          index: x.index,
+          head: x.doc && x.doc.body ? x.doc.body.textContent.slice(0, 40) : null,
+          height: x.doc && x.doc.documentElement ? Math.round(x.doc.documentElement.getBoundingClientRect().height) : null,
+        })) : [];
+      },
+    };
+  </script>
+</body>
+</html>

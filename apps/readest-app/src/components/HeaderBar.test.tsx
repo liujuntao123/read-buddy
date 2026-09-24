@@ -16,6 +16,7 @@ const makeEngine = (): FoliateEngineHandle =>
     prepare: vi.fn(async () => {}),
     onRelocate: vi.fn(() => () => {}),
     onLoad: vi.fn(() => () => {}),
+    onUnload: vi.fn(() => () => {}),
     getSpineText: vi.fn(async () => ''),
     getCachedSpineHtml: vi.fn(() => ''),
     getCachedSpineText: vi.fn(() => ''),

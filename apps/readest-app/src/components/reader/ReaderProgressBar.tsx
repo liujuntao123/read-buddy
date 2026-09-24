@@ -17,8 +17,11 @@ import { useReaderStore } from '@/store/readerStore';
 import { useSegmentationStore } from '@/store/segmentationStore';
 
 /**
- * 阅读进度条（设计文档 §3 FooterBar）：阅读视窗底部的安静细条——进度轨 + 百分比 +
- * 「第 3 / 12 节」，可点击 / 拖动 / 方向键跳转。
+ * 阅读进度条（进度轨 + 百分比 + 「第 3 / 12 节」），可点击 / 拖动 / 方向键跳转。
+ *
+ * 位置在阅读视窗**顶部**：一条 28px 的静默细条，与底部的快捷键提示分居正文两侧
+ * （两条细条因此互不相邻，也就不需要「之间」的分割线）。阅读区为它让出这段高度，
+ * 所以它从不压在正文上。
  *
  * 两条取数路径，与书架和 dock 一致：
  * - **引擎书籍**：进度是引擎 `relocate` 给的 `fraction`（全书百分比），跳转走

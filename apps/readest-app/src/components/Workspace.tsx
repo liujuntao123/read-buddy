@@ -9,6 +9,7 @@ import { useChatStore } from '@/store/chatStore';
 import { useSegmentationStore } from '@/store/segmentationStore';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useBookIndexStore } from '@/store/bookIndexStore';
+import { useReaderSettingsStore } from '@/store/readerSettingsStore';
 import { getOpenedBook } from '@/services/library/contentRegistry';
 import { flushReadingPosition, recordReadingPosition } from '@/services/reader/readingPosition';
 import { DEMO_BOOK, type DemoSection } from '@/services/reader/demoBook';
@@ -16,6 +17,9 @@ import ReaderPane from '@/components/reader/ReaderPane';
 import FoliatePane from '@/components/reader/FoliatePane';
 import ReaderDock from '@/components/reader/ReaderDock';
 import ReaderProgressBar from '@/components/reader/ReaderProgressBar';
+import ReaderShortcutsHint, {
+  type ReaderTurnMode,
+} from '@/components/reader/ReaderShortcutsHint';
 import HeaderBar from '@/components/HeaderBar';
 import AISidebar from '@/components/sidebar/AISidebar';
 import Bookshelf from '@/components/library/Bookshelf';
@@ -49,6 +53,13 @@ export default function Workspace() {
   const initLibrary = useLibraryStore((s) => s.init);
   const importFiles = useLibraryStore((s) => s.importFiles);
   const segmentation = useSegmentationStore((s) => s.segmentation);
+  /**
+   * 快捷键提示里的动词跟着阅读模式走：双页引擎书是「翻页」，单页连续滚动与 TXT
+   * 阅读器是「滚动」。Workspace 已经知道这两件事（谁来渲染视窗、页面模式是什么），
+   * 提示本身因此不必去读 store。
+   */
+  const pageMode = useReaderSettingsStore((s) => s.layout.pageMode);
+  const turnMode: ReaderTurnMode = currentEngine && pageMode === 'double' ? 'page' : 'scroll';
 
   const [dragOver, setDragOver] = useState(false);
 
@@ -201,17 +212,20 @@ export default function Workspace() {
           ) : (
             <>
               <VStack height="100%" gap={0} style={{ minHeight: 0 }}>
+                {/* 阅读进度条在视窗**顶部**：一条 28px 的细条，阅读区为它让出这段
+                    高度，所以它从不压在正文上。它在上面，快捷键提示在下面——两条
+                    细条分居正文两侧，彼此之间不需要任何分割线。 */}
+                <ReaderProgressBar />
                 {currentEngine ? (
                   <FoliatePane engine={currentEngine} />
                 ) : (
                   <ReaderPane sections={sections} monolithicText={monolithicText} />
                 )}
-                {/* Reading progress footer (design doc §3 FooterBar): the pane
-                    gives up the bottom 28px of its height to it, so the bar is
-                    never an overlay on the text. */}
-                <ReaderProgressBar />
+                {/* 底边一行 28px 的快捷键提示：读者不必猜方向键 / Esc / Ctrl + /
+                    是做什么的（dock 的底部偏移按这一行让开，见 globals.css）。 */}
+                <ReaderShortcutsHint mode={turnMode} />
               </VStack>
-              {/* Hover-revealed reading controls, floating above the strip. */}
+              {/* Hover-revealed reading controls, floating above the hint line. */}
               <ReaderDock />
             </>
           )}

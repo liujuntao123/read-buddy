@@ -8,7 +8,7 @@
  * users unsatisfied with the generated panorama / briefs.
  */
 import { useState } from 'react';
-import { ChevronRight, CircleDot, Compass, KeyRound, RotateCw, Sparkles } from 'lucide-react';
+import { ChevronRight, CircleDot, Compass, KeyRound, Loader2, RotateCw, Sparkles } from 'lucide-react';
 import { AlertDialog } from '@astryxdesign/core/AlertDialog';
 import { Button } from '@astryxdesign/core/Button';
 import { HStack } from '@astryxdesign/core/Stack';
@@ -130,7 +130,7 @@ export default function IndexingStatusBar() {
         }}
       >
         {indexing || reindexing ? (
-          <CircleDot size={12} aria-hidden />
+          <Loader2 size={12} aria-hidden className="panorama-spin-icon" style={{ color: 'var(--color-accent)' }} />
         ) : (
           <Compass size={12} aria-hidden />
         )}

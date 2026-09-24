@@ -15,8 +15,12 @@ import {
   registerAgentBookContext,
 } from '@/services/agent/agentContext';
 import { clearLocateListeners, requestLocate } from '@/services/reader/readerLink';
+import { READER_HIGHLIGHT_CLASS } from '@/services/reader/readerHighlight';
+import { HighlightRepository } from '@/services/db/repositories';
+import { getDatabase } from '@/services/db/database';
 import { useAISidebarStore } from '@/store/aiSidebarStore';
 import { useChatStore } from '@/store/chatStore';
+import { useHighlightStore } from '@/store/highlightStore';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useReaderStore } from '@/store/readerStore';
 import { useReaderSettingsStore } from '@/store/readerSettingsStore';
@@ -38,12 +42,14 @@ interface FakeEngine extends FoliateEngineHandle {
   presentationDiagnostics: () => PresentationDiagnostics;
   relocators: Set<(location: EngineLocation) => void>;
   loaders: Set<(payload: { doc: Document; index: number }) => void>;
+  unloaders: Set<(payload: { doc: Document; index: number }) => void>;
   location: EngineLocation | null;
 }
 
 const makeEngine = (toc = TOC): FakeEngine => {
   const relocators = new Set<(location: EngineLocation) => void>();
   const loaders = new Set<(payload: { doc: Document; index: number }) => void>();
+  const unloaders = new Set<(payload: { doc: Document; index: number }) => void>();
   const engine: FakeEngine = {
     openIn: vi.fn(async (container: HTMLElement) => {
       container.appendChild(document.createElement('div'));
@@ -56,6 +62,7 @@ const makeEngine = (toc = TOC): FakeEngine => {
     prepare: vi.fn(async () => {}),
     relocators,
     loaders,
+    unloaders,
     location: null,
     onRelocate: vi.fn((cb) => {
       relocators.add(cb);
@@ -64,6 +71,10 @@ const makeEngine = (toc = TOC): FakeEngine => {
     onLoad: vi.fn((cb) => {
       loaders.add(cb);
       return () => loaders.delete(cb);
+    }),
+    onUnload: vi.fn((cb) => {
+      unloaders.add(cb);
+      return () => unloaders.delete(cb);
     }),
     getSpineText: vi.fn(async () => ''),
     getCachedSpineHtml: vi.fn(() => ''),
@@ -122,12 +133,14 @@ const resetStores = (): void => {
   useAISidebarStore.setState({ expanded: false, width: 400, activeTab: 'summary' });
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   resetStores();
   clearLocateListeners();
   window.localStorage.setItem('readest-plus:page-mode', 'double');
   useReaderSettingsStore.getState().reset();
   useChatStore.setState({ quoteDraft: null });
+  await getDatabase().highlights.clear();
+  useHighlightStore.setState({ bookHash: '', highlights: [], loaded: false, error: null });
 });
 
 afterEach(() => {
@@ -275,7 +288,8 @@ describe('FoliatePane', () => {
 
   it('arrow keys page through the book and Escape retracts the toolbar', async () => {
     const engine = makeEngine();
-    render(<FoliatePane engine={engine} />);
+    const readSelection = vi.fn(() => ({ text: '迷雾中的灯', rect: new DOMRect(0, 0, 10, 10) }));
+    render(<FoliatePane engine={engine} readSelection={readSelection} />);
     await waitFor(() => expect(engine.openIn).toHaveBeenCalled());
 
     fireEvent.keyDown(window, { key: 'ArrowRight' });
@@ -289,6 +303,96 @@ describe('FoliatePane', () => {
     fireEvent.keyDown(input, { key: 'ArrowRight' });
     expect(engine.next).toHaveBeenCalledTimes(1);
     input.remove();
+
+    // Escape 收掉选区工具条。焦点在章节 iframe 里时按键只出现在 iframe 文档上，
+    // 永远到不了宿主 document——所以必须在 doc 上派发才算数（用户报告的路径）。
+    let doc!: Document;
+    act(() => {
+      doc = document.implementation.createHTMLDocument('ch0');
+      for (const cb of engine.loaders) cb({ doc, index: 0 });
+    });
+    act(() => {
+      doc.dispatchEvent(new Event('mouseup'));
+    });
+    expect(screen.getByTestId('selection-toolbar')).toBeTruthy();
+
+    act(() => {
+      doc.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(screen.queryByTestId('selection-toolbar')).toBeNull();
+  });
+
+  it('Ctrl + / toggles the companion sidebar from inside a chapter iframe', async () => {
+    const engine = makeEngine();
+    render(<FoliatePane engine={engine} />);
+    await waitFor(() => expect(engine.openIn).toHaveBeenCalled());
+
+    let doc!: Document;
+    act(() => {
+      doc = document.implementation.createHTMLDocument('ch0');
+      for (const cb of engine.loaders) cb({ doc, index: 0 });
+    });
+
+    // 焦点在正文 iframe 里：HeaderBar 的宿主 window 绑定收不到这个事件，
+    // 侧栏的开合必须由 iframe 文档上的绑定完成。
+    expect(useAISidebarStore.getState().expanded).toBe(false);
+    act(() => {
+      doc.dispatchEvent(new KeyboardEvent('keydown', { key: '/', ctrlKey: true, bubbles: true }));
+    });
+    expect(useAISidebarStore.getState().expanded).toBe(true);
+
+    act(() => {
+      doc.dispatchEvent(new KeyboardEvent('keydown', { key: '/', ctrlKey: true, bubbles: true }));
+    });
+    expect(useAISidebarStore.getState().expanded).toBe(false);
+
+    // 输入框里的 '/' 是打字，不是快捷键（与箭头键同一条守卫）。
+    const input = document.createElement('input');
+    doc.body.appendChild(input);
+    act(() => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: '/', ctrlKey: true, bubbles: true }));
+    });
+    expect(useAISidebarStore.getState().expanded).toBe(false);
+  });
+
+  it('Escape dismisses the clicked-mark toolbar (划线 subject)', async () => {
+    const engine = makeEngine();
+    await new HighlightRepository().put({
+      id: 'engine-book:h_esc',
+      bookHash: 'engine-book',
+      nodeIndex: 0,
+      nodeTitle: '第一章 迷雾之城',
+      spineIndex: 0,
+      quote: '灯火在雾中摇曳',
+      createdAt: 1,
+    });
+
+    render(<FoliatePane engine={engine} />);
+    await waitFor(() => expect(engine.openIn).toHaveBeenCalled());
+
+    let doc!: Document;
+    act(() => {
+      doc = document.implementation.createHTMLDocument('ch0');
+      doc.body.innerHTML = '<p>灯火在雾中摇曳</p>';
+      for (const cb of engine.loaders) cb({ doc, index: 0 });
+    });
+    const mark = await waitFor(() => {
+      const painted = doc.body.querySelector(`mark.${READER_HIGHLIGHT_CLASS}`);
+      expect(painted).not.toBeNull();
+      return painted as HTMLElement;
+    });
+
+    // 点击划线 → 工具条以「取消划线」的形态出现；此前 Esc 只收选区、不收这个
+    // 主体，工具条留在屏上（用户报告的 bug）。
+    act(() => {
+      mark.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(screen.getByTestId('toolbar-unhighlight')).toBeTruthy();
+
+    act(() => {
+      doc.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(screen.queryByTestId('selection-toolbar')).toBeNull();
   });
 
   it('shows the selection toolbar for iframe selections and forwards quick actions', async () => {
@@ -506,5 +610,171 @@ describe('FoliatePane', () => {
     await waitFor(() => {
       expect(engine.applyPresentation).toHaveBeenCalledWith(expect.objectContaining({ theme: 'dark' }));
     });
+  });
+
+  /**
+   * 双页 edge page turns: the mouse reaching an edge of the reading pane reveals
+   * that edge's control, and clicking it turns the page.
+   */
+  describe('edge page turns', () => {
+    /** happy-dom has no layout: the pane's box is stated outright. */
+    const PANE = new DOMRect(100, 50, 1000, 800);
+    const stubPane = () => {
+      const container = screen.getByTestId('foliate-container');
+      container.getBoundingClientRect = () => PANE;
+      return container;
+    };
+    const moveTo = (clientX: number, clientY = 400) => {
+      act(() => {
+        window.dispatchEvent(new MouseEvent('mousemove', { clientX, clientY, bubbles: true }));
+      });
+    };
+    const visible = (testId: string) =>
+      screen.getByTestId(testId).closest('.reader-page-edge')!.getAttribute('data-visible');
+
+    it('reveals the control for the edge under the pointer and turns the page', async () => {
+      const engine = makeEngine();
+      render(<FoliatePane engine={engine} />);
+      await waitFor(() => expect(engine.openIn).toHaveBeenCalled());
+      stubPane();
+
+      moveTo(PANE.left + 10);
+      await waitFor(() => expect(visible('page-turn-prev')).toBe('true'));
+      expect(visible('page-turn-next')).toBe('false');
+
+      moveTo(PANE.left + PANE.width / 2);
+      await waitFor(() => expect(visible('page-turn-prev')).toBe('false'));
+
+      moveTo(PANE.right - 10);
+      await waitFor(() => expect(visible('page-turn-next')).toBe('true'));
+      fireEvent.click(screen.getByTestId('page-turn-next'));
+      expect(engine.next).toHaveBeenCalledTimes(1);
+
+      moveTo(PANE.left + 10);
+      await waitFor(() => expect(visible('page-turn-prev')).toBe('true'));
+      fireEvent.click(screen.getByTestId('page-turn-prev'));
+      expect(engine.prev).toHaveBeenCalledTimes(1);
+    });
+
+    it('also reacts to the pointer inside a chapter iframe', async () => {
+      const engine = makeEngine();
+      render(<FoliatePane engine={engine} />);
+      await waitFor(() => expect(engine.openIn).toHaveBeenCalled());
+      stubPane();
+
+      let doc!: Document;
+      act(() => {
+        doc = document.implementation.createHTMLDocument('ch0');
+        for (const cb of engine.loaders) cb({ doc, index: 0 });
+      });
+
+      act(() => {
+        doc.dispatchEvent(new MouseEvent('mousemove', { clientX: PANE.right - 8, clientY: 400, bubbles: true }));
+      });
+      await waitFor(() => expect(visible('page-turn-next')).toBe('true'));
+    });
+
+    it('keeps them quiet in single-page scrolling, where the wheel scrolls', async () => {
+      const engine = makeEngine();
+      render(<FoliatePane engine={engine} />);
+      await waitFor(() => expect(engine.openIn).toHaveBeenCalled());
+
+      act(() => {
+        useReaderSettingsStore.getState().setPageMode('single');
+      });
+      stubPane();
+
+      moveTo(PANE.left + 10);
+      moveTo(PANE.right - 10);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(visible('page-turn-prev')).toBe('false');
+      expect(visible('page-turn-next')).toBe('false');
+    });
+  });
+
+  /**
+   * 划线 in the engine pane: the mark is painted onto the chapter's iframe, and a
+   * click on it re-opens the shared toolbar as 取消划线 — the same subject, the
+   * same four model actions.
+   */
+  it('re-opens the toolbar as 取消划线 when a mark in the chapter is clicked', async () => {
+    const engine = makeEngine();
+    await new HighlightRepository().put({
+      id: 'engine-book:h_1',
+      bookHash: 'engine-book',
+      nodeIndex: 0,
+      nodeTitle: '第一章 迷雾之城',
+      spineIndex: 0,
+      quote: '灯火在雾中摇曳',
+      createdAt: 1,
+    });
+
+    render(<FoliatePane engine={engine} />);
+    await waitFor(() => expect(engine.openIn).toHaveBeenCalled());
+
+    let doc!: Document;
+    act(() => {
+      doc = document.implementation.createHTMLDocument('ch0');
+      doc.body.innerHTML = '<p>灯火在雾中摇曳</p>';
+      for (const cb of engine.loaders) cb({ doc, index: 0 });
+    });
+
+    const mark = await waitFor(() => {
+      const painted = doc.body.querySelector(`mark.${READER_HIGHLIGHT_CLASS}`);
+      expect(painted).not.toBeNull();
+      return painted as HTMLElement;
+    });
+
+    act(() => {
+      mark.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(screen.queryByTestId('toolbar-highlight')).toBeNull();
+    const remove = screen.getByTestId('toolbar-unhighlight');
+    expect(remove.textContent).toContain('取消划线');
+
+    act(() => {
+      fireEvent.click(remove);
+    });
+    await waitFor(() => expect(useHighlightStore.getState().highlights).toHaveLength(0));
+    expect(screen.queryByTestId('selection-toolbar')).toBeNull();
+  });
+
+  it('drops the clicked-mark toolbar when the chapter is unloaded', async () => {
+    const engine = makeEngine();
+    await new HighlightRepository().put({
+      id: 'engine-book:h_2',
+      bookHash: 'engine-book',
+      nodeIndex: 0,
+      nodeTitle: '第一章 迷雾之城',
+      spineIndex: 0,
+      quote: '古老的钟楼',
+      createdAt: 1,
+    });
+
+    render(<FoliatePane engine={engine} />);
+    await waitFor(() => expect(engine.openIn).toHaveBeenCalled());
+
+    let doc!: Document;
+    act(() => {
+      doc = document.implementation.createHTMLDocument('ch0');
+      doc.body.innerHTML = '<p>古老的钟楼</p>';
+      for (const cb of engine.loaders) cb({ doc, index: 0 });
+    });
+    const mark = await waitFor(() => {
+      const painted = doc.body.querySelector(`mark.${READER_HIGHLIGHT_CLASS}`);
+      expect(painted).not.toBeNull();
+      return painted as HTMLElement;
+    });
+    act(() => {
+      mark.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(screen.getByTestId('toolbar-unhighlight')).toBeTruthy();
+
+    // The continuous flow (or a page turn) throws the chapter away.
+    act(() => {
+      for (const cb of engine.unloaders) cb({ doc, index: 0 });
+    });
+    expect(screen.queryByTestId('selection-toolbar')).toBeNull();
   });
 });

@@ -4,6 +4,7 @@ import Workspace from './Workspace';
 import { useAISidebarStore } from '@/store/aiSidebarStore';
 import { useReaderStore } from '@/store/readerStore';
 import { useLibraryStore } from '@/store/libraryStore';
+import { useReaderSettingsStore } from '@/store/readerSettingsStore';
 import type { FoliateEngineHandle } from '@/services/library/foliateEngine';
 
 const sidebarState = () => useAISidebarStore.getState();
@@ -137,6 +138,14 @@ describe('Workspace split-screen shell', () => {
     expect(useLibraryStore.getState().view).toBe('reader');
     expect(useLibraryStore.getState().books).toHaveLength(1);
     expect(useReaderStore.getState().bookHash).toBe(useLibraryStore.getState().books[0]!.hash);
+
+    // 两条细条分居正文两侧：进度条在**上**、快捷键提示在**下**。它们之间隔着整块
+    // 正文，所以谁都不需要为对方画分割线（用户要求的排布）。
+    const pane = screen.getByTestId('reader-pane');
+    const progress = screen.getByTestId('reader-progress-bar');
+    const hint = screen.getByTestId('reader-shortcuts');
+    expect(progress.compareDocumentPosition(pane) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(pane.compareDocumentPosition(hint) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('returns to the shelf via the header 书库 button and keeps the reader context', async () => {
@@ -185,6 +194,7 @@ describe('Workspace split-screen shell', () => {
       goToFraction: async () => {},
       onRelocate: () => () => {},
       onLoad: () => () => {},
+      onUnload: () => () => {},
       getSpineText: async () => '',
       getCachedSpineHtml: () => '',
       getCachedSpineText: () => '',
@@ -214,6 +224,13 @@ describe('Workspace split-screen shell', () => {
 
     expect(await screen.findByTestId('foliate-pane')).toBeTruthy();
     expect(screen.queryByTestId('reader-pane')).toBeNull();
+
+    // The bottom hint line lives with the viewport, and its verb follows the mode
+    // this pane actually renders in (双页 = 翻页).
+    expect(screen.getByTestId('reader-shortcuts')).toBeTruthy();
+    expect(screen.getByTestId('shortcut-label-turn').textContent).toBe(
+      useReaderSettingsStore.getState().layout.pageMode === 'double' ? '翻页' : '滚动',
+    );
 
     useLibraryStore.setState({ view: 'shelf', currentHash: null, engines: {} });
   });

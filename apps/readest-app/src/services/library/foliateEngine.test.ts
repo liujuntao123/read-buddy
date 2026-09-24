@@ -56,6 +56,11 @@ class FakeFoliateView extends HTMLElement {
       this.attrs[name] = String(value);
       if (name === 'max-column-count') this.maxColumnCount = parseInt(value, 10);
     },
+    // A real renderer is an HTMLElement, so it always has this; the engine needs
+    // it to leave the continuous flow (single-page) again.
+    removeAttribute: (name: string) => {
+      delete this.attrs[name];
+    },
     render: vi.fn(),
     goTo: vi.fn(async (resolved: { index: number }) => {
       this.#emitLoad(resolved.index);
@@ -392,12 +397,17 @@ describe('createFoliateEngine', () => {
 
     engine.applyPresentation({ theme: 'light', layout: { pageMode: 'single', contentWidth: 720, pageMargin: 48, columnGap: 24 } });
     expect(view.maxColumnCount).toBe(1);
-    // Single page = single-column infinite scroll (paginator flow=scrolled).
+    // Single page = single-column infinite scroll (paginator flow=scrolled), and
+    // the chapters are one continuous flow rather than one chapter per container.
     expect(view.attrs['flow']).toBe('scrolled');
+    expect(view.attrs['continuous']).toBe('');
 
     engine.applyPresentation({ theme: 'light', layout: { pageMode: 'double', contentWidth: 720, pageMargin: 48, columnGap: 24 } });
     expect(view.maxColumnCount).toBe(2);
     expect(view.attrs['flow']).toBe('paginated');
+    // Leaving the flow must *remove* the flag, not set it to "false": the
+    // paginator reads it with `hasAttribute`.
+    expect('continuous' in view.attrs).toBe(false);
   });
 
   it('reports which route carried each presentation knob instead of failing silently', async () => {

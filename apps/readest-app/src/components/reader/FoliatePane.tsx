@@ -1,18 +1,20 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Banner } from '@astryxdesign/core/Banner';
 import { Spinner } from '@astryxdesign/core/Spinner';
 import { VStack } from '@astryxdesign/core/Stack';
 import { Text } from '@astryxdesign/core/Text';
 import { useReaderStore } from '@/store/readerStore';
 import { useLibraryStore } from '@/store/libraryStore';
+import { useAISidebarStore } from '@/store/aiSidebarStore';
 import type { EngineLocation, FoliateEngineHandle } from '@/services/library/foliateEngine';
 import { tocAnchorOf } from '@/services/library/foliateEngine';
 import { getAgentBookContext } from '@/services/agent/agentContext';
 import { subscribeLocate, type LocateRequest } from '@/services/reader/readerLink';
 import { recordReadingPosition } from '@/services/reader/readingPosition';
 import { highlightSnippet } from '@/services/reader/highlight';
+import { toPageRect } from '@/services/reader/selectionCapture';
 import { useReadingTheme } from '@/theme/readingTheme';
 import {
   typographyCss,
@@ -22,7 +24,9 @@ import {
 import { useQuickActions } from '@/hooks/useQuickActions';
 import { useIframeSelection, type IframeSelectionReader } from '@/hooks/useIframeSelection';
 import { useReaderHighlights } from '@/hooks/useReaderHighlights';
+import { useEdgeHover } from '@/hooks/useEdgeHover';
 import SelectionToolbar from './SelectionToolbar';
+import PageTurnEdges from './PageTurnEdges';
 
 /** Relocate-driven position records are debounced inside the position owner. */
 
@@ -66,11 +70,26 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
   const [isOpening, setIsOpening] = useState(true);
   const { selection, attach, close, reset } = useIframeSelection(readSelection);
   const runQuickAction = useQuickActions();
-  const { setMarkTarget, markSelection } = useReaderHighlights();
+  const {
+    addMarkTarget,
+    markSelection,
+    removeHighlight,
+    target: clickedHighlight,
+    attachClicks,
+    clearTarget,
+  } = useReaderHighlights();
   /** Locate request awaiting the chapter's iframe (queued before `goTo`). */
   const pendingHighlightRef = useRef<LocateRequest | null>(null);
-  /** Most recently loaded chapter document (same-section highlight path). */
-  const latestDocRef = useRef<Document | null>(null);
+  /**
+   * Every chapter document that is currently on screen, by physical section.
+   *
+   * A **map** rather than one "latest document": the continuous flow keeps several
+   * chapters mounted at once, and a locate/highlight must be applied to the
+   * document that actually holds the target, not to whichever loaded last.
+   */
+  const liveDocsRef = useRef(new Map<number, Document>());
+  /** Release functions for one chapter document (selection, marks, clicks). */
+  const bindingsRef = useRef(new Map<Document, () => void>());
 
   const readingTheme = useReadingTheme();
 
@@ -78,6 +97,19 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
   const layoutSettings = useReaderSettingsStore((s) => s.layout);
   const pageMode = useReaderSettingsStore((s) => s.layout.pageMode);
   const isScrolled = pageMode === 'single';
+  /** 双页: the mouse-driven mode, and the only one with edge page-turn controls. */
+  const isPaged = pageMode === 'double';
+  const { edge, bindPointer } = useEdgeHover(containerRef, isPaged);
+
+  /**
+   * Dismiss the toolbar whichever subject it was showing (选区 or 划线)。快捷键与
+   * 引擎的 load/unload 都走这一条路，所以两种主体都会被一起收掉。依赖里的两个
+   * 动作都是稳定引用——它自己的身份也是稳定的，键盘 effect 不会因渲染而重绑。
+   */
+  const dismissToolbar = useCallback(() => {
+    reset();
+    clearTarget();
+  }, [reset, clearTarget]);
 
   /**
    * Present the reader's settings in **one** call (候选 4). This used to be three
@@ -127,15 +159,30 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- engine identity is the only dependency
   }, [engine]);
 
-  // Chapter loads → wire the selection capture onto the fresh iframe doc, and
-  // repaint the reader's own 划线 marks: the engine throws the previous chapter's
-  // document away, so a mark painted once would be gone forever.
+  // Chapter loads → wire the selection capture, the 划线 repaint target and the
+  // mark-click hit-test onto the fresh iframe doc; a chapter the continuous flow
+  // (or a page turn) pushed out is unbound again on the engine's `unload`, so
+  // nothing keeps pointing at a detached document.
   useEffect(() => {
     if (!engine) return;
-    return engine.onLoad(({ doc, index }) => {
-      latestDocRef.current = doc;
-      attach(doc);
-      setMarkTarget(doc.body, index);
+    const unbindLoad = engine.onLoad(({ doc, index }) => {
+      liveDocsRef.current.set(index, doc);
+      bindingsRef.current.get(doc)?.();
+      const release = [
+        attach(doc),
+        addMarkTarget(doc.body, index),
+        attachClicks(doc, (rect) => toPageRect(rect, doc)),
+        // A chapter iframe swallows the host's mousemove: without this binding the
+        // edge page-turn controls would never see the pointer at all.
+        bindPointer(doc),
+      ];
+      bindingsRef.current.set(doc, () => {
+        for (const off of release) off();
+        bindingsRef.current.delete(doc);
+      });
+      // The toolbar belonged to the document that just went away.
+      clearTarget();
+      close();
       // Apply a located highlight onto the freshly painted chapter.
       const pending = pendingHighlightRef.current;
       if (pending) {
@@ -145,7 +192,21 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
         }, 60);
       }
     });
-  }, [engine, attach, setMarkTarget]);
+    const unbindUnload = engine.onUnload(({ doc, index }) => {
+      bindingsRef.current.get(doc)?.();
+      if (liveDocsRef.current.get(index) === doc) liveDocsRef.current.delete(index);
+      clearTarget();
+      close();
+    });
+    const bindings = bindingsRef.current;
+    return () => {
+      unbindLoad();
+      unbindUnload();
+      for (const off of bindings.values()) off();
+      bindings.clear();
+      liveDocsRef.current.clear();
+    };
+  }, [engine, attach, addMarkTarget, attachClicks, bindPointer, clearTarget, close]);
 
   // Agent → reader jump (reading-agent doc §5.3 locate_in_reader): the request
   // names a book node, so the node model resolves the destination first — its
@@ -160,10 +221,11 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
       const { bookHash } = useReaderStore.getState();
       if (request.bookHash !== bookHash) return;
       void (async () => {
-        const highlightHereAndNow = (): boolean => {
-          if (!latestDocRef.current) return false;
+        const highlightHereAndNow = (index: number): boolean => {
+          const doc = liveDocsRef.current.get(index);
+          if (!doc) return false;
           highlightSnippet(
-            latestDocRef.current.body,
+            doc.body,
             request.quoteSnippet,
             request.anchor ? { anchor: request.anchor } : {},
           );
@@ -177,7 +239,7 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
         // node model nor the "scan every spine for the quote" fallback — and an
         // un-indexed book jumps just as precisely as an indexed one.
         if (request.spineIndex !== undefined) {
-          if (current && current.index === request.spineIndex && highlightHereAndNow()) return;
+          if (current && current.index === request.spineIndex && highlightHereAndNow(request.spineIndex)) return;
           pendingHighlightRef.current = request;
           await engine.goTo(request.spineIndex);
           return;
@@ -190,7 +252,7 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
           if (current && node.spineIndex !== undefined && current.index === node.spineIndex) {
             // Same physical section: no fresh load event will fire.
             if (node.href) await engine.goTo(target);
-            if (highlightHereAndNow()) return;
+            if (highlightHereAndNow(node.spineIndex)) return;
           }
           // Queue BEFORE navigating: the load event may fire mid-goTo.
           pendingHighlightRef.current = request;
@@ -202,9 +264,9 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
         for (let index = 0; index < engine.spineCount; index++) {
           const text = await engine.getSpineText(index);
           if (text && text.includes(request.quoteSnippet)) {
-            if (current && current.index === index && latestDocRef.current) {
+            if (current && current.index === index && liveDocsRef.current.has(index)) {
               // Same section: no fresh load event will fire — highlight now.
-              highlightHereAndNow();
+              highlightHereAndNow(index);
               return;
             }
             // Queue BEFORE navigating: the load event may fire mid-goTo.
@@ -251,9 +313,14 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
   }, [engine]);
 
   // Keyboard navigation: PageDown/Space/ArrowRight/ArrowDown → next page;
-  // PageUp/Shift+Space/ArrowLeft/ArrowUp → prev page; Escape → close selection toolbar.
+  // PageUp/Shift+Space/ArrowLeft/ArrowUp → prev page; Escape → dismiss the
+  // toolbar (选区 or clicked 划线 alike); Ctrl+/ → toggle the companion sidebar.
   // Bound to both window and the chapter iframe document. In scrolled mode
   // next/prev scroll the continuous column (the paginator handles it).
+  //
+  // 为什么 Ctrl+/ 在这里又绑了一份：章节 iframe 是独立文档，iframe 里的键盘事件
+  // **不会**冒泡进宿主 window——HeaderBar 的绑定（宿主 window）在焦点落进正文时
+  // 根本收不到。焦点在宿主文档时只走 HeaderBar 那一份，两边不会重复触发。
   useEffect(() => {
     if (!engine) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -284,7 +351,14 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
         void engine.prev();
       } else if (event.key === 'Escape') {
         event.stopPropagation();
-        close();
+        // 只收「选区」不够：工具条还可能是被点亮的划线（clickedHighlight），那个
+        // 状态在 useReaderHighlights 里，不收掉它 Esc 就像坏了。reset + clearTarget
+        // 两种主体一起收，与点击正文空白处的 dismiss 是同一条路。
+        dismissToolbar();
+      } else if ((event.metaKey || event.ctrlKey) && event.key === '/') {
+        event.preventDefault();
+        event.stopPropagation();
+        useAISidebarStore.getState().toggle();
       }
     };
 
@@ -298,7 +372,7 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
       window.removeEventListener('keydown', onKeyDown);
       unbindLoad();
     };
-  }, [engine, close]);
+  }, [engine, dismissToolbar]);
 
   // Mouse wheel page turns — paginated (双页) mode only. In single-page
   // (scrolled) mode the paginator's own container scrolls natively, so the
@@ -422,13 +496,30 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
         </VStack>
       )}
 
+      {/* 双页 edge page turns: the pointer reaching an edge summons that edge's
+          control. The strips exist in both modes but only the paginated one ever
+          reveals them (useEdgeHover is disabled in single-page scrolling). */}
+      <PageTurnEdges
+        edge={edge}
+        onPrev={() => {
+          void engine.prev();
+        }}
+        onNext={() => {
+          void engine.next();
+        }}
+      />
+
       <SelectionToolbar
         selection={selection}
-        onAction={(action, text) => runQuickAction(action, text, reset)}
+        onAction={(action, text) => runQuickAction(action, text, dismissToolbar)}
         onHighlight={(selected) => {
           void markSelection(selected).then(reset);
         }}
-        onClose={close}
+        clickedHighlight={clickedHighlight}
+        onUnhighlight={(target) => {
+          void removeHighlight(target.highlight.id);
+        }}
+        onClose={dismissToolbar}
       />
     </VStack>
   );

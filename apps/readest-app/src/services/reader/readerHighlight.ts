@@ -34,10 +34,24 @@ const STYLE_ID = 'readest-reader-highlight-style';
 export const READER_HIGHLIGHT_ACTIVE_CLASS = 'is-jump-target';
 
 /**
+ * Which highlight a painted `<mark>` belongs to. One highlight can be painted as
+ * **several** marks (a quote that crosses a paragraph boundary is wrapped once per
+ * text node), so identity has to travel on the element: the reader clicking a mark
+ * must be able to name the row it came from without guessing from the text.
+ */
+export const READER_HIGHLIGHT_ID_ATTRIBUTE = 'data-highlight-id';
+
+/** Every painted reader mark, in document order. */
+export const READER_HIGHLIGHT_SELECTOR = `mark.${READER_HIGHLIGHT_CLASS}`;
+
+/**
  * The mark's look: a soft amber wash plus a solid underline — 「划线」 reads as a
  * line, not as a second background colour, and the amber pair stays legible on
  * all three reading themes (light / sepia / dark) without depending on a token
  * that the chapter iframe may not define.
+ *
+ * `cursor: pointer` is not decoration: a mark is clickable (it re-opens the
+ * selection toolbar with 取消划线), and nothing else on the page says so.
  */
 const HIGHLIGHT_CSS = `
 mark.${READER_HIGHLIGHT_CLASS} {
@@ -46,6 +60,7 @@ mark.${READER_HIGHLIGHT_CLASS} {
   border-radius: 2px;
   color: inherit;
   padding-bottom: 0.06em;
+  cursor: pointer;
 }
 mark.${READER_HIGHLIGHT_CLASS}.${READER_HIGHLIGHT_ACTIVE_CLASS} {
   background-color: rgba(250, 204, 21, 0.55);
@@ -166,14 +181,75 @@ export function markReaderHighlights(
     }
     claimed.push(match);
     const marks = wrapTextRange(docText, match, READER_HIGHLIGHT_CLASS);
-    if (active.has(highlight.id)) {
-      for (const mark of marks) mark.classList.add(READER_HIGHLIGHT_ACTIVE_CLASS);
+    for (const mark of marks) {
+      // Identity for the click path: a mark that cannot say which row it paints
+      // cannot offer 取消划线.
+      mark.setAttribute(READER_HIGHLIGHT_ID_ATTRIBUTE, highlight.id);
+      if (active.has(highlight.id)) mark.classList.add(READER_HIGHLIGHT_ACTIVE_CLASS);
     }
     result.marks.push(...marks);
     result.applied.push(highlight.id);
   }
 
   return result;
+}
+
+/** The element a click landed on (clicks can target a bare text node). */
+const elementOf = (target: EventTarget | null): Element | null => {
+  if (!target) return null;
+  if ((target as Node).nodeType === 3) return (target as Text).parentElement;
+  return target as Element;
+};
+
+/**
+ * The highlight id of the mark a click landed on, or null when the reader clicked
+ * anything else.
+ */
+export function highlightIdAt(target: EventTarget | null): string | null {
+  const element = elementOf(target);
+  if (!element || typeof element.closest !== 'function') return null;
+  const mark = element.closest(
+    `${READER_HIGHLIGHT_SELECTOR}[${READER_HIGHLIGHT_ID_ATTRIBUTE}]`,
+  );
+  return mark?.getAttribute(READER_HIGHLIGHT_ID_ATTRIBUTE) ?? null;
+}
+
+/**
+ * The rect that covers **every** mark of one highlight in `root` — a quote across
+ * a paragraph break is two marks, and the toolbar must sit over the whole mark,
+ * not over its first line.
+ *
+ * Returns null when that highlight is not painted here (another chapter's row).
+ */
+export function highlightRectIn(root: ParentNode | null | undefined, id: string): DOMRect | null {
+  if (!root) return null;
+  const marks = Array.from(
+    root.querySelectorAll(
+      `${READER_HIGHLIGHT_SELECTOR}[${READER_HIGHLIGHT_ID_ATTRIBUTE}="${cssEscape(id)}"]`,
+    ),
+  );
+  return unionRect(marks);
+}
+
+/** Quote an attribute value for a selector without requiring `CSS.escape`. */
+const cssEscape = (value: string): string => value.replace(/["\\]/g, '\\$&');
+
+/** The union of the client rects of `elements`, or null when none has one. */
+export function unionRect(elements: readonly Element[]): DOMRect | null {
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  for (const element of elements) {
+    if (typeof element.getBoundingClientRect !== 'function') continue;
+    const rect = element.getBoundingClientRect();
+    left = Math.min(left, rect.left);
+    top = Math.min(top, rect.top);
+    right = Math.max(right, rect.right);
+    bottom = Math.max(bottom, rect.bottom);
+  }
+  if (!Number.isFinite(left) || !Number.isFinite(top)) return null;
+  return new DOMRect(left, top, right - left, bottom - top);
 }
 
 /** Every occurrence this highlight could legitimately claim, best first. */

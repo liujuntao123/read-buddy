@@ -141,9 +141,8 @@ foliate-view {
    it is open), so it never competes with the page itself. */
 .reader-dock-zone {
   position: absolute;
-  /* Clears the reading-progress strip, which owns the bottom edge of the pane
-     (see "Reading progress strip" below): the dock floats **above** the strip
-     instead of covering it. */
+  /* Clears the shortcut-hint line, which owns the bottom edge of the pane
+     (the progress strip lives at the top now — see "Reading progress strip"). */
   inset-block-end: var(--spacing-7);
   inset-inline-end: 0;
   z-index: 20;
@@ -185,6 +184,50 @@ foliate-view {
    still happens — instantly, without the fade/slide. */
 @media (prefers-reduced-motion: reduce) {
   .reader-dock {
+    transition: none;
+  }
+}
+
+/* Edge page-turn controls (PageTurnEdges): the 双页 reader's mouse affordance.
+   Two full-height strips pinned to the pane's edges, revealed when the pointer
+   reaches that edge (the pane watches coordinates — the strips themselves never
+   intercept anything, see useEdgeHover).
+
+   `visibility: hidden` while off screen is deliberate: an invisible-but-live
+   button would still take Tab focus and turn the page out of nowhere. */
+.reader-page-edge {
+  position: absolute;
+  inset-block: 0;
+  z-index: 15;
+  width: 56px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease,
+    visibility 160ms;
+}
+
+.reader-page-edge[data-side='prev'] {
+  inset-inline-start: 0;
+  transform: translateX(calc(-1 * var(--spacing-1)));
+}
+
+.reader-page-edge[data-side='next'] {
+  inset-inline-end: 0;
+  transform: translateX(var(--spacing-1));
+}
+
+.reader-page-edge[data-visible='true'] {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reader-page-edge {
     transition: none;
   }
 }
@@ -405,6 +448,180 @@ textarea[data-testid='chat-input'] {
 }
 
 /* ==========================================================================
+   Panorama Dialog Refined Empty / Building Styling (全书画像空态与构建中精细样式)
+   ========================================================================== */
+
+.panorama-empty-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  background: var(--color-background-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-container);
+  box-shadow: var(--shadow-low);
+  padding: var(--spacing-6) var(--spacing-5);
+  margin-block: var(--spacing-3);
+  gap: var(--spacing-4);
+  position: relative;
+  overflow: hidden;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.panorama-hero-icon-container {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  background: var(--color-background-muted);
+  border: 1px solid var(--color-border);
+  color: var(--color-accent);
+  transition: transform 200ms cubic-bezier(0.23, 1, 0.32, 1);
+  flex-shrink: 0;
+}
+
+.panorama-hero-icon-container.indexing {
+  background: rgba(var(--color-accent-rgb, 50, 117, 216), 0.08);
+  border-color: rgba(var(--color-accent-rgb, 50, 117, 216), 0.35);
+}
+
+.panorama-hero-halo {
+  position: absolute;
+  inset: -6px;
+  border-radius: var(--radius-full);
+  background: radial-gradient(circle, rgba(var(--color-accent-rgb, 50, 117, 216), 0.22) 0%, transparent 72%);
+  animation: panorama-halo-pulse 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes panorama-halo-pulse {
+  0%, 100% {
+    transform: scale(0.96);
+    opacity: 0.55;
+  }
+  50% {
+    transform: scale(1.18);
+    opacity: 1;
+  }
+}
+
+@keyframes panorama-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes panorama-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 0.85;
+  }
+}
+
+.panorama-spin-icon {
+  animation: panorama-spin 1.2s linear infinite;
+}
+
+.panorama-pulse-icon {
+  animation: panorama-pulse 2s ease-in-out infinite;
+}
+
+.panorama-shimmer-bar {
+  width: 100%;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(
+    90deg,
+    var(--color-border) 0%,
+    var(--color-accent) 50%,
+    var(--color-border) 100%
+  );
+  background-size: 200% 100%;
+  animation: panorama-shimmer 2s ease-in-out infinite;
+}
+
+@keyframes panorama-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.panorama-pipeline-card {
+  width: 100%;
+  max-width: 460px;
+  background: var(--color-background-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-container);
+  padding: var(--spacing-3-5, 14px) var(--spacing-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  text-align: start;
+  box-sizing: border-box;
+}
+
+.panorama-pipeline-step {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-xs);
+}
+
+.panorama-pipeline-step-left {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+.panorama-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-2);
+  width: 100%;
+  max-width: 500px;
+  margin-block: var(--spacing-1);
+  box-sizing: border-box;
+}
+
+.panorama-feature-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2-5, 10px) var(--spacing-3);
+  background: var(--color-background-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-tile);
+  text-align: start;
+  box-sizing: border-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panorama-spin-icon,
+  .panorama-pulse-icon,
+  .panorama-hero-halo,
+  .panorama-shimmer-bar {
+    animation: none;
+  }
+}
+
+/* ==========================================================================
    Summary Tab Refined Styling (辅助栏总结 Tab 高信息密度一体化样式)
    ========================================================================== */
 
@@ -457,7 +674,7 @@ textarea[data-testid='chat-input'] {
   background: var(--color-background-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-container);
-  padding: var(--spacing-4);
+  padding: var(--spacing-3-5, 14px);
   box-shadow: var(--shadow-low);
 }
 
@@ -478,18 +695,25 @@ textarea[data-testid='chat-input'] {
 }
 
 .summary-markdown-wrapper .markdown-content p {
-  margin-block: 0 0.7em;
+  margin-block: 0 0.6em;
 }
 
 .summary-markdown-wrapper .markdown-content li {
-  margin-block: 0.35em;
+  margin-block: 0.3em;
+}
+
+/* 去除分割线：总结面板依赖区块卡片划分与自然留白，不使用生硬的横向/纵向分割线 */
+.summary-markdown-wrapper hr,
+.summary-markdown-wrapper .markdown-content hr {
+  display: none !important;
 }
 
 .summary-markdown-wrapper .markdown-content h1,
 .summary-markdown-wrapper .markdown-content h2,
-.summary-markdown-wrapper .markdown-content h3 {
+.summary-markdown-wrapper .markdown-content h3,
+.summary-markdown-wrapper .markdown-content h4 {
   color: var(--color-text-primary);
-  border-bottom: none;
+  border: none !important;
 }
 
 /* 三段式总结小标题：依靠留白与手风琴自带层级区分，去除冗余的横向分割线 */
@@ -498,7 +722,7 @@ textarea[data-testid='chat-input'] {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 1.2em;
+  margin-top: 1.1em;
   margin-bottom: 0.4em;
   border-bottom: none;
   line-height: calc(var(--text-body-leading) * 1.05);
@@ -513,36 +737,50 @@ textarea[data-testid='chat-input'] {
 }
 
 /* ==========================================================================
-   Summary Accordion (三段式总结折叠手风琴)
+   Summary Accordion (三段式总结折叠手风琴与区块划分)
    ========================================================================== */
 
 .summary-accordion-group {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-2);
+  gap: var(--spacing-2-5, 10px);
 }
 
-.summary-accordion-item {
-  border: none;
-  padding-block: var(--spacing-1);
-}
-
-.summary-accordion-item:first-child {
-  padding-top: 0;
-}
-
-.summary-accordion-item:last-child {
-  padding-bottom: 0;
-}
-
-.summary-accordion-item .astryx-collapsible-trigger {
-  width: calc(100% + 2 * var(--spacing-2));
+.summary-accordion-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--spacing-1-5, 6px) var(--spacing-2);
-  margin-inline: calc(-1 * var(--spacing-2));
-  border-radius: var(--radius-tile);
+  gap: var(--spacing-2, 8px);
+  padding-inline: var(--spacing-1, 4px);
+  padding-block-end: var(--spacing-0-5, 2px);
+  min-width: 0;
+}
+
+.summary-preface-card {
+  background: var(--color-background-muted);
+  border-radius: var(--radius-element);
+  padding: var(--spacing-2-5, 10px) var(--spacing-3, 12px);
+  color: var(--color-text-secondary);
+  font-size: calc(var(--font-size-base) * 0.85);
+  line-height: calc(var(--text-body-leading) * 1.35);
+}
+
+.summary-accordion-item {
+  background: var(--color-background-muted);
+  border-radius: var(--radius-element);
+  border: none;
+  overflow: hidden;
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+
+.summary-accordion-item .astryx-collapsible-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-2, 8px) var(--spacing-3, 12px);
+  margin-inline: 0;
+  border-radius: var(--radius-element);
   cursor: pointer;
   user-select: none;
   border: none;
@@ -559,45 +797,56 @@ textarea[data-testid='chat-input'] {
 
 .summary-accordion-item .astryx-collapsible-trigger:focus-visible {
   outline: 2px solid var(--color-focus-ring, var(--color-accent));
-  outline-offset: -1px;
+  outline-offset: -2px;
+}
+
+.summary-section-trigger-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: var(--spacing-2);
+  padding-inline-end: var(--spacing-1);
+}
+
+.summary-accordion-item .astryx-collapsible-chevron {
+  color: var(--color-text-tertiary);
+  transition: color var(--duration-fast) var(--ease-standard);
+  flex-shrink: 0;
+}
+
+.summary-accordion-item .astryx-collapsible-trigger:hover .astryx-collapsible-chevron {
+  color: var(--color-text-secondary);
 }
 
 .summary-accordion-item .astryx-collapsible-content {
-  padding-block-start: var(--spacing-1-5, 6px);
-  padding-block-end: var(--spacing-1);
+  padding-inline: var(--spacing-3, 12px);
+  padding-block-start: var(--spacing-1, 4px);
+  padding-block-end: var(--spacing-3, 12px);
 }
 
-/* 核心要义：导言级高信息密度卡片底色 + 品牌强调左侧线。
-   提示词把它写成 2~4 条的标注列表，所以卡片落在整个 <ul> 上（一块卡、数行字），
-   并兼容模型偶发输出段落（<p>）的旧形状。
-
-   ⚠️ 下面每条分节规则都带 `.summary-markdown-wrapper` 前缀，这是必须的：
-   正文字号写在 `.summary-markdown-wrapper .markdown-content p/li` 上（特异性
-   0,2,1，且直接作用在 p / li 上），而 `.summary-content-core p` 只有 0,1,1——
-   不加前缀就会**被正文档位压回去**，分节字号全部失效（这正是此前
-   outline / terms 的 0.9 字号实际没生效的原因）。 */
+/* 核心要义：通栏纯净卡片，去除左侧生硬的竖向分割线 */
 .summary-markdown-wrapper .summary-content-core p,
 .summary-markdown-wrapper .summary-content-core ul {
-  margin-block: var(--spacing-1);
-  padding: var(--spacing-2-5, 10px) var(--spacing-3);
-  background: var(--color-background-muted);
-  border-inline-start: 3px solid var(--color-accent);
-  border-radius: 0 var(--radius-tile) var(--radius-tile) 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
   color: var(--color-text-primary);
 }
 
 .summary-markdown-wrapper .summary-content-core p,
 .summary-markdown-wrapper .summary-content-core ul > li {
-  font-size: calc(var(--font-size-base) * 0.9);
+  font-size: calc(var(--font-size-base) * 0.875);
   line-height: calc(var(--text-body-leading) * 1.45);
 }
 
 .summary-markdown-wrapper .summary-content-core ul {
-  /* 列表标记留在卡片内，不越出左侧强调线。 */
-  padding-inline-start: var(--spacing-6, 24px);
+  padding-inline-start: var(--spacing-4, 16px);
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-1);
+  gap: var(--spacing-1-5, 6px);
 }
 
 .summary-markdown-wrapper .summary-content-core ul > li {
@@ -608,18 +857,23 @@ textarea[data-testid='chat-input'] {
   color: var(--color-accent);
 }
 
-/* 关键内容脉络：主干要点突出有序数字，子项以极细时间线/树状结构呈现 */
+.summary-markdown-wrapper .summary-content-core ul > li strong,
+.summary-markdown-wrapper .summary-content-core ul > li > p > strong {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+/* 关键内容脉络：主干要点突出有序数字，子项以圆点层次呈现，去除生硬横/竖分割线 */
 .summary-content-outline ol {
   margin: 0;
-  padding-inline-start: var(--spacing-5, 20px);
+  padding-inline-start: var(--spacing-4, 16px);
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-2-5, 10px);
+  gap: var(--spacing-2, 8px);
 }
 
 .summary-markdown-wrapper .summary-content-outline ol > li {
   margin: 0;
-  /* 主条目与总结正文同为 14px，长脉络的阅读负担交给行高与条目间距。 */
   font-size: calc(var(--font-size-base) * 0.875);
   line-height: calc(var(--text-body-leading) * 1.4);
   color: var(--color-text-primary);
@@ -639,12 +893,12 @@ textarea[data-testid='chat-input'] {
 
 /* 脉络要点下的展开与子项：通过缩进与次级字色自然区分，去除硬线边框 */
 .summary-content-outline ol > li ul {
-  margin-block: var(--spacing-1) var(--spacing-0-5, 2px);
+  margin-block: var(--spacing-1, 4px) 0;
   padding-inline-start: var(--spacing-2);
   list-style-type: none;
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-1);
+  gap: var(--spacing-1, 4px);
   border-inline-start: none;
 }
 
@@ -658,13 +912,14 @@ textarea[data-testid='chat-input'] {
 }
 
 .summary-content-outline ol > li ul > li::before {
-  content: "–";
+  content: "•";
   position: absolute;
   inset-inline-start: 0;
   color: var(--color-text-tertiary, var(--color-border-emphasized));
+  font-size: 0.9em;
 }
 
-/* 核心概念与关键术语：纯色块微卡片呈现，去除每个词条的多余边框线 */
+/* 核心概念与关键术语：微卡片区块化呈现，去除词条多余分割线，提升对比度 */
 .summary-content-terms ul {
   margin: 0;
   padding: 0;
@@ -676,20 +931,21 @@ textarea[data-testid='chat-input'] {
 
 .summary-markdown-wrapper .summary-content-terms ul > li {
   margin: 0;
-  padding: var(--spacing-2) var(--spacing-3);
-  background: var(--color-background-muted);
+  padding: var(--spacing-2, 8px) var(--spacing-2-5, 10px);
+  background: var(--color-background-surface);
   border: none;
-  border-radius: var(--radius-tile);
+  border-radius: var(--radius-inner);
   line-height: calc(var(--text-body-leading) * 1.35);
   font-size: calc(var(--font-size-base) * 0.85);
   color: var(--color-text-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
 }
 
 .summary-content-terms ul > li strong,
 .summary-content-terms ul > li > p > strong {
   color: var(--color-accent);
   font-weight: 600;
-  margin-inline-end: 2px;
+  margin-inline-end: 4px;
 }
 
 .summary-markdown-wrapper .markdown-content > :first-child,
@@ -698,11 +954,12 @@ textarea[data-testid='chat-input'] {
 }
 
 .summary-markdown-wrapper .markdown-content blockquote {
-  background: var(--color-background-muted);
-  border-inline-start: 3px solid var(--color-accent);
-  border-radius: 0 var(--radius-container) var(--radius-container) 0;
-  padding: var(--spacing-2) var(--spacing-3);
+  background: var(--color-background-surface);
+  border: none;
+  border-radius: var(--radius-inner);
+  padding: var(--spacing-2, 8px) var(--spacing-3, 12px);
   margin-block: 0.6em;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
 }
 
 /* 伴读消息的阅读排版：气泡内正文与纯文本气泡统一放宽行高（消息密度高，行距是
@@ -776,16 +1033,16 @@ textarea[data-testid='chat-input'] {
 }
 
 /* ==========================================================================
-   Reading progress strip (设计文档 §3 FooterBar：进度轨 + 百分比 + 位置)
+   Reading progress strip (进度轨 + 百分比 + 位置)
    ==========================================================================
-   阅读区底边的一条 28px 静默细条，高度与 .reader-dock-zone 的 inset-block-end
-   共用 --spacing-7（dock 浮在它上方）。进度轨在静止时低对比度，指针进入或键盘
-   聚焦时才提亮：读者需要的是一个能瞥一眼的读数，不是一个抢视线的控件。 */
+   阅读视窗**顶部**的一条 28px 静默细条，与底部的快捷键提示分居正文两侧——两条
+   细条之间隔着整块正文，谁都不需要分割线，靠自己的底色与正文分开就够。进度条的
+   对比度按「一眼可读」给满：读数存在的意义就是被瞥见，低对比度等于没有读数；指针
+   进入或键盘聚焦时轨道再加粗提亮，说的是「这里可以点」。 */
 
 .reader-progress {
   flex-shrink: 0;
   height: var(--spacing-7);
-  border-top: 1px solid var(--color-border);
   background: var(--color-background-surface);
 }
 
@@ -812,7 +1069,9 @@ textarea[data-testid='chat-input'] {
 
 .reader-progress-fill {
   height: 100%;
-  background: var(--color-accent-muted);
+  /* 静止态就用全对比度的 accent：填充与轨道（--color-track）要一眼分得开，
+     进度才「看得清」；hover 不再改变填充颜色，只把轨道加粗提亮。 */
+  background: var(--color-accent);
   transition: background-color var(--duration-fast) ease;
 }
 
@@ -822,11 +1081,6 @@ textarea[data-testid='chat-input'] {
 .reader-progress-track:focus-visible .reader-progress-rail {
   height: var(--spacing-1-5);
   background: var(--color-border-emphasized);
-}
-
-.reader-progress:hover .reader-progress-fill,
-.reader-progress-track:focus-visible .reader-progress-fill {
-  background: var(--color-accent);
 }
 
 .reader-progress-track:focus-visible {
@@ -852,6 +1106,30 @@ textarea[data-testid='chat-input'] {
   .reader-progress-fill {
     transition: none;
   }
+}
+
+/* ==========================================================================
+   Reading footer hint (ReaderShortcutsHint：阅读区底边的一行快捷键小字)
+   ==========================================================================
+   阅读区底边的一行小字：按键 + 做什么。进度条在视窗顶部，这一行独占底边；不加
+   分割线，靠自己的底色与正文分开（dock 的 inset-block-end 按它让开，见
+   .reader-dock-zone）。静止时是整屏里最轻的一行——读者需要它时一眼找到，不需要时
+   它不该和正文抢注意力。窄视窗下宁可裁掉尾项，也不换行把正文挤走。 */
+
+.reader-shortcuts {
+  flex-shrink: 0;
+  height: var(--spacing-7);
+  overflow: hidden;
+  background: var(--color-background-surface);
+  white-space: nowrap;
+}
+
+/* 键帽：只描一圈边、给一点底，不做成按键的样子——它提示的是键位，不是控件。 */
+.reader-shortcuts-key {
+  padding-inline: var(--spacing-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-element);
+  background: var(--color-background-muted);
 }
 
 /* 一节读完的收尾（ReaderPane 的滚动阅读器）。它是正文的最后一屏，所以跟着正文

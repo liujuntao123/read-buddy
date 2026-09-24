@@ -23,14 +23,17 @@
 import { useState, useMemo } from 'react';
 import {
   BookOpen,
+  CheckCircle2,
   ChevronsDownUp,
   ChevronsUpDown,
+  CircleDot,
   Compass,
   Gauge,
   KeyRound,
   Layers,
   Library,
   ListTree,
+  Loader2,
   Quote,
   RotateCw,
   Sparkles,
@@ -144,6 +147,7 @@ export default function PanoramaDialog({ isOpen, onOpenChange, onRequestReindex 
   const briefedCount = useBookIndexStore((s) => s.briefedCount);
   const panoramaReady = useBookIndexStore((s) => s.panoramaReady);
   const strategy = useBookIndexStore((s) => s.strategy);
+  const progressLabel = useBookIndexStore((s) => s.progressLabel);
   const startIndexing = useBookIndexStore((s) => s.startIndexing);
   const stopIndexing = useBookIndexStore((s) => s.stopIndexing);
   const setSidebarExpanded = useAISidebarStore((s) => s.setExpanded);
@@ -210,6 +214,7 @@ export default function PanoramaDialog({ isOpen, onOpenChange, onRequestReindex 
   const awaitingKey = phase === 'awaiting-key';
   // A configured provider turns the parked state back into a start action.
   const needsProvider = awaitingKey && !providerReady(settings);
+  const showReindexButton = (Boolean(panorama) || panoramaReady || phase === 'ready') && !isIndexing;
 
   /** Bring the reader to the AI settings panel (the awaiting-key action). */
   const goToSettings = () => {
@@ -631,87 +636,290 @@ export default function PanoramaDialog({ isOpen, onOpenChange, onRequestReindex 
           )}
         </VStack>
       ) : (
-        <VStack
-          gap={5}
+        <div
           data-testid="panorama-empty"
-          padding={6}
-          vAlign="center"
-          hAlign="center"
-          style={{
-            textAlign: 'center',
-            background: 'var(--color-background-muted)',
-            borderRadius: 'var(--radius-container)',
-            border: '1px solid var(--color-border)',
-            margin: 'var(--spacing-4) 0',
-          }}
+          className="panorama-empty-card"
         >
+          {/* Top Hero Icon */}
+          <div className={`panorama-hero-icon-container ${isIndexing ? 'indexing' : ''}`}>
+            {isIndexing && <div className="panorama-hero-halo" aria-hidden />}
+            {isIndexing ? (
+              phase === 'panorama' ? (
+                <Sparkles size={24} aria-hidden className="panorama-pulse-icon" />
+              ) : (
+                <Loader2 size={24} aria-hidden className="panorama-spin-icon" />
+              )
+            ) : needsProvider ? (
+              <KeyRound size={24} aria-hidden />
+            ) : (
+              <Sparkles size={24} aria-hidden />
+            )}
+          </div>
+
+          {/* Centered book tag */}
           <div
             style={{
-              width: 52,
-              height: 52,
-              borderRadius: 'var(--radius-full)',
-              background: 'var(--color-background-surface)',
-              border: '1px solid var(--color-border)',
-              display: 'flex',
+              display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
-              color: 'var(--color-accent)',
+              gap: 'var(--spacing-1-5)',
+              padding: 'var(--spacing-1) var(--spacing-3)',
+              background: 'var(--color-background-muted)',
+              borderRadius: 'var(--radius-full)',
+              border: '1px solid var(--color-border)',
+              maxWidth: '90%',
             }}
           >
-            <Sparkles size={24} aria-hidden />
+            <BookOpen size={13} aria-hidden style={{ color: 'var(--color-text-secondary)', flexShrink: 0 }} />
+            <span
+              style={{
+                fontSize: 'var(--font-size-xs)',
+                fontWeight: 'var(--font-weight-medium)',
+                color: 'var(--color-text-secondary)',
+                maxWidth: 280,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                display: 'inline-block',
+                verticalAlign: 'middle',
+              }}
+              title={bookTitle || '当前书籍'}
+            >
+              《{bookTitle || '当前书籍'}》
+            </span>
+            {shape.total > 0 && (
+              <>
+                <span aria-hidden style={{ color: 'var(--color-border)', fontSize: 'var(--font-size-xs)' }}>
+                  ·
+                </span>
+                <Text
+                  type="supporting"
+                  color="secondary"
+                  maxLines={1}
+                  style={{ fontSize: 'var(--font-size-xs)', flexShrink: 0, display: 'inline' }}
+                >
+                  {formatNodeCounts(shape)}
+                </Text>
+              </>
+            )}
           </div>
-          <VStack gap={2} vAlign="center" style={{ maxWidth: 440 }}>
-            <HStack gap={2} vAlign="center">
-              <Text weight="semibold" type="large">
-                《{bookTitle || '当前书籍'}》
-              </Text>
-            </HStack>
-            <Text weight="semibold" type="large">
+
+          {/* Heading and description */}
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              textAlign: 'center',
+              gap: 'var(--spacing-2)',
+              maxWidth: 480,
+              width: '100%',
+            }}
+          >
+            <Text
+              weight="bold"
+              style={{
+                fontSize: 'var(--font-size-lg)',
+                lineHeight: 'var(--line-height-tight)',
+                textAlign: 'center',
+                display: 'block',
+              }}
+            >
               {isIndexing
                 ? '全书画像构建中…'
                 : needsProvider
                   ? '需要先配置 AI Provider'
                   : '尚未生成全书画像'}
             </Text>
-            <Text type="supporting" color="secondary" style={{ lineHeight: 1.7 }}>
+            <Text
+              type="supporting"
+              color="secondary"
+              style={{
+                fontSize: 'var(--font-size-sm)',
+                lineHeight: 1.7,
+                textAlign: 'center',
+                display: 'block',
+                maxWidth: 440,
+              }}
+            >
               {isIndexing
                 ? '正在提炼全书主旨与章节脉络，稍后即可查阅。'
                 : needsProvider
                   ? '请先在 AI 设置中填写 API Key。配置后即可生成全书画像与节点微大纲。'
                   : '生成全书画像可提炼主旨框架与章节脉络，帮助 AI 伴读更好地理解全书。'}
             </Text>
-          </VStack>
-          {isIndexing ? (
-            <Button
-              label="停止生成"
-              variant="secondary"
-              size="sm"
-              icon={<Square size={14} aria-hidden />}
-              onClick={stopIndexing}
-            />
-          ) : needsProvider ? (
-            <Button
-              label="前往 AI 设置"
-              variant="primary"
-              size="sm"
-              data-testid="panorama-open-settings"
-              icon={<KeyRound size={14} aria-hidden />}
-              onClick={goToSettings}
-            />
-          ) : (
-            <Button
-              label="生成全书画像"
-              variant="primary"
-              size="sm"
-              icon={<Sparkles size={14} aria-hidden />}
-              onClick={() => void startIndexing({ currentSpineIndex: spineIndex })}
-            />
+          </div>
+
+          {/* When Indexing: Dynamic Pipeline Card */}
+          {isIndexing && (
+            <div className="panorama-pipeline-card">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-2)' }}>
+                {/* Step 1: 目录结构解析 (已完成) */}
+                <div className="panorama-pipeline-step">
+                  <div className="panorama-pipeline-step-left">
+                    <CheckCircle2 size={14} aria-hidden style={{ color: 'var(--color-success)', flexShrink: 0 }} />
+                    <span style={{ fontWeight: 'var(--font-weight-medium)' }}>
+                      目录结构与节点切片
+                    </span>
+                  </div>
+                  <span style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-xs)' }}>
+                    {formatNodeCounts(shape)} ({strategyLabel})
+                  </span>
+                </div>
+
+                {/* Step 2: 全书全景画像 */}
+                <div className="panorama-pipeline-step">
+                  <div className="panorama-pipeline-step-left">
+                    {phase === 'panorama' ? (
+                      <Loader2 size={14} aria-hidden className="panorama-spin-icon" style={{ color: 'var(--color-accent)', flexShrink: 0 }} />
+                    ) : panoramaReady || phase === 'briefs' ? (
+                      <CheckCircle2 size={14} aria-hidden style={{ color: 'var(--color-success)', flexShrink: 0 }} />
+                    ) : (
+                      <CircleDot size={14} aria-hidden style={{ color: 'var(--color-accent)', flexShrink: 0 }} />
+                    )}
+                    <span style={{ fontWeight: phase === 'panorama' ? 'var(--font-weight-semibold)' : 'var(--font-weight-medium)' }}>
+                      全景画像提炼（主旨 · 设定 · 实体）
+                    </span>
+                  </div>
+                  <span
+                    style={{
+                      color: phase === 'panorama' ? 'var(--color-accent)' : 'var(--color-text-secondary)',
+                      fontWeight: phase === 'panorama' ? 'var(--font-weight-medium)' : 'normal',
+                      fontSize: 'var(--font-size-xs)',
+                    }}
+                  >
+                    {phase === 'panorama' ? '提炼生成中…' : '已就绪'}
+                  </span>
+                </div>
+
+                {/* Step 3: 逐章微大纲 */}
+                <div className="panorama-pipeline-step">
+                  <div className="panorama-pipeline-step-left">
+                    {phase === 'briefs' ? (
+                      <Loader2 size={14} aria-hidden className="panorama-spin-icon" style={{ color: 'var(--color-accent)', flexShrink: 0 }} />
+                    ) : briefedCount >= briefTotal && briefTotal > 0 ? (
+                      <CheckCircle2 size={14} aria-hidden style={{ color: 'var(--color-success)', flexShrink: 0 }} />
+                    ) : (
+                      <CircleDot size={14} aria-hidden style={{ color: 'var(--color-text-secondary)', opacity: 0.5, flexShrink: 0 }} />
+                    )}
+                    <span style={{ fontWeight: phase === 'briefs' ? 'var(--font-weight-semibold)' : 'var(--font-weight-medium)' }}>
+                      章节微大纲矩阵构建
+                    </span>
+                  </div>
+                  <span
+                    style={{
+                      color: phase === 'briefs' ? 'var(--color-accent)' : 'var(--color-text-secondary)',
+                      fontWeight: phase === 'briefs' ? 'var(--font-weight-medium)' : 'normal',
+                      fontSize: 'var(--font-size-xs)',
+                    }}
+                  >
+                    {phase === 'briefs'
+                      ? `${briefedCount}/${briefTotal} ${minimalKindWord}`
+                      : '排队中'}
+                  </span>
+                </div>
+              </div>
+
+              {/* 动态进度条 */}
+              {phase === 'briefs' && briefTotal > 0 ? (
+                <ProgressBar
+                  label="节点微大纲索引进度"
+                  value={briefedCount}
+                  max={Math.max(briefTotal, 1)}
+                  variant="accent"
+                  hasValueLabel
+                  formatValueLabel={(val, max) => `${val}/${max}`}
+                />
+              ) : (
+                <div className="panorama-shimmer-bar" />
+              )}
+            </div>
           )}
-        </VStack>
+
+          {/* When Idle: Feature Value Grid */}
+          {!isIndexing && !needsProvider && (
+            <div className="panorama-feature-grid">
+              <div className="panorama-feature-item">
+                <Quote size={14} aria-hidden style={{ color: 'var(--color-accent)', flexShrink: 0, marginTop: 2 }} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ fontSize: 'var(--font-size-xs)', fontWeight: 'var(--font-weight-semibold)' }}>
+                    全书核心主旨
+                  </span>
+                  <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)', lineHeight: 1.4 }}>
+                    提炼全书论证脉络与核心意图
+                  </span>
+                </div>
+              </div>
+              <div className="panorama-feature-item">
+                <Compass size={14} aria-hidden style={{ color: 'var(--color-accent)', flexShrink: 0, marginTop: 2 }} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ fontSize: 'var(--font-size-xs)', fontWeight: 'var(--font-weight-semibold)' }}>
+                    探讨语境与问题
+                  </span>
+                  <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)', lineHeight: 1.4 }}>
+                    解析背景语境与核心问题意识
+                  </span>
+                </div>
+              </div>
+              <div className="panorama-feature-item">
+                <Tags size={14} aria-hidden style={{ color: 'var(--color-accent)', flexShrink: 0, marginTop: 2 }} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ fontSize: 'var(--font-size-xs)', fontWeight: 'var(--font-weight-semibold)' }}>
+                    核心概念与实体
+                  </span>
+                  <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)', lineHeight: 1.4 }}>
+                    梳理关键人物、术语与知识网络
+                  </span>
+                </div>
+              </div>
+              <div className="panorama-feature-item">
+                <ListTree size={14} aria-hidden style={{ color: 'var(--color-accent)', flexShrink: 0, marginTop: 2 }} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ fontSize: 'var(--font-size-xs)', fontWeight: 'var(--font-weight-semibold)' }}>
+                    逐章微大纲矩阵
+                  </span>
+                  <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)', lineHeight: 1.4 }}>
+                    为 AI 伴读提供全书章节精准定位
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Primary Action Button */}
+          <div>
+            {isIndexing ? (
+              <Button
+                label="停止生成"
+                variant="secondary"
+                size="sm"
+                icon={<Square size={14} aria-hidden />}
+                onClick={stopIndexing}
+              />
+            ) : needsProvider ? (
+              <Button
+                label="前往 AI 设置"
+                variant="primary"
+                size="sm"
+                data-testid="panorama-open-settings"
+                icon={<KeyRound size={14} aria-hidden />}
+                onClick={goToSettings}
+              />
+            ) : (
+              <Button
+                label="生成全书画像"
+                variant="primary"
+                size="sm"
+                icon={<Sparkles size={14} aria-hidden />}
+                onClick={() => void startIndexing({ currentSpineIndex: spineIndex })}
+              />
+            )}
+          </div>
+        </div>
       )}
       <HStack
-        justify="end"
-        gap={2}
+        justify="between"
+        vAlign="center"
         style={{
           marginTop: 'var(--spacing-3)',
           paddingTop: 'var(--spacing-3)',
@@ -719,17 +927,41 @@ export default function PanoramaDialog({ isOpen, onOpenChange, onRequestReindex 
           flexShrink: 0,
         }}
       >
-        <Button
-          label="重新索引"
-          variant="secondary"
-          size="sm"
-          data-testid="panorama-reindex"
-          icon={<RotateCw size={14} aria-hidden />}
-          onClick={() => {
-            onOpenChange(false);
-            onRequestReindex();
-          }}
-        />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-2)', minWidth: 0 }}>
+          {isIndexing ? (
+            <HStack gap={1.5} vAlign="center">
+              <Sparkles size={13} aria-hidden className="panorama-pulse-icon" style={{ color: 'var(--color-accent)', flexShrink: 0 }} />
+              <Text type="supporting" color="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>
+                后台持续分析中，关闭弹窗不影响进度
+              </Text>
+            </HStack>
+          ) : (
+            <Text type="supporting" color="secondary" style={{ fontSize: 'var(--font-size-xs)' }}>
+              {panoramaReady ? '画像已就绪 · AI 伴读已挂载全景理解' : '全景画像与章节微大纲将持久保存于本地'}
+            </Text>
+          )}
+        </div>
+        <HStack gap={2} vAlign="center" style={{ flexShrink: 0 }}>
+          {showReindexButton && (
+            <Button
+              label="重新索引"
+              variant="secondary"
+              size="sm"
+              data-testid="panorama-reindex"
+              icon={<RotateCw size={14} aria-hidden />}
+              onClick={() => {
+                onOpenChange(false);
+                onRequestReindex();
+              }}
+            />
+          )}
+          <Button
+            label={isIndexing ? '后台运行' : '关闭'}
+            variant={isIndexing ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={() => onOpenChange(false)}
+          />
+        </HStack>
       </HStack>
     </Dialog>
   );

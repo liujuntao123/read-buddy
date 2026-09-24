@@ -36,6 +36,10 @@ export default function HeaderBar() {
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
+    // Ctrl+/ toggles the companion sidebar. Chapter iframes are separate
+    // documents — keydowns inside them never bubble to this window listener —
+    // so FoliatePane repeats the binding on each live chapter document; focus
+    // in the host fires here only, so the two never double-toggle.
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === '/') {
         event.preventDefault();

@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import SummaryTab from './SummaryTab';
+import SummaryTab, { parseSummarySections } from './SummaryTab';
 import {
   createSummaryStore,
   useSummaryStore,
@@ -627,6 +627,49 @@ describe('SummaryTab', () => {
     // Clicking again expands it
     fireEvent.click(buttonOutline);
     expect(buttonOutline.getAttribute('aria-expanded')).toBe('true');
+
+    // Section count badges are displayed on triggers
+    expect(screen.getByText('2 个要点')).toBeTruthy();
+    expect(screen.getByText('1 个术语')).toBeTruthy();
+
+    // Title in toolbar is displayed with truncation-friendly styling
+    const toolbarTitle = screen.getByTestId('summary-toolbar-title');
+    expect(toolbarTitle).toBeTruthy();
+    expect(toolbarTitle.textContent).toBe(CHAPTER.nodeTitle);
+
+    // Toggle all button collapses and expands all sections
+    const toggleAllBtn = screen.getByTestId('summary-toggle-all');
+    expect(toggleAllBtn.textContent).toContain('全部折叠');
+
+    fireEvent.click(toggleAllBtn);
+    expect(toggleAllBtn.textContent).toContain('全部展开');
+    expect(triggerCore.closest('button')!.getAttribute('aria-expanded')).toBe('false');
+    expect(triggerOutline.closest('button')!.getAttribute('aria-expanded')).toBe('false');
+    expect(triggerTerms.closest('button')!.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(toggleAllBtn);
+    expect(toggleAllBtn.textContent).toContain('全部折叠');
+    expect(triggerCore.closest('button')!.getAttribute('aria-expanded')).toBe('true');
+    expect(triggerOutline.closest('button')!.getAttribute('aria-expanded')).toBe('true');
+    expect(triggerTerms.closest('button')!.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('strips markdown horizontal rules (---) so no dividers appear in summary sections', () => {
+    const raw = [
+      '### 📌 核心要义',
+      '核心要义内容。',
+      '---',
+      '',
+      '### 🗺️ 关键内容脉络',
+      '1. 脉络一',
+      '---',
+    ].join('\n');
+    const { sections } = parseSummarySections(raw);
+    expect(sections).toHaveLength(2);
+    expect(sections[0].content).not.toContain('---');
+    expect(sections[0].content).toBe('核心要义内容。');
+    expect(sections[1].content).not.toContain('---');
+    expect(sections[1].content).toBe('1. 脉络一');
   });
 
   it('re-opens (cache check only) when the reader moves to another node', async () => {

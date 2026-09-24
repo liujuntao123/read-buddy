@@ -72,7 +72,14 @@ export default function ReaderPane({
   const articleRef = useRef<HTMLElement | null>(null);
   const { selection, close, reset } = useTextSelection(articleRef);
   const runQuickAction = useQuickActions();
-  const { setMarkTarget, markSelection } = useReaderHighlights();
+  const {
+    setMarkTarget,
+    markSelection,
+    removeHighlight,
+    target: clickedHighlight,
+    attachClicks,
+    clearTarget,
+  } = useReaderHighlights();
 
   // Reader typography (font size / family / line height / paragraph spacing)
   // applies to the TXT scroll article just like to engine chapters.
@@ -220,7 +227,21 @@ export default function ReaderPane({
    */
   useEffect(() => {
     setMarkTarget(articleRef.current, spineIndex);
-  }, [setMarkTarget, spineIndex, paragraphsHtml, section]);
+    // A mark from the chapter the reader just left is no longer on screen, so its
+    // toolbar must not survive the section change.
+    clearTarget();
+  }, [setMarkTarget, clearTarget, spineIndex, paragraphsHtml, section]);
+
+  /**
+   * A click on a painted 划线 re-opens the toolbar as 取消划线. The article lives in
+   * the host document (no iframe), so the mark's rect is already in page
+   * coordinates — no translation.
+   */
+  useEffect(() => {
+    const article = articleRef.current;
+    if (!article) return;
+    return attachClicks(article);
+  }, [attachClicks, spineIndex, paragraphsHtml, section]);
 
   /** 跳到下一个节点：与 ReaderDock 的目录点击同一条路（Reading Position）。 */
   const goToNode = (index: number, title: string) => {
@@ -235,13 +256,19 @@ export default function ReaderPane({
     void markSelection(selected).then(reset);
   };
 
+  /** Dismiss the toolbar whichever subject it was showing (选区 or 划线). */
+  const dismissToolbar = () => {
+    reset();
+    clearTarget();
+  };
+
   /**
    * Selection AI quick action (design doc 4.4.3, ADR 0007) — shared with the
    * Foliate engine pane via `useQuickActions` (ticket 07); see the hook for
    * the sidebar/quote/send behaviour.
    */
   const handleQuickAction = (action: QuickAction, text: string) => {
-    runQuickAction(action, text, reset);
+    runQuickAction(action, text, dismissToolbar);
   };
 
   /** Clicking the article body with no live selection retracts the toolbar. */
@@ -387,7 +414,11 @@ export default function ReaderPane({
         selection={selection}
         onAction={handleQuickAction}
         onHighlight={handleHighlight}
-        onClose={reset}
+        clickedHighlight={clickedHighlight}
+        onUnhighlight={(target) => {
+          void removeHighlight(target.highlight.id);
+        }}
+        onClose={dismissToolbar}
       />
     </VStack>
   );

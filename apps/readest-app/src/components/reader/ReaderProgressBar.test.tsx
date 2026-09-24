@@ -38,6 +38,7 @@ const makeEngine = (): FoliateEngineHandle => {
       return () => relocators.delete(cb);
     }),
     onLoad: vi.fn(() => () => {}),
+    onUnload: vi.fn(() => () => {}),
     getSpineText: vi.fn(async () => ''),
     getCachedSpineHtml: vi.fn(() => ''),
     getCachedSpineText: vi.fn(() => ''),

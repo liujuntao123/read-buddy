@@ -119,23 +119,39 @@ export function captureSelections(options: CaptureSelectionsOptions): () => void
 }
 
 /**
+ * Translate a rect measured in `doc`'s own viewport into page coordinates by
+ * adding the host rect of the iframe that owns the document (ADR 0007). A
+ * document that is not framed (or whose frame is unreachable) is already in page
+ * coordinates, so the rect is returned unchanged.
+ *
+ * Shared by the selection path and the mark-click path: a toolbar anchored off a
+ * chapter iframe's selection and one anchored off a chapter iframe's 划线 must
+ * land in the same coordinate space, or the two would drift apart.
+ */
+export function toPageRect(rect: DOMRect, doc: Document): DOMRect {
+  const frame = doc.defaultView?.frameElement;
+  if (!frame || typeof frame.getBoundingClientRect !== 'function') return rect;
+  const offset = frame.getBoundingClientRect();
+  return new DOMRect(
+    rect.left + offset.left,
+    rect.top + offset.top,
+    rect.width,
+    rect.height,
+  );
+}
+
+/**
  * Translate the document's own viewport coordinates into page coordinates by
  * adding the host rect of the iframe that owns the document (ADR 0007). A
  * document that is not framed (or whose frame is unreachable) is already in page
  * coordinates, so the raw rect is returned unchanged.
  */
 export function toPageCoordinates(raw: RawSelection, doc: Document): RawSelection {
-  const frame = doc.defaultView?.frameElement;
-  if (!frame || typeof frame.getBoundingClientRect !== 'function') return raw;
-  const offset = frame.getBoundingClientRect();
+  const rect = toPageRect(raw.rect, doc);
+  if (rect === raw.rect) return raw;
   return {
     text: raw.text,
-    rect: new DOMRect(
-      raw.rect.left + offset.left,
-      raw.rect.top + offset.top,
-      raw.rect.width,
-      raw.rect.height,
-    ),
+    rect,
     // The range still lives in the chapter's document — only its *rect* needs
     // translating into page coordinates.
     ...(raw.range ? { range: raw.range } : {}),

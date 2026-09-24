@@ -19,3 +19,9 @@ next-env.d.ts
 .scratch/test-results.json
 initial.png
 ux-shelf.png
+
+# 单页跨章滚动的浏览器验证工装（.scratch/continuous-harness）：脚本入库，
+# 运行时才生成的输入不入库 —— vendor/ 是 apps/readest-app/vendor/foliate-js
+# 的拷贝（拷贝一旦入库就会与真身漂移），*.epub 由 make-long-book.mjs 生成。
+.scratch/continuous-harness/vendor/
+.scratch/continuous-harness/*.epub

@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   READER_HIGHLIGHT_ACTIVE_CLASS,
   READER_HIGHLIGHT_CLASS,
+  READER_HIGHLIGHT_ID_ATTRIBUTE,
   anchorForSelection,
+  highlightIdAt,
+  highlightRectIn,
   markReaderHighlights,
   textAnchorOf,
 } from './readerHighlight';
@@ -166,5 +169,61 @@ describe('markReaderHighlights', () => {
       missing: [],
       marks: [],
     });
+  });
+});
+
+/**
+ * Clicking a mark. The mark is the reader's own handle on the row, so it has to
+ * carry the row's identity — and a quote that spans a paragraph break is *two*
+ * marks, so "the mark the reader clicked" has to be answerable as one rect.
+ */
+describe('clicking a painted 划线', () => {
+  const stubRect = (element: Element, rect: DOMRect): void => {
+    element.getBoundingClientRect = () => rect;
+  };
+
+  it('tags every mark of one highlight with that highlight id', () => {
+    const article = makeArticle();
+    markReaderHighlights(article, [
+      row({ id: 'one', quote: '古老的钟楼' }),
+      row({ id: 'two', quote: '年轻的图书管理员' }),
+    ]);
+    const ids = Array.from(article.querySelectorAll(`mark.${READER_HIGHLIGHT_CLASS}`)).map(
+      (mark) => mark.getAttribute(READER_HIGHLIGHT_ID_ATTRIBUTE),
+    );
+    expect(ids).toEqual(['one', 'two']);
+    article.remove();
+  });
+
+  it('names the highlight a click landed on, and nothing else', () => {
+    const article = makeArticle();
+    markReaderHighlights(article, [row({ id: 'clicked', quote: '古老的钟楼' })]);
+    const mark = article.querySelector(`mark.${READER_HIGHLIGHT_CLASS}`)!;
+    const text = mark.firstChild!;
+
+    expect(highlightIdAt(mark)).toBe('clicked');
+    // A click can land on the text node the mark wraps.
+    expect(highlightIdAt(text)).toBe('clicked');
+    // Anywhere else is not a mark.
+    expect(highlightIdAt(article.querySelector('p'))).toBeNull();
+    expect(highlightIdAt(null)).toBeNull();
+    article.remove();
+  });
+
+  it('covers a quote that spans two paragraphs with one rect', () => {
+    const article = makeArticle();
+    // One highlight, wrapped as one mark per text node it crosses.
+    markReaderHighlights(article, [row({ id: 'span', quote: '第三声。\n年轻的图书管理员' })]);
+    const marks = Array.from(article.querySelectorAll(`mark.${READER_HIGHLIGHT_CLASS}`));
+    expect(marks).toHaveLength(2);
+    stubRect(marks[0]!, new DOMRect(10, 100, 20, 16));
+    stubRect(marks[1]!, new DOMRect(200, 130, 40, 16));
+
+    const rect = highlightRectIn(article, 'span')!;
+    expect([rect.left, rect.top, rect.width, rect.height]).toEqual([10, 100, 230, 46]);
+    // A row that is not painted here has no rect to anchor a toolbar to.
+    expect(highlightRectIn(article, 'other')).toBeNull();
+    expect(highlightRectIn(null, 'span')).toBeNull();
+    article.remove();
   });
 });
