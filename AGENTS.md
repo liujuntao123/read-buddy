@@ -24,6 +24,11 @@ A visual pass (screenshot, browser session, manual UI run) earns its cost only w
 
 ## Release and packaging
 
+The version number lives in five files and is written **only** by `scripts/version.mjs`
+(`pnpm version:check` gates every CI run). `CHANGELOG.md` is generated from Conventional
+Commits by `scripts/changelog.mjs` and must never be hand-edited. A release is
+`pnpm release <version>`. Full process: `docs/releasing.md`.
+
 <!--### Post-task Windows build
 
 After completing each feature, fix, or delivery task:
