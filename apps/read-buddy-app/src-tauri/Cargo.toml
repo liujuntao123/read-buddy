@@ -1,6 +1,6 @@
 [package]
 name = "read-buddy"
-version = "0.1.0"
+version = "0.2.0"
 description = "Zero-embedding, chapter-first desktop AI reading companion"
 edition = "2021"
 

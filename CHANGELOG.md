@@ -8,12 +8,17 @@
 
 > 本文件由 `pnpm changelog` 自动生成，请勿手工编辑；要调整分组或措辞，请改提交信息或 `scripts/changelog.mjs`。
 
-## [未发布]
+## [0.2.0] - 2026-09-24
 
 ### 📝 文档
 
+- **scratch** · record the post-rename verify run in ticket 15（[`18bf3c5`](https://github.com/liujuntao123/read-buddy/commit/18bf3c51d9f12e7261681c48a29cc031347d6364)）
 - reframe the README around the reading-difficulty problem（[`30b4622`](https://github.com/liujuntao123/read-buddy/commit/30b46227c2df64ea6ddfcac42394d0e9131ece97)）
 - replace the design docs with docs/architecture.md（[`7e34d79`](https://github.com/liujuntao123/read-buddy/commit/7e34d7935e4e54b6badfb2f7302499b643e39b89)）
+
+### 🔧 其他变更
+
+- rename the project from readest-plus to read-buddy（[`2136ea1`](https://github.com/liujuntao123/read-buddy/commit/2136ea100567f15544bae0fbc9164210f95f4ea0)）
 
 ## [0.1.0] - 2026-09-24
 
@@ -69,5 +74,6 @@
 - **任务跟踪** · close tickets 03 and 04（[`620597d`](https://github.com/liujuntao123/read-buddy/commit/620597dbbba48a97fcd65c0ef9e038794204e3a8)）
 - scaffold readest-plus monorepo foundation（[`884a211`](https://github.com/liujuntao123/read-buddy/commit/884a21145d955ee168b71a30b87df76eb92238d7)）
 
-[未发布]: https://github.com/liujuntao123/read-buddy/compare/HEAD...HEAD
+[未发布]: https://github.com/liujuntao123/read-buddy/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/liujuntao123/read-buddy/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/liujuntao123/read-buddy/releases/tag/v0.1.0
