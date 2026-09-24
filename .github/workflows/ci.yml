@@ -1,0 +1,103 @@
+name: CI
+
+# Every push to the release branch and every pull request gets the same gate,
+# so a merge cannot be the first time the suite runs. Pull requests do not build
+# the installer (a Tauri release build is slow and its artifacts are throwaway);
+# they are checked by `verify`, which is the gate that actually decides merges.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+# A newer commit on the same branch makes the running job's answer stale.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '24'
+
+jobs:
+  verify:
+    name: 校验（版本号 / 类型 / 测试 / 构建）
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      # The version number lives in five files; this is the check that stops a
+      # hand edit from shipping an installer whose name disagrees with the crate
+      # inside it. See scripts/version.mjs.
+      - name: 版本号一致性
+        run: pnpm version:check
+
+      - name: 类型检查
+        run: pnpm typecheck
+
+      - name: 单元测试
+        run: pnpm test
+
+      - name: 生产构建（Next.js 静态导出）
+        run: pnpm build
+
+  windows-installer:
+    name: 构建 Windows 安装包
+    needs: verify
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 Rust 构建产物
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/readest-app/src-tauri
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      # Runs `next build` (tauri.conf.json's beforeBuildCommand) and then the
+      # NSIS bundler; the Vite/Next output is not reusable across jobs, so this
+      # job rebuilds the frontend rather than downloading it as an artifact.
+      - name: 打包（Tauri + NSIS）
+        run: pnpm build:installer
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: readest-plus-windows-${{ github.sha }}
+          path: apps/readest-app/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 14

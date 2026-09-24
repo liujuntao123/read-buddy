@@ -1,0 +1,170 @@
+name: Release
+
+# Two ways in, one pipeline:
+#
+#   * push a `v*` tag  — the version is already in the tree (someone ran
+#                        `pnpm release` locally); this workflow builds and
+#                        publishes it.
+#   * run this workflow by hand (`workflow_dispatch`) — the `tag` job does the
+#                        bump, writes the changelog, commits, tags and pushes,
+#                        so nobody needs a local checkout to cut a release.
+#
+# Either way the `build` job checks out the tag, verifies the version, builds
+# the Windows installer and publishes the GitHub Release whose body is that
+# version's changelog section.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号，不含 v 前缀（例如 0.2.0；预发布写 0.2.0-rc.1）'
+        required: true
+        type: string
+
+# Releases are never cancelled: a half-published release is worse than a slow one.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# `tag` pushes a commit and a tag; `build` creates the Release.
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: '24'
+
+jobs:
+  resolve:
+    name: 解析版本号
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+    steps:
+      - name: 从标签或输入推导版本号
+        id: resolve
+        shell: bash
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # A manual run carries the version as input; a tag push carries it in
+          # the tag name. Accept `0.2.0` and `v0.2.0` both.
+          VERSION="${DISPATCH_VERSION:-${REF_NAME#v}}"
+          VERSION="${VERSION#v}"
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::版本号「$VERSION」不合法：应为 x.y.z，预发布可写 x.y.z-rc.1。"
+            exit 1
+          fi
+          case "$VERSION" in
+            *-*) PRERELEASE=true ;;
+            *)   PRERELEASE=false ;;
+          esac
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "版本号：$VERSION（prerelease=$PRERELEASE）"
+
+  tag:
+    name: 写入版本号并打标签
+    needs: resolve
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 检出代码（需要完整历史来生成变更日志）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 配置 git 身份
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # The same script a maintainer runs locally: bump the five version files,
+      # regenerate CHANGELOG.md, commit, tag, push. Pushing with GITHUB_TOKEN
+      # does not re-trigger this workflow, which is why `build` is a job here
+      # rather than a second run keyed off the new tag.
+      - name: 更新版本、生成变更日志、提交、打标签并推送
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: node scripts/release.mjs "$VERSION"
+
+  build:
+    name: 构建并发布 Windows 安装包
+    needs: [resolve, tag]
+    # Runs when `tag` succeeded (manual run) *and* when it was skipped (tag push).
+    if: ${{ !cancelled() && needs.tag.result != 'failure' && needs.tag.result != 'cancelled' }}
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: 检出要发布的标签
+        uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.resolve.outputs.version }}
+          fetch-depth: 0
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 Rust 构建产物
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/readest-app/src-tauri
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      # A tag pushed by hand may disagree with the tree it points at; publishing
+      # an installer named for a version the app does not report is exactly the
+      # failure this pipeline exists to prevent.
+      - name: 校验标签与版本号一致
+        run: node scripts/version.mjs check --expect "${{ needs.resolve.outputs.version }}"
+
+      - name: 生成 Release 说明
+        shell: bash
+        run: |
+          node scripts/changelog.mjs --notes "${{ needs.resolve.outputs.version }}" > release-notes.md
+          echo "--- release-notes.md ---"
+          cat release-notes.md
+
+      - name: 构建安装包并创建 Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/readest-app
+          tagName: v${{ needs.resolve.outputs.version }}
+          releaseName: readest-plus v${{ needs.resolve.outputs.version }}
+          # Replaced below with the generated notes. Kept non-empty so a failure
+          # in that step still leaves a Release that points at the changelog.
+          releaseBody: 完整变更日志见仓库根目录的 CHANGELOG.md。
+          releaseDraft: false
+          prerelease: ${{ needs.resolve.outputs.prerelease }}
+
+      # `tauri-action` takes its body as an input, not a file path, so the
+      # generated notes are attached afterwards instead of being escaped
+      # through YAML.
+      - name: 用变更日志覆盖 Release 说明
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ needs.resolve.outputs.version }}
+        run: gh release edit "$TAG" --notes-file release-notes.md
