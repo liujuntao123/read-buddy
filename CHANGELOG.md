@@ -38,6 +38,7 @@
 
 ### 📝 文档
 
+- rewrite README in Chinese and add an English edition（[`3d1510b`](https://github.com/liujuntao123/readest-plus/commit/3d1510baeb1b15f1f9bac874ecf9335b4dd031df)）
 - **复盘** · record ADR 0009, tracker planning rules, ticket 07 and verify gate（[`5edee03`](https://github.com/liujuntao123/readest-plus/commit/5edee032b3cad09c306f0cd5322fa850de73f601)）
 - finalize design spec and adrs（[`23b93ba`](https://github.com/liujuntao123/readest-plus/commit/23b93ba955bb9823ab7baf47eb1ec975d6e917a0)）
 
@@ -45,8 +46,14 @@
 
 - **阅读器** · pin chapter navigation to 《说理》's real NCX rows（[`fdae461`](https://github.com/liujuntao123/readest-plus/commit/fdae461c8a497e7c8f9bf447a1f5d5b30eac4d0f)）
 
+### 🤖 持续集成
+
+- add the CI gate and the tag-driven Windows release workflow（[`4102de4`](https://github.com/liujuntao123/readest-plus/commit/4102de447de228876814edb5eb4934ae3f8331f6)）
+
 ### 🔧 其他变更
 
+- **发布** · single-source version number and generated changelog（[`ab2cb65`](https://github.com/liujuntao123/readest-plus/commit/ab2cb65eae24f10f6df06b712b0734a8bea94ed8)）
+- add MIT license（[`f32ee6e`](https://github.com/liujuntao123/readest-plus/commit/f32ee6e766653152c07969ec4ce7800ff63567d8)）
 - stop tracking the generated next-env.d.ts（[`11aedb0`](https://github.com/liujuntao123/readest-plus/commit/11aedb05b83eb9c90bf9537869706bbee7655484)）
 - ignore and untrack src-tauri build artifacts（[`fe4ac1b`](https://github.com/liujuntao123/readest-plus/commit/fe4ac1ba3695b2ece93a1d9a10fd0a5e13325398)）
 - **第三方依赖** · vendor foliate-js (MIT) as the paginated rendering engine（[`10c3ead`](https://github.com/liujuntao123/readest-plus/commit/10c3eada5e233708d434cf8f91afd6ecfcde27cd)）
