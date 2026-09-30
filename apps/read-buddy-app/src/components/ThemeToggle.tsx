@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { Eye, Moon, Sun } from 'lucide-react';
+import { IconButton } from '@astryxdesign/core/IconButton';
 import { SegmentedControl, SegmentedControlItem } from '@astryxdesign/core/SegmentedControl';
-import { applyTheme, readStoredTheme, type ReadingTheme } from '@/theme/readingTheme';
+import { applyTheme, useReadingTheme, type ReadingTheme } from '@/theme/readingTheme';
 
 const THEMES: ReadonlyArray<{ value: ReadingTheme; label: string; Icon: typeof Sun }> = [
   { value: 'light', label: '日间模式', Icon: Sun },
@@ -16,18 +16,22 @@ const THEMES: ReadonlyArray<{ value: ReadingTheme; label: string; Icon: typeof S
  * `applyTheme`, which notifies the app-root theme provider and the reader
  * engine; the html `data-theme` attribute itself is owned by the provider.
  */
-export default function ThemeToggle() {
-  const [theme, setTheme] = useState<ReadingTheme>('light');
-
-  useEffect(() => {
-    setTheme(readStoredTheme());
-  }, []);
+export default function ThemeToggle({ compact = false }: { compact?: boolean }) {
+  const theme = useReadingTheme();
 
   const switchTo = (next: string) => {
     const reading = next as ReadingTheme;
-    setTheme(reading);
     applyTheme(reading);
   };
+
+  if (compact) {
+    const index = THEMES.findIndex((item) => item.value === theme);
+    const current = THEMES[index]!;
+    const next = THEMES[(index + 1) % THEMES.length]!;
+    // Same test seam as the wide switch: the header always owns a theme control.
+    return <IconButton data-testid="theme-toggle" label={`${current.label}，切换到${next.label}`} tooltip={`切换到${next.label}`} size="sm" variant="ghost"
+      icon={<current.Icon size={16} />} onClick={() => switchTo(next.value)} />;
+  }
 
   return (
     <SegmentedControl

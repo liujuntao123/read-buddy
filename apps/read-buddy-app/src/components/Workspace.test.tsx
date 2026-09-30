@@ -5,11 +5,13 @@ import { useAISidebarStore } from '@/store/aiSidebarStore';
 import { useReaderStore } from '@/store/readerStore';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useReaderSettingsStore } from '@/store/readerSettingsStore';
+import { useWorkspaceUI } from '@/store/workspaceUIStore';
 import type { FoliateEngineHandle } from '@/services/library/foliateEngine';
 
 const sidebarState = () => useAISidebarStore.getState();
 
 beforeEach(() => {
+  useWorkspaceUI.setState({ focused: false, commandOpen: false, previousSidebar: false });
   useAISidebarStore.setState({ expanded: false, width: 400, activeTab: 'summary' });
   // The library store pushes ?book=<hash> on open; keep tests isolated.
   window.history.replaceState({}, '', '/');
@@ -18,6 +20,16 @@ beforeEach(() => {
 const expand = () => fireEvent.click(screen.getByRole('button', { name: '切换 AI 侧边栏' }));
 
 describe('Workspace split-screen shell', () => {
+  it('opens the companion from focus even if the previous sidebar was closed', () => {
+    useLibraryStore.setState({ view: 'reader', currentHash: 'focus-book' });
+    render(<Workspace />);
+    fireEvent.click(screen.getByRole('button', { name: '专注阅读' }));
+    expect(useWorkspaceUI.getState().focused).toBe(true);
+    fireEvent.keyDown(window, { key: '/', ctrlKey: true });
+    expect(useWorkspaceUI.getState().focused).toBe(false);
+    expect(sidebarState().expanded).toBe(true);
+    act(() => useLibraryStore.setState({ view: 'shelf', currentHash: null }));
+  });
   it('renders the header and the empty bookshelf before any book is opened', () => {
     render(<Workspace />);
     expect(screen.getAllByText('我的书架').length).toBeGreaterThan(0);

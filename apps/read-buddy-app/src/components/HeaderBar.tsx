@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { BookMarked, ChevronLeft, History, Sparkles, Upload } from 'lucide-react';
+import { BookMarked, ChevronLeft, History, Sparkles, Upload, Scan, Search } from 'lucide-react';
 import { Button } from '@astryxdesign/core/Button';
 import { Divider } from '@astryxdesign/core/Divider';
 import { HStack, VStack } from '@astryxdesign/core/Stack';
@@ -12,6 +12,8 @@ import ThemeToggle from '@/components/ThemeToggle';
 import { useReaderStore } from '@/store/readerStore';
 import { useAISidebarStore } from '@/store/aiSidebarStore';
 import { useLibraryStore } from '@/store/libraryStore';
+import { useWorkspaceUI } from '@/store/workspaceUIStore';
+import { useViewportWidth } from '@/hooks/useViewportWidth';
 
 /**
  * Unified top navigation bar — identity + global actions only.
@@ -21,6 +23,7 @@ import { useLibraryStore } from '@/store/libraryStore';
  * hover-revealed ReaderDock at the reading pane's bottom-right corner.
  */
 export default function HeaderBar() {
+  const { isCompact } = useViewportWidth();
   const bookTitle = useReaderStore((s) => s.bookTitle);
   const nodeTitle = useReaderStore((s) => s.nodeTitle);
   const toggle = useAISidebarStore((s) => s.toggle);
@@ -79,9 +82,9 @@ export default function HeaderBar() {
              button that does nothing — and it is out of the tab order. */
           <HStack gap={2} vAlign="center" data-testid="header-brand" style={{ flexShrink: 0 }}>
             <BookMarked size={18} aria-hidden style={{ color: 'var(--color-accent)' }} />
-            <Text weight="semibold" style={{ letterSpacing: '0.02em' }}>
+            {!isCompact && <Text weight="semibold" style={{ letterSpacing: '0.02em' }}>
               Read Buddy
-            </Text>
+            </Text>}
           </HStack>
         )
       }
@@ -89,16 +92,16 @@ export default function HeaderBar() {
         !isReading ? (
           <HStack gap={2} vAlign="center" style={{ flexShrink: 0, flexWrap: 'nowrap' }}>
             <Text weight="semibold">我的书架</Text>
-            {books.length > 0 && <Token label={`${books.length} 本藏书`} size="sm" />}
+            {!isCompact && books.length > 0 && <Token label={`${books.length} 本藏书`} size="sm" />}
           </HStack>
         ) : (
           <HStack gap={2} vAlign="center" style={{ minWidth: 0, flexWrap: 'nowrap' }}>
-            <VStack style={{ minWidth: 0, maxWidth: 360 }}>
+            <VStack style={{ minWidth: 0, maxWidth: isCompact ? '28vw' : 360 }}>
               <Text weight="semibold" maxLines={1}>
                 {bookTitle || '未加载书籍'}
               </Text>
             </VStack>
-            {nodeTitle && (
+            {!isCompact && nodeTitle && (
               <VStack style={{ minWidth: 0, maxWidth: 240 }}>
                 <Text type="supporting" color="secondary" maxLines={1}>
                   · {nodeTitle}
@@ -110,9 +113,11 @@ export default function HeaderBar() {
       }
       endContent={
         <HStack gap={1} vAlign="center" style={{ flexShrink: 0, flexWrap: 'nowrap' }}>
+          <Button label="搜索与快捷操作" tooltip="搜索原文、藏书与功能（Ctrl / ⌘ + K）" variant="ghost" size="sm" isIconOnly icon={<Search size={16} />} onClick={() => useWorkspaceUI.getState().setCommandOpen(true)} />
+          {isReading && <Button label="专注阅读" tooltip="专注阅读（Ctrl / ⌘ + Shift + F）" variant="ghost" size="sm" isIconOnly icon={<Scan size={16} />} onClick={() => useWorkspaceUI.getState().enterFocus()} />}
           {!isReading ? (
             <>
-              {currentHash && (
+              {!isCompact && currentHash && (
                 <Button
                   label="继续阅读"
                   tooltip="继续阅读上次打开的书"
@@ -147,7 +152,7 @@ export default function HeaderBar() {
           ) : null}
 
           <Divider orientation="vertical" />
-          <ThemeToggle />
+          <ThemeToggle compact={isCompact} />
           <Divider orientation="vertical" />
           <Button
             label="切换 AI 侧边栏"

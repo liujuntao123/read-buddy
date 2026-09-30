@@ -1,5 +1,7 @@
 'use client';
 
+import { handleWorkspaceShortcut } from '@/components/workspaceShortcuts';
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Banner } from '@astryxdesign/core/Banner';
 import { Spinner } from '@astryxdesign/core/Spinner';
@@ -324,6 +326,8 @@ export default function FoliatePane({ engine, readSelection }: FoliatePaneProps)
   useEffect(() => {
     if (!engine) return;
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.currentTarget !== window && handleWorkspaceShortcut(event)) return;
+      if (event.defaultPrevented) return;
       const target = event.target;
       if (
         target instanceof HTMLElement &&

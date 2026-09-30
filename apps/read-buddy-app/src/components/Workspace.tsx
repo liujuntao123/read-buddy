@@ -3,6 +3,11 @@
 import { useEffect, useMemo, useState, type DragEvent } from 'react';
 import { HStack, StackItem, VStack } from '@astryxdesign/core/Stack';
 import { Text } from '@astryxdesign/core/Text';
+import { Button } from '@astryxdesign/core/Button';
+import { Minimize2, Search } from 'lucide-react';
+import { useWorkspaceUI } from '@/store/workspaceUIStore';
+import { useAISidebarStore } from '@/store/aiSidebarStore';
+import WorkspaceCommands from './WorkspaceCommands';
 import { useReaderStore } from '@/store/readerStore';
 import { useAISettingsStore } from '@/store/aiSettingsStore';
 import { useChatStore } from '@/store/chatStore';
@@ -45,6 +50,18 @@ export default function Workspace() {
   const openChatBook = useChatStore((s) => s.openBook);
 
   const view = useLibraryStore((s) => s.view);
+  const focused = useWorkspaceUI((s) => s.focused);
+  const sidebarExpanded = useAISidebarStore((s) => s.expanded);
+  const leaveFocus = useWorkspaceUI((s) => s.leaveFocus);
+  useEffect(() => {
+    if (!focused) return;
+    if (view !== 'reader') leaveFocus();
+    else if (sidebarExpanded) {
+      leaveFocus();
+      // Opening a quote or companion is a new intent, overriding the saved layout.
+      useAISidebarStore.getState().setExpanded(true);
+    }
+  }, [focused, view, sidebarExpanded, leaveFocus]);
   const currentHash = useLibraryStore((s) => s.currentHash);
   // Ticket 07: an engine book renders through the Foliate pane; TXT / demo
   // books keep the scroll reader.
@@ -204,7 +221,8 @@ export default function Workspace() {
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
-      <HeaderBar />
+      <VStack style={{ display: focused ? 'none' : undefined, flexShrink: 0 }}><HeaderBar /></VStack>
+      <WorkspaceCommands />
       <HStack gap={0} height="100%" style={{ minHeight: 0 }}>
         <StackItem size="fill" style={{ minHeight: 0, position: 'relative' }}>
           {view === 'shelf' ? (
@@ -215,7 +233,7 @@ export default function Workspace() {
                 {/* 阅读进度条在视窗**顶部**：一条 28px 的细条，阅读区为它让出这段
                     高度，所以它从不压在正文上。它在上面，快捷键提示在下面——两条
                     细条分居正文两侧，彼此之间不需要任何分割线。 */}
-                <ReaderProgressBar />
+                {!focused && <ReaderProgressBar />}
                 {currentEngine ? (
                   <FoliatePane engine={currentEngine} />
                 ) : (
@@ -223,14 +241,18 @@ export default function Workspace() {
                 )}
                 {/* 底边一行 28px 的快捷键提示：读者不必猜方向键 / Esc / Ctrl + /
                     是做什么的（dock 的底部偏移按这一行让开，见 globals.css）。 */}
-                <ReaderShortcutsHint mode={turnMode} />
+                {!focused && <ReaderShortcutsHint mode={turnMode} />}
               </VStack>
               {/* Hover-revealed reading controls, floating above the hint line. */}
               <ReaderDock />
+              {focused && <HStack gap={1} vAlign="center" style={{ position: 'absolute', insetBlockStart: 'var(--spacing-3)', insetInlineEnd: 'var(--spacing-3)', zIndex: 30, background: 'var(--color-background-surface)', borderRadius: 'var(--radius-container)', boxShadow: 'var(--shadow-low)' }}>
+                <Button label="搜索原文" tooltip="搜索原文（Ctrl / ⌘ + K）" size="sm" variant="ghost" isIconOnly icon={<Search size={14} />} onClick={() => useWorkspaceUI.getState().setCommandOpen(true)} />
+                <Button label="退出专注" tooltip="退出专注（Esc）" size="sm" variant="ghost" icon={<Minimize2 size={14} />} onClick={leaveFocus} />
+              </HStack>}
             </>
           )}
         </StackItem>
-        <AISidebar />
+        <VStack style={{ display: focused ? 'none' : 'contents' }}><AISidebar /></VStack>
       </HStack>
       {dragOver && (
         <DropImportHint>
