@@ -25,3 +25,7 @@ ux-shelf.png
 # 的拷贝（拷贝一旦入库就会与真身漂移），*.epub 由 make-long-book.mjs 生成。
 .scratch/continuous-harness/vendor/
 .scratch/continuous-harness/*.epub
+
+# 概念地图的浏览器验证用独立 Edge profile（.scratch/concept-map-visual-profile）：
+# 脚本与夹具入库，profile 本身是这台机器的缓存和登录态，不入库。
+.scratch/concept-map-visual-profile/
