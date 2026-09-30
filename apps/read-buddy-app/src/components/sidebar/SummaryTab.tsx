@@ -17,8 +17,8 @@
  * asynchronously get a bounded retry before the "no extractable text" warning is
  * shown, and the summary content card appears only when content exists.
  */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Clock, FoldVertical, RefreshCw, Settings2, Sparkles, Square, UnfoldVertical } from 'lucide-react';
+import { createContext, useContext, useRef, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Clock, FoldVertical, RefreshCw, Settings2, Sparkles, Square, UnfoldVertical, Network } from 'lucide-react';
 import { Banner } from '@astryxdesign/core/Banner';
 import { Button } from '@astryxdesign/core/Button';
 import { Card } from '@astryxdesign/core/Card';
@@ -44,6 +44,11 @@ import { SUMMARY_SINGLE_PASS_MAX_CHARS } from '@/types/ai';
 import MarkdownView from '@/components/common/MarkdownView';
 import CopyButton from '@/components/common/CopyButton';
 import AIProviderSetupCard from '@/components/common/AIProviderSetupCard';
+import ConceptMapPanel, { type MapFocus } from './ConceptMapPanel';
+import { useSegmentationStore } from '@/store/segmentationStore';
+import { useBookIndexStore } from '@/store/bookIndexStore';
+
+const SummaryMapLink = createContext<{ focus?: MapFocus; onMap?: (id: string) => void }>({});
 
 /** How often the async text warm-up is re-checked before giving up. */
 const TEXT_RETRY_LIMIT = 4;
@@ -52,68 +57,8 @@ const TEXT_RETRY_DELAY_MS = 700;
 /** What the setup card promises *this* panel will do once a model exists. */
 const SETUP_DESCRIPTION = '配置模型后，可以为当前节点生成三段式总结：核心要义、内容脉络与关键术语。';
 
-/**
- * Strips raw horizontal rules (---, ***, ___) from parsed section markdown.
- */
-function cleanSectionLines(lines: string[]): string {
-  const filtered = lines.filter((l) => !/^\s*[-*_]{3,}\s*$/.test(l));
-  return filtered.join('\n').trim();
-}
-
-/**
- * Parses markdown into three-part sections if headings are present.
- */
-export interface SummarySection {
-  id: string;
-  heading: string;
-  content: string;
-}
-
-export function parseSummarySections(markdown: string): {
-  preface?: string;
-  sections: SummarySection[];
-} {
-  if (!markdown) {
-    return { sections: [] };
-  }
-  const lines = markdown.split(/\r?\n/);
-  const sections: SummarySection[] = [];
-  let currentHeading = '';
-  let currentLines: string[] = [];
-  let prefaceLines: string[] = [];
-
-  for (const line of lines) {
-    const match = line.match(/^#{2,4}\s+(.+)$/);
-    if (match) {
-      if (!currentHeading) {
-        prefaceLines = currentLines;
-      } else {
-        sections.push({
-          id: `section-${sections.length}`,
-          heading: currentHeading,
-          content: cleanSectionLines(currentLines),
-        });
-      }
-      currentHeading = match[1].trim();
-      currentLines = [];
-    } else {
-      currentLines.push(line);
-    }
-  }
-
-  if (currentHeading) {
-    sections.push({
-      id: `section-${sections.length}`,
-      heading: currentHeading,
-      content: cleanSectionLines(currentLines),
-    });
-  } else {
-    prefaceLines = currentLines;
-  }
-
-  const preface = cleanSectionLines(prefaceLines);
-  return { preface: preface || undefined, sections };
-}
+export { parseSummarySections } from '@/services/summary/summaryStructure';
+import { parseSummarySections } from '@/services/summary/summaryStructure';
 
 /** Classifies a section heading into one of the canonical summary roles. */
 const getSectionKind = (heading: string): 'core' | 'outline' | 'terms' | 'general' => {
@@ -178,6 +123,26 @@ export function SummaryBody({
 }) {
   const { preface, sections } = useMemo(() => parseSummarySections(content), [content]);
   const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
+  const link = useContext(SummaryMapLink);
+  const body = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const section = sections.find((s) => s.id === link.focus?.id);
+    if (!section) {
+      if (link.focus && !sections.length) {
+        body.current?.scrollIntoView({ block: 'start', behavior: 'instant' });
+        body.current?.focus({ preventScroll: true });
+      }
+      return;
+    }
+    setOpenMap((s) => ({ ...s, [section.heading]: true }));
+    const frame = requestAnimationFrame(() => {
+      const target = body.current?.querySelector<HTMLElement>(`[data-summary-section="${section.id}"]`);
+      target?.scrollIntoView({ block: 'start', behavior: 'instant' });
+      target?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [link.focus, sections]);
 
   useEffect(() => {
     // Reset collapse state when content switches (e.g. user moved to another chapter)
@@ -200,14 +165,14 @@ export function SummaryBody({
 
   if (sections.length === 0) {
     return (
-      <div data-testid="summary-body">
+      <div ref={body} tabIndex={-1} data-testid="summary-body">
         <MarkdownView content={content} streaming={streaming} />
       </div>
     );
   }
 
   return (
-    <div data-testid="summary-body" className="summary-accordion-group">
+    <div ref={body} data-testid="summary-body" className="summary-accordion-group">
       {sections.length > 1 && (
         <div className="summary-accordion-toolbar">
           {title && (
@@ -267,6 +232,9 @@ export function SummaryBody({
             }
             className={`summary-accordion-item summary-section-${kind}`}
             data-testid={`summary-accordion-${section.id}`}
+            data-summary-section={section.id}
+            tabIndex={-1}
+            style={link.focus?.id === section.id ? { outline: 'thin solid var(--color-accent)', outlineOffset: 'var(--spacing-1)', borderRadius: 'var(--radius-container)' } : undefined}
             trigger={
               <div className="summary-section-trigger-row">
                 <Text
@@ -299,6 +267,10 @@ export function SummaryBody({
                 content={section.content}
                 streaming={streaming && isLast}
               />
+              {!streaming && link.onMap && <HStack justify="end" padding={1}>
+                <Button label="在概念地图中查看" size="sm" variant="ghost" icon={<Network size={13} />}
+                  onClick={() => link.onMap?.(`group:${section.id}`)} />
+              </HStack>}
             </div>
           </Collapsible>
         );
@@ -435,7 +407,47 @@ interface SummaryTabProps {
   store?: SummaryStore;
 }
 
-export default function SummaryTab({ store = useSummaryStore }: SummaryTabProps = {}) {
+export default function SummaryTab(props: SummaryTabProps = {}) {
+  const useSummary = props.store ?? useSummaryStore;
+  const summaryState = useSummary();
+  const [lastSummary, setLastSummary] = useState({ key: '', content: '', updatedAt: 0 });
+  const [mapFocus, setMapFocus] = useState<MapFocus>();
+  const [summaryFocus, setSummaryFocus] = useState<MapFocus>();
+  const bookHash = useReaderStore((s) => s.bookHash);
+  const spineIndex = useReaderStore((s) => s.spineIndex);
+  const anchor = useReaderStore((s) => s.anchor);
+  const title = useReaderStore((s) => s.nodeTitle);
+  const segmentation = useSegmentationStore((s) => s.segmentation);
+  const nodeShape = useBookIndexStore((s) => s.shape);
+  const [attempt, setAttempt] = useState(0);
+  const view = useMemo(() => resolveCurrentNodeView(), [bookHash, spineIndex, anchor, title, segmentation, nodeShape, attempt]);
+  const key = `${bookHash}:${view.nodeIndex}`;
+  const settled = summaryState.activeKey === key && (summaryState.phase === 'cached' || summaryState.phase === 'done');
+  useEffect(() => {
+    if (settled) setLastSummary({ key, content: summaryState.content, updatedAt: summaryState.cachedSummary?.updatedAt ?? 0 });
+  }, [settled, key, summaryState.content, summaryState.cachedSummary?.updatedAt]);
+  useEffect(() => { setMapFocus(undefined); setSummaryFocus(undefined); }, [key]);
+  const summary = settled ? summaryState.content : lastSummary.key === key ? lastSummary.content : '';
+  const focusSummary = (id: string) => setSummaryFocus((s) => ({ id, sequence: (s?.sequence ?? 0) + 1 }));
+  useEffect(() => { setAttempt(0); }, [bookHash, spineIndex, anchor]);
+  useEffect(() => {
+    if (!bookHash || view.text || attempt >= TEXT_RETRY_LIMIT) return;
+    const timer = window.setTimeout(() => setAttempt((n) => n + 1), TEXT_RETRY_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [bookHash, view.text, attempt]);
+  const assessment = assessNodeContent({ title: view.title, text: view.text });
+  return <SummaryMapLink.Provider value={{ focus: summaryFocus, onMap: (id) => setMapFocus((s) => ({ id, sequence: (s?.sequence ?? 0) + 1 })) }}><VStack gap={4}>
+    <SummaryContent {...props} />
+    {bookHash && assessment.summarizable && <ConceptMapPanel view={view} summary={summary}
+      pending={summaryState.phase === 'generating'} updatedAt={lastSummary.updatedAt} focus={mapFocus} onSummary={focusSummary}
+      onGenerateSummary={() => {
+        if (!providerReady(useAISettingsStore.getState().settings)) useAISidebarStore.getState().openSettings();
+        else void summaryState.generate();
+      }} />}
+  </VStack></SummaryMapLink.Provider>;
+}
+
+function SummaryContent({ store = useSummaryStore }: SummaryTabProps = {}) {
   const useSummary = store;
   const phase = useSummary((s) => s.phase);
   const content = useSummary((s) => s.content);

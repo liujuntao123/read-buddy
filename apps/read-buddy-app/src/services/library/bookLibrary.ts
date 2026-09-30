@@ -229,6 +229,7 @@ export async function removeBook(hash: string, options: RemoveBookOptions = {}):
 
   if (options.deleteArtifacts) {
     await db.node_summaries?.where('bookHash').equals(hash).delete();
+    await db.concept_maps?.where('bookHash').equals(hash).delete();
     await db.book_nodes?.where('bookHash').equals(hash).delete();
     await db.book_panoramas?.delete(hash);
     await db.reading_entities?.where('bookHash').equals(hash).delete();

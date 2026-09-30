@@ -14,6 +14,7 @@
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.53",
     "@ai-sdk/provider-utils": "5.0.45",
+    "@antv/g6": "^5.1.1",
     "@astryxdesign/core": "^0.6.2",
     "@astryxdesign/theme-neutral": "^0.6.2",
     "@stylexjs/stylex": "^0.19.1",

@@ -2,6 +2,7 @@ import Dexie, { type Table } from 'dexie';
 import type { AISettings, BookSegmentation, NodeSummary, Conversation, Message } from '@/types/ai';
 import type { LibraryBook } from '@/types/library';
 import type { ReaderHighlight } from '@/types/highlight';
+import type { ConceptMapRecord } from '@/services/conceptMap/conceptMap';
 import type {
   AgentTurnTraceRecord,
   BookNodeRecord,
@@ -62,6 +63,7 @@ export class ReadBuddyDatabase extends Dexie {
   reading_entities!: Table<ReadingEntityRecord, string>;
   agent_turn_traces!: Table<AgentTurnTraceRecord, string>;
   highlights!: Table<ReaderHighlight, string>;
+  concept_maps!: Table<ConceptMapRecord, string>;
 
   constructor(name = 'read-buddy') {
     super(name);
@@ -137,6 +139,8 @@ export class ReadBuddyDatabase extends Dexie {
     this.version(8).stores({
       highlights: 'id, bookHash, nodeIndex, createdAt',
     });
+    // v9: independently generated concept maps; text fingerprints invalidate stale segmentation.
+    this.version(9).stores({ concept_maps: 'id, bookHash, nodeIndex' });
   }
 }
 
