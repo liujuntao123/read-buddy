@@ -8,6 +8,25 @@
 
 > 本文件由 `pnpm changelog` 自动生成，请勿手工编辑；要调整分组或措辞，请改提交信息或 `scripts/changelog.mjs`。
 
+## [0.3.0] - 2026-09-30
+
+### ✨ 新功能
+
+- **划线** · 划线检索（[`cb5298c`](https://github.com/liujuntao123/read-buddy/commit/cb5298cce1871f0b8b418dba2d276cd8888a2c5f)）
+- **书架** · 接下来读清单、阅读状态筛选与记住的书架偏好（[`b9e3fd5`](https://github.com/liujuntao123/read-buddy/commit/b9e3fd55fd4a006fd778104f9a37aa568ac72946)）
+- **应用** · 搜索与快捷操作面板和专注阅读（[`6f7a845`](https://github.com/liujuntao123/read-buddy/commit/6f7a845d76b98791e57001672e751482cb6ba804)）
+- **章节总结** · 由总结生成可核验的概念地图（[`2f0135f`](https://github.com/liujuntao123/read-buddy/commit/2f0135fcebd1a0ab4dbb2783a1093a47a4131292)）
+
+### 📝 文档
+
+- 在 README 中列出概念地图与新的阅读入口（[`caf4f87`](https://github.com/liujuntao123/read-buddy/commit/caf4f875ca81791bffcd763a7dab79e19921d612)）
+
+### 🔧 其他变更
+
+- **scratch** · 概念地图的浏览器验证脚本与夹具（[`7c31f05`](https://github.com/liujuntao123/read-buddy/commit/7c31f0560fd5784a52323fddd828d8ab759bcc96)）
+- 忽略概念地图浏览器验证用的 Edge profile（[`4462202`](https://github.com/liujuntao123/read-buddy/commit/44622027562b3295ba52a70923488e92e4ae0674)）
+- Update README.md（[`0cdcf01`](https://github.com/liujuntao123/read-buddy/commit/0cdcf01259956a400fd4252590a717d588362c5c)）
+
 ## [0.2.0] - 2026-09-24
 
 ### 📝 文档
@@ -74,6 +93,7 @@
 - **任务跟踪** · close tickets 03 and 04（[`620597d`](https://github.com/liujuntao123/read-buddy/commit/620597dbbba48a97fcd65c0ef9e038794204e3a8)）
 - scaffold readest-plus monorepo foundation（[`884a211`](https://github.com/liujuntao123/read-buddy/commit/884a21145d955ee168b71a30b87df76eb92238d7)）
 
-[未发布]: https://github.com/liujuntao123/read-buddy/compare/v0.2.0...HEAD
+[未发布]: https://github.com/liujuntao123/read-buddy/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/liujuntao123/read-buddy/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/liujuntao123/read-buddy/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/liujuntao123/read-buddy/releases/tag/v0.1.0
