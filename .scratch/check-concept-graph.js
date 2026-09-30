@@ -1,0 +1,1 @@
+(() => {const e=document.querySelector('[data-testid="concept-graph"]');const s=getComputedStyle(e);return {color:s.color,bg:s.backgroundColor,stroke:s.borderTopColor,width:e.clientWidth,height:e.clientHeight,highlight:document.querySelectorAll('.reader-agent-highlight').length}})()
