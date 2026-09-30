@@ -8,6 +8,7 @@ import { createLibraryStore, type LibraryStoreHook } from '@/store/libraryStore'
 import { useBookIndexStore } from '@/store/bookIndexStore';
 import type { LibraryBookMeta } from '@/services/library/bookLibrary';
 import type { BookNodeShape } from '@/services/bookNodes';
+import { useShelfPreferences } from '@/store/workspaceUIStore';
 
 let db: ReadBuddyDatabase;
 let store: LibraryStoreHook;
@@ -55,6 +56,7 @@ const withNodeProgress = (hash: string, ordinal: number): LibraryBookMeta => ({
 });
 
 beforeEach(() => {
+  useShelfPreferences.setState({ queued: [], sort: 'recent', layout: 'grid' });
   db = new ReadBuddyDatabase(`bookshelf-test-${Math.random().toString(36).slice(2)}`);
   // The shelf reads the node shape of the currently indexed book only.
   useBookIndexStore.getState().reset();
@@ -66,6 +68,34 @@ afterEach(async () => {
 });
 
 describe('Bookshelf', () => {
+  it('resumes the current book from its cover without reparsing it', () => {
+    const injected = makeStore([meta('current')]);
+    injected.setState({ currentHash: 'current', view: 'shelf' });
+    const reopen = vi.spyOn(injected.getState(), 'open');
+    const resume = vi.spyOn(injected.getState(), 'resumeReading');
+    render(<Bookshelf store={injected} />);
+    fireEvent.click(screen.getByRole('button', { name: '打开《书-current》' }));
+    expect(resume).toHaveBeenCalledOnce();
+    expect(reopen).not.toHaveBeenCalled();
+  });
+  it('queues a book without opening it and filters the next-reading shelf', () => {
+    const injected = makeStore([meta('a'), meta('b', { lastSpineIndex: 0 })]);
+    const open = vi.spyOn(injected.getState(), 'open').mockResolvedValue(undefined);
+    const page = render(<Bookshelf store={injected} />);
+    fireEvent.click(screen.getByRole('button', { name: '将《书-a》加入接下来读' }));
+    expect(open).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '接下来读 1' }));
+    expect(screen.getByTestId('book-card-a')).toBeTruthy();
+    expect(screen.queryByTestId('book-card-b')).toBeNull();
+    page.unmount();
+    render(<Bookshelf store={injected} />);
+    expect(screen.getByRole('button', { name: '将《书-a》移出接下来读' }).getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: '未开始 1' }));
+    expect(screen.queryByTestId('book-card-b')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '已开始 1' }));
+    expect(screen.queryByTestId('book-card-a')).toBeNull();
+    expect(screen.getByTestId('book-card-b')).toBeTruthy();
+  });
   it('shows the empty-state hint and import button when the shelf has no books', () => {
     render(<Bookshelf store={makeStore()} />);
     expect(screen.getByTestId('bookshelf')).toBeTruthy();

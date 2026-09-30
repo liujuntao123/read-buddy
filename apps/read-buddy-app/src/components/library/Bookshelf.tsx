@@ -17,6 +17,8 @@ import {
   List,
   Plus,
   Search,
+  BookmarkPlus,
+  BookmarkCheck,
   Trash2,
   Upload,
   X,
@@ -40,6 +42,7 @@ import { useLibraryStore, type LibraryStoreHook } from '@/store/libraryStore';
 import { useBookIndexStore } from '@/store/bookIndexStore';
 import { formatProgress, type BookNodeShape } from '@/services/bookNodes';
 import BookCover from './BookCover';
+import { useShelfPreferences, type ShelfFilter } from '@/store/workspaceUIStore';
 
 interface BookshelfProps {
   /** Injectable store seam; defaults to the app-wide singleton. */
@@ -133,8 +136,12 @@ export default function Bookshelf({ store = useLibraryStore }: BookshelfProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortKey, setSortKey] = useState<SortKey>('recent');
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const sortKey = useShelfPreferences((s) => s.sort);
+  const setSortKey = useShelfPreferences((s) => s.setSort);
+  const viewMode = useShelfPreferences((s) => s.layout);
+  const setViewMode = useShelfPreferences((s) => s.setLayout);
+  const queued = useShelfPreferences((s) => s.queued);
+  const [filter, setFilter] = useState<ShelfFilter>('all');
   const [deletingBook, setDeletingBook] = useState<LibraryBookMeta | null>(null);
   const [deleteArtifacts, setDeleteArtifacts] = useState(false);
 
@@ -147,7 +154,9 @@ export default function Bookshelf({ store = useLibraryStore }: BookshelfProps) {
   };
 
   const openBook = (hash: string) => {
-    void store.getState().open(hash);
+    const library = store.getState();
+    if (hash === library.currentHash) library.resumeReading();
+    else void library.open(hash);
   };
 
   const removeBook = (book: LibraryBookMeta) => {
@@ -164,6 +173,9 @@ export default function Bookshelf({ store = useLibraryStore }: BookshelfProps) {
 
   const filteredBooks = useMemo(() => {
     let result = [...books];
+    if (filter === 'queued') result = result.filter((b) => queued.includes(b.hash));
+    if (filter === 'reading') result = result.filter(hasReadingProgress);
+    if (filter === 'unread') result = result.filter((b) => !hasReadingProgress(b));
 
     // Filter by query
     const q = searchQuery.trim().toLowerCase();
@@ -185,7 +197,7 @@ export default function Bookshelf({ store = useLibraryStore }: BookshelfProps) {
     });
 
     return result;
-  }, [books, searchQuery, sortKey]);
+  }, [books, searchQuery, sortKey, filter, queued]);
 
   /**
    * The book the hero offers: the one still open behind the shelf when there is
@@ -311,13 +323,28 @@ export default function Bookshelf({ store = useLibraryStore }: BookshelfProps) {
             down while a search is running — a filtered shelf answers a different
             question, and the hero would sit above results it has nothing to do
             with. */}
-        {continueBook && !searchQuery.trim() && (
+        {continueBook && !searchQuery.trim() && filter === 'all' && (
           <ShelfHero
             book={continueBook}
             fraction={progressFraction(continueBook)}
             onContinue={continueReading}
           />
         )}
+        {books.length > 0 && <VStack gap={2} style={{ padding: 'var(--spacing-4) var(--spacing-6) 0' }}>
+          <HStack gap={3} justify="between" vAlign="center" wrap="wrap">
+            <HStack gap={1} wrap="wrap">
+              {([
+                ['all', '全部藏书', books.length],
+                ['queued', '接下来读', books.filter((b) => queued.includes(b.hash)).length],
+                ['reading', '已开始', books.filter(hasReadingProgress).length],
+                ['unread', '未开始', books.filter((b) => !hasReadingProgress(b)).length],
+              ] as const).map(([value, label, count]) => <Button key={value} label={`${label} ${count}`} size="sm"
+                variant={filter === value ? 'secondary' : 'ghost'} aria-pressed={filter === value} onClick={() => setFilter(value)} />)}
+            </HStack>
+            <Text type="supporting" color="secondary" role="status">{filteredBooks.length} 本</Text>
+          </HStack>
+          <Text type="supporting" color="secondary">{filter === 'queued' ? '为下一次阅读留个位置。点击书上的书签，随时调整你的阅读清单。' : '循着兴趣阅读，不必赶进度。用书签收好下一本想读的书。'}</Text>
+        </VStack>}
         {/* Empty State */}
         {books.length === 0 ? (
           <VStack data-testid="bookshelf-empty" height="100%" vAlign="center" hAlign="center" padding={8}>
@@ -333,8 +360,10 @@ export default function Bookshelf({ store = useLibraryStore }: BookshelfProps) {
           </VStack>
         ) : filteredBooks.length === 0 ? (
           <VStack vAlign="center" hAlign="center" gap={2} padding={8}>
-            <Text color="secondary">未找到匹配「{searchQuery}」的书籍</Text>
-            <Button label="清除搜索" variant="ghost" size="sm" onClick={() => setSearchQuery('')} />
+            <BookmarkPlus size={28} style={{ color: 'var(--color-icon-secondary)' }} />
+            <Text weight="medium">{searchQuery.trim() ? `未找到匹配「${searchQuery}」的书籍` : filter === 'queued' ? '下一本想读什么？' : '这里暂时没有书籍'}</Text>
+            <Text type="supporting" color="secondary">{filter === 'queued' ? '在全部藏书中点击书签，就能加入「接下来读」。' : '试试其他关键词，或看看全部藏书。'}</Text>
+            <Button label="查看全部藏书" variant="secondary" size="sm" onClick={() => { setSearchQuery(''); setFilter('all'); }} />
           </VStack>
         ) : viewMode === 'grid' ? (
           /* Grid View: modern flat-skeuomorphic cards */
@@ -592,6 +621,13 @@ interface BookCardProps {
  * not clamped to one row.
  */
 function BookCard({ book, layout, onOpen, onRemove }: BookCardProps) {
+  const isQueued = useShelfPreferences((s) => s.queued.includes(book.hash));
+  const toggleQueued = useShelfPreferences((s) => s.toggleQueued);
+  const queueButton = <IconButton label={isQueued ? `将《${book.title}》移出接下来读` : `将《${book.title}》加入接下来读`}
+    tooltip={isQueued ? '已加入接下来读 · 点击移除' : '加入接下来读'} aria-pressed={isQueued}
+    variant={isQueued ? 'primary' : 'secondary'} size="sm"
+    icon={isQueued ? <BookmarkCheck size={15} /> : <BookmarkPlus size={15} />}
+    onClick={(event) => { event.stopPropagation(); toggleQueued(book.hash); }} />;
   // Answered by the book's own row — no store lookup, no borrowing the open
   // book's levels (see `progressLabel`).
   const progress = progressLabel(book);
@@ -642,6 +678,7 @@ function BookCard({ book, layout, onOpen, onRemove }: BookCardProps) {
               <Text type="supporting" size="2xs" color="accent" weight="medium">{progress}</Text>
             )}
           </VStack>
+          {queueButton}
           <IconButton
             label="删除书籍"
             variant="ghost"
@@ -674,6 +711,9 @@ function BookCard({ book, layout, onOpen, onRemove }: BookCardProps) {
       onClick={() => onOpen(book.hash)}
     >
       <VStack gap={0} style={{ position: 'relative' }}>
+        <HStack style={{ position: 'absolute', insetInlineEnd: 'var(--spacing-2)', insetBlockStart: 'var(--spacing-2)', zIndex: 30 }}>
+          {queueButton}
+        </HStack>
         <IconButton
           label="删除书籍"
           variant="secondary"
@@ -686,7 +726,7 @@ function BookCard({ book, layout, onOpen, onRemove }: BookCardProps) {
           style={{
             position: 'absolute',
             insetInlineEnd: 'var(--spacing-2)',
-            insetBlockStart: 'var(--spacing-2)',
+            insetBlockStart: 'var(--spacing-10)',
             zIndex: 30,
             background: 'rgba(18, 14, 12, 0.65)',
             backdropFilter: 'blur(8px)',
