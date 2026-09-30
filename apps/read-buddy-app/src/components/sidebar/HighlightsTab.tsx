@@ -25,6 +25,7 @@ import { IconButton } from '@astryxdesign/core/IconButton';
 import { List, ListItem } from '@astryxdesign/core/List';
 import { HStack, VStack } from '@astryxdesign/core/Stack';
 import { Text } from '@astryxdesign/core/Text';
+import { TextInput } from '@astryxdesign/core/TextInput';
 import CopyButton from '@/components/common/CopyButton';
 import { getAgentBookContext } from '@/services/agent/agentContext';
 import { formatHighlightsAsMarkdown, relativeTimeLabel } from '@/services/reader/highlightExport';
@@ -63,6 +64,9 @@ export default function HighlightsTab({ store = useHighlightStore }: HighlightsT
   const remove = store((s) => s.remove);
   const restore = store((s) => s.restore);
   const runQuickAction = useQuickActions();
+  const [query, setQuery] = useState('');
+  const filtered = highlights.filter((h) => `${h.quote} ${locationLabel(h)}`
+    .toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
 
   /**
    * The undo window's row lives in the panel, not in the store: a countdown is
@@ -90,6 +94,7 @@ export default function HighlightsTab({ store = useHighlightStore }: HighlightsT
   // belongs to the book the reader just left.
   useEffect(() => {
     setUndoRow(null);
+    setQuery('');
   }, [bookHash]);
 
   const deleteHighlight = async (highlight: ReaderHighlight) => {
@@ -185,9 +190,11 @@ export default function HighlightsTab({ store = useHighlightStore }: HighlightsT
           testId="copy-highlights"
         />
       </HStack>
+      <TextInput label="搜索划线" value={query} onChange={setQuery} hasClear size="sm" placeholder="搜索原文或所在位置" />
+      {query.trim() && <Text role="status" type="supporting" color="secondary">{filtered.length ? `找到 ${filtered.length} 处划线` : '没有匹配的划线，请换一个关键词。'}</Text>}
       {/* Rows, not cards: this is a dense list of marks (AGENTS: dense data = rows). */}
       <List density="compact" data-testid="highlight-list" style={{ flexWrap: 'nowrap' }}>
-        {highlights.map((highlight) => (
+        {filtered.map((highlight) => (
           <ListItem
             key={highlight.id}
             data-testid="highlight-item"

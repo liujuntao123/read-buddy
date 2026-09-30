@@ -102,6 +102,24 @@ afterEach(() => {
 });
 
 describe('HighlightsTab', () => {
+  it('filters by quote or location and explains empty search results', async () => {
+    const { store } = makeStore([
+      row({ id: 'a', quote: '穹顶上的星图亮了起来' }),
+      row({ id: 'b', quote: '图书馆的木门在她身后合上' }),
+    ]);
+    render(<HighlightsTab store={store} />);
+    await screen.findAllByTestId('highlight-item');
+    const search = screen.getByRole('textbox', { name: '搜索划线' });
+    fireEvent.change(search, { target: { value: '星图' } });
+    expect(screen.getAllByTestId('highlight-item')).toHaveLength(1);
+    fireEvent.change(search, { target: { value: '迷雾' } });
+    expect(screen.getAllByTestId('highlight-item')).toHaveLength(2);
+    fireEvent.change(search, { target: { value: '没有这个词' } });
+    expect(screen.queryAllByTestId('highlight-item')).toHaveLength(0);
+    expect(screen.getByText('没有匹配的划线，请换一个关键词。')).toBeTruthy();
+    fireEvent.change(search, { target: { value: '' } });
+    expect(screen.getAllByTestId('highlight-item')).toHaveLength(2);
+  });
   it('lists every mark with its quote and where it lives', async () => {
     const { store } = makeStore([
       row({ id: 'a', quote: '穹顶上的星图亮了起来', nodeIndex: 1 }),
